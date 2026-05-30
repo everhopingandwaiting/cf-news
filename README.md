@@ -19,12 +19,23 @@ Sync text and images across your devices in real-time. Works on desktop and mobi
 - **Auto-open panel** — Panel opens automatically when data arrives from another device
 - **Secure** — WSS encrypted, data only flows between your devices, not stored on server
 
+### News Q&A
+
+Ask questions about today's news and get AI-generated answers with context. Click the title or icon to open the chat panel.
+
+### Daily Digest
+
+AI-generated summary of today's top news, sorted by time with language markers ([CN]/[EN]) and publish time. Collapsible card with copy and regenerate support. Browse historical digests via the date picker.
+
 ## Features
 
 - **Multi-source RSS aggregation** — 20+ built-in sources (36氪, Hacker News, TechCrunch, The Verge, BBC, etc.)
 - **Category filtering** — Tech, AI, News, Finance, Entertainment
 - **Full-text search** — D1 FTS5 powered search with KV hot cache
 - **AI summaries** — OpenRouter, NVIDIA, Mango APIs with automatic fallback
+- **AI Q&A** — Ask natural language questions about news
+- **Daily digest** — Auto-generated daily news summary with history browser
+- **Related articles** — Keyword-matched related articles with one-click navigation
 - **User system** — Registration, login, JWT authentication
 - **Favorites & history** — Bookmark articles, track read history
 - **Email digest** — Subscribe to daily news summaries
@@ -41,10 +52,13 @@ Sync text and images across your devices in real-time. Works on desktop and mobi
 | Cache | Cloudflare KV |
 | Real-time | Durable Objects (WebSocket) |
 | Search | D1 FTS5 full-text search |
-| AI | OpenRouter, NVIDIA, Mango APIs |
+| AI Chat | Workers AI (LLaMA 3.3 70B) |
+| AI Search | Cloudflare AI Search (semantic + keyword) |
+| Summaries | OpenRouter, NVIDIA, Mango APIs |
 | Vector | Vectorize for semantic dedup |
 | Browser | Browser Rendering (headless Chrome for JS-heavy RSS) |
 | Queue | Queues (async news processing) |
+| Rate Limit | Cloudflare Rate Limiting |
 | Deploy | Docker + Wrangler |
 
 ## Cloudflare Setup Guide
@@ -224,6 +238,10 @@ cf-news/
 | GET | `/api/news/sources/list` | List RSS sources |
 | POST | `/api/auth/register` | Register |
 | POST | `/api/auth/login` | Login |
+| GET | `/api/ai/digest` | Get today's daily digest |
+| GET | `/api/ai/digest?date=YYYY-MM-DD` | Get digest for a specific date |
+| GET | `/api/ai/digest/dates` | List available digest dates |
+| GET | `/api/ai/related/:id` | Get related articles |
 
 ### Authenticated (Bearer token)
 
@@ -235,6 +253,8 @@ cf-news/
 | DELETE | `/api/user/favorites/:id` | Remove favorite |
 | GET | `/api/user/history` | Read history |
 | POST | `/api/user/history/:id` | Mark as read |
+| POST | `/api/ai/ask` | Ask a question about news (supports streaming) |
+| POST | `/api/ai/digest/generate` | Force regenerate digest (admin only)
 
 ## Adding RSS Sources
 

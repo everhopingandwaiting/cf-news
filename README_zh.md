@@ -25,6 +25,9 @@
 - **分类筛选** — 科技、AI、新闻、财经、娱乐
 - **全文搜索** — D1 FTS5 驱动，KV 热缓存加速
 - **AI 摘要** — OpenRouter、NVIDIA、Mango 多 provider 自动降级
+- **AI 问答** — 自然语言提问，AI 基于当日新闻回答
+- **今日要闻** — AI 每日自动汇总，按时间排序，携带语言标记和发布时间，支持历史浏览
+- **相关推荐** — 标题关键词匹配，点击一键跳转
 - **用户系统** — 注册、登录、JWT 认证
 - **收藏与历史** — 收藏文章、记录阅读历史
 - **邮件摘要** — 订阅每日新闻邮件
@@ -41,7 +44,9 @@
 | 缓存 | Cloudflare KV |
 | 实时通信 | Durable Objects (WebSocket) |
 | 搜索 | D1 FTS5 全文搜索 |
-| AI | OpenRouter, NVIDIA, Mango APIs |
+| AI 聊天 | Workers AI (LLaMA 3.3 70B) |
+| AI 搜索 | Cloudflare AI Search（语义+关键词） |
+| AI 摘要 | OpenRouter, NVIDIA, Mango APIs |
 | 向量 | Vectorize 语义去重 |
 | 浏览器 | Browser Rendering（无头 Chrome，抓取 JS 重度渲染的 RSS 源） |
 | 队列 | Queues（异步新闻处理） |
@@ -224,6 +229,10 @@ cf-news/
 | GET | `/api/news/sources/list` | 获取 RSS 源列表 |
 | POST | `/api/auth/register` | 用户注册 |
 | POST | `/api/auth/login` | 用户登录 |
+| GET | `/api/ai/digest` | 获取今日要闻 |
+| GET | `/api/ai/digest?date=YYYY-MM-DD` | 获取指定日期要闻 |
+| GET | `/api/ai/digest/dates` | 列出有要闻的日期 |
+| GET | `/api/ai/related/:id` | 获取相关文章 |
 
 ### 认证接口（需要 Bearer Token）
 
@@ -235,6 +244,8 @@ cf-news/
 | DELETE | `/api/user/favorites/:id` | 取消收藏 |
 | GET | `/api/user/history` | 获取阅读历史 |
 | POST | `/api/user/history/:id` | 标记已读 |
+| POST | `/api/ai/ask` | AI 问答（支持流式响应） |
+| POST | `/api/ai/digest/generate` | 强制重新生成要闻（管理） |
 
 ## 添加 RSS 源
 
