@@ -142,7 +142,6 @@ The project includes a GitHub Actions workflow for automatic deployment. To use 
 | Secret Name | Description |
 |-------------|-------------|
 | `CF_API_TOKEN` | Cloudflare API Token (from Step 2) |
-| `D1_DATABASE_ID` | D1 database ID |
 | `KV_NAMESPACE_ID` | KV namespace ID |
 | `ZONE_ID` | Cloudflare Zone ID |
 | `ROUTE_PATTERN` | Your domain route (e.g., `yourdomain.com/*`) |

@@ -7,11 +7,10 @@ compatibility_date = "2026-05-28"
 directory = "./public"
 not_found_handling = "single-page-application"
 
-# D1 Database
+# D1 Database（通过 database_name 自动绑定，无需 database_id）
 [[d1_databases]]
 binding = "DB"
 database_name = "news-db"
-database_id = "${D1_DATABASE_ID}"
 
 # Workers AI
 [ai]

@@ -10,6 +10,8 @@ echo "==> Generating wrangler.toml..."
 set -a
 source "$WORKER_DIR/.env"
 set +a
+# D1 用 name 绑定，不需要 database_id，过滤掉避免 envsubst 警告
+unset D1_DATABASE_ID
 envsubst < "$WORKER_DIR/wrangler.toml.example" > "$WORKER_DIR/wrangler.toml"
 
 # 1. Build frontend

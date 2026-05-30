@@ -142,7 +142,6 @@ MANGO_API_KEY=你的Mango密钥
 | Secret 名称 | 说明 |
 |-------------|------|
 | `CF_API_TOKEN` | Cloudflare API Token |
-| `D1_DATABASE_ID` | D1 数据库 ID |
 | `KV_NAMESPACE_ID` | KV 命名空间 ID |
 | `ZONE_ID` | Cloudflare Zone ID |
 | `ROUTE_PATTERN` | 域名路由（如 `yourdomain.com/*`） |
