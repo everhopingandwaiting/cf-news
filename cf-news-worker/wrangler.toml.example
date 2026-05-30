@@ -40,6 +40,20 @@ class_name = "CommentsRoom"
 [[send_email]]
 name = "EMAIL"
 
+# Browser Rendering（JS 渲染抓取）
+[browser]
+binding = "BROWSER"
+
+# Queues（异步新闻处理队列）
+[[queues.producers]]
+queue = "news-processing-queue"
+binding = "NEWS_QUEUE"
+
+[[queues.consumers]]
+queue = "news-processing-queue"
+max_batch_size = 5
+max_batch_timeout = 30
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["ClipboardRoom"]

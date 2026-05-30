@@ -43,6 +43,8 @@ Sync text and images across your devices in real-time. Works on desktop and mobi
 | Search | D1 FTS5 full-text search |
 | AI | OpenRouter, NVIDIA, Mango APIs |
 | Vector | Vectorize for semantic dedup |
+| Browser | Browser Rendering (headless Chrome for JS-heavy RSS) |
+| Queue | Queues (async news processing) |
 | Deploy | Docker + Wrangler |
 
 ## Cloudflare Setup Guide

@@ -2,6 +2,7 @@ import { Bindings, NewsSource } from '../types';
 import { generateSummaryForNews } from './summarizer';
 import { indexNewsItem } from './tokenizer';
 import { checkDuplicate, storeDedupHash } from './dedup';
+import { fetchWithBrowser, needsBrowser } from './browserFetcher';
 
 interface RSSItem {
     title: string;
@@ -134,20 +135,35 @@ function determineCategory(source: NewsSource, title: string, description?: stri
 }
 
 // Fetch a single RSS feed
-async function fetchFeed(source: NewsSource): Promise<RSSItem[]> {
+async function fetchFeed(env: Bindings, source: NewsSource): Promise<RSSItem[]> {
     try {
-        const response = await fetch(source.feed_url, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (compatible; CFNewsWorker/1.0)',
-            },
-        });
-        
-        if (!response.ok) {
-            console.error(`Failed to fetch ${source.name}: ${response.status}`);
-            return [];
+        let xml: string | null = null;
+
+        // Use Browser Rendering for JS-heavy sources
+        if (needsBrowser(source.feed_url)) {
+            console.log(`Using browser rendering for ${source.name}`);
+            xml = await fetchWithBrowser(env, source.feed_url);
+            if (xml) {
+                // Extract RSS/XML from rendered HTML
+                const rssMatch = xml.match(/<rss[\s\S]*<\/rss>/i) || xml.match(/<feed[\s\S]*<\/feed>/i);
+                if (rssMatch) xml = rssMatch[0];
+            }
         }
-        
-        const xml = await response.text();
+
+        // Fallback to regular fetch
+        if (!xml) {
+            const response = await fetch(source.feed_url, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (compatible; CFNewsWorker/1.0)',
+                },
+            });
+            if (!response.ok) {
+                console.error(`Failed to fetch ${source.name}: ${response.status}`);
+                return [];
+            }
+            xml = await response.text();
+        }
+
         return parseRSSFeed(xml);
     } catch (error) {
         console.error(`Error fetching ${source.name}:`, error);
@@ -250,7 +266,7 @@ export async function fetchNews(env: Bindings, skipSummary = false): Promise<voi
     for (const source of sources.results) {
         try {
             console.log(`Fetching ${source.name}...`);
-            const items = await fetchFeed(source);
+            const items = await fetchFeed(env, source);
             console.log(`Got ${items.length} items from ${source.name}`);
 
             const saved = await saveNewsItems(env, source, items, skipSummary);
@@ -279,6 +295,6 @@ export async function fetchSourceNews(env: Bindings, sourceId: number): Promise<
         throw new Error('Source not found');
     }
     
-    const items = await fetchFeed(source);
+    const items = await fetchFeed(env, source);
     return saveNewsItems(env, source, items);
 }

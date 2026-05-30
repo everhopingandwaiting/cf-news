@@ -181,28 +181,3 @@ CREATE TABLE IF NOT EXISTS neuron_usage (
 CREATE VIRTUAL TABLE IF NOT EXISTS news_fts USING fts5(
     title, description, tokenize='unicode61'
 );
-
--- 访客访问记录
-CREATE TABLE IF NOT EXISTS visitor_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ip TEXT NOT NULL,
-    path TEXT NOT NULL,
-    method TEXT DEFAULT 'GET',
-    user_agent TEXT,
-    referer TEXT,
-    country TEXT,
-    city TEXT,
-    device_type TEXT,
-    browser TEXT,
-    os TEXT,
-    user_id INTEGER,
-    response_status INTEGER,
-    response_time_ms INTEGER,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_visitor_logs_ip ON visitor_logs(ip);
-CREATE INDEX IF NOT EXISTS idx_visitor_logs_path ON visitor_logs(path);
-CREATE INDEX IF NOT EXISTS idx_visitor_logs_created ON visitor_logs(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_visitor_logs_user ON visitor_logs(user_id);

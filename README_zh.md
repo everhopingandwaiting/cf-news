@@ -43,6 +43,8 @@
 | 搜索 | D1 FTS5 全文搜索 |
 | AI | OpenRouter, NVIDIA, Mango APIs |
 | 向量 | Vectorize 语义去重 |
+| 浏览器 | Browser Rendering（无头 Chrome，抓取 JS 重度渲染的 RSS 源） |
+| 队列 | Queues（异步新闻处理） |
 | 部署 | Docker + Wrangler |
 
 ## Cloudflare 配置指南

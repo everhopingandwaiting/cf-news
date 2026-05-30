@@ -11,6 +11,18 @@ export interface Bindings {
     OPENROUTER_API_KEY: string;
     NVIDIA_API_KEY: string;
     MANGO_API_KEY: string;
+    BROWSER: Fetcher;
+    NEWS_QUEUE: Queue<NewsQueueMessage>;
+}
+
+export interface NewsQueueMessage {
+    type: 'fetch_source' | 'generate_summary' | 'index_news';
+    sourceId?: number;
+    newsId?: number;
+    title?: string;
+    description?: string;
+    content?: string;
+    url?: string;
 }
 
 export interface User {
