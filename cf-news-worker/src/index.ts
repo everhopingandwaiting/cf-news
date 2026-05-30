@@ -19,6 +19,16 @@ export { CommentsRoom } from './durable-objects/comments';
 
 const app = new Hono<{ Bindings: Bindings }>();
 
+// Global rate limiting middleware (100 req/min per IP)
+app.use('/api/*', async (c, next) => {
+    const ip = c.req.header('CF-Connecting-IP') || c.req.header('X-Forwarded-For') || 'unknown';
+    const { success } = await c.env.GLOBAL_RATE_LIMITER.limit({ key: ip });
+    if (!success) {
+        return c.json({ error: 'Rate limit exceeded' }, 429);
+    }
+    await next();
+});
+
 async function generatePendingSummaries(env: Bindings): Promise<void> {
     console.log('Generating pending AI summaries...');
     // Enrich items with short RSS content first (max 5 per run, separated from fetch to avoid 50-req limit)

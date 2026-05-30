@@ -13,6 +13,7 @@ export interface Bindings {
     MANGO_API_KEY: string;
     BROWSER: Fetcher;
     NEWS_QUEUE: Queue<NewsQueueMessage>;
+    GLOBAL_RATE_LIMITER: RateLimit;
 }
 
 export interface NewsQueueMessage {

@@ -66,6 +66,15 @@ new_sqlite_classes = ["CommentsRoom"]
 [vars]
 NEWS_FETCH_INTERVAL = "3600"           # 新闻抓取间隔（秒）
 
+# 全局限流（每个 IP 100次/分钟）
+[[ratelimits]]
+name = "GLOBAL_RATE_LIMITER"
+namespace_id = "1001"
+
+  [ratelimits.simple]
+  limit = 100
+  period = 60
+
 # 以下密钥需通过 `wrangler secret put` 设置：
 #   JWT_SECRET — 用户认证 token 签发密钥
 #   OPENROUTER_API_KEY — AI 摘要服务（主）
