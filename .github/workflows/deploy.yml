@@ -52,10 +52,15 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
 
       - name: Upload build artifacts to GitHub Release
+        run: |
+          cd cf-news-worker
+          zip -r ../frontend-build-${{ github.ref_name }}.zip public/
+        shell: bash
+
+      - name: Attach archive to release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            cf-news-worker/public/**
+          files: frontend-build-${{ github.ref_name }}.zip
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
