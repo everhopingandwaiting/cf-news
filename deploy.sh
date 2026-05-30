@@ -25,12 +25,22 @@ cp -r dist/* "$WORKER_DIR/public/"
 # 3. Remove old static.ts (no longer used)
 rm -f "$WORKER_DIR/src/static.ts"
 
-# 4. Docker build + deploy
+# 4. Docker build
 echo "==> Building Docker image..."
 cd "$WORKER_DIR"
 docker build --no-cache --network=host -t cf-news-worker . 2>&1 | tail -1
 
+# 5. Deploy first (new wrangler.toml removes secrets from [vars])
 echo "==> Deploying to Cloudflare..."
 docker run --rm --env-file .env cf-news-worker npx wrangler deploy 2>&1 | tail -8
+
+# 6. Push secrets to Cloudflare (idempotent, updates if changed)
+echo "==> Updating secrets..."
+for key in JWT_SECRET OPENROUTER_API_KEY NVIDIA_API_KEY MANGO_API_KEY; do
+  value=$(grep "^${key}=" .env | cut -d= -f2-)
+  if [ -n "$value" ]; then
+    echo "$value" | docker run --rm -i --env-file .env cf-news-worker npx wrangler secret put "$key" 2>&1 | tail -1
+  fi
+done
 
 echo "==> Done!"

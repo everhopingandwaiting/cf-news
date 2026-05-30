@@ -115,12 +115,23 @@ auth.post('/register', async (c) => {
     }, 201);
 });
 
+const LOGIN_LOCK_PREFIX = 'login:fail:';
+const LOGIN_MAX_ATTEMPTS = 5;
+const LOGIN_LOCK_TTL = 900; // 15 minutes
+
 // Login
 auth.post('/login', async (c) => {
     const { email, password } = await c.req.json();
 
     if (!email || !password) {
         return c.json({ error: '邮箱和密码必填' }, 400);
+    }
+
+    // Check brute-force lock
+    const lockKey = LOGIN_LOCK_PREFIX + email.toLowerCase().trim();
+    const failCount = parseInt(await c.env.KV.get(lockKey) || '0');
+    if (failCount >= LOGIN_MAX_ATTEMPTS) {
+        return c.json({ error: '登录失败次数过多，请 15 分钟后再试' }, 429);
     }
 
     const user = await c.env.DB.prepare(
@@ -133,8 +144,13 @@ auth.post('/login', async (c) => {
 
     const password_hash = await hashPassword(password);
     if (password_hash !== user.password_hash) {
+        // Record failed attempt
+        await c.env.KV.put(lockKey, String(failCount + 1), { expirationTtl: LOGIN_LOCK_TTL });
         return c.json({ error: '邮箱或密码错误' }, 401);
     }
+
+    // Clear lock on success
+    await c.env.KV.delete(lockKey).catch(() => {});
 
     const token = await generateJWT(user, c.env.JWT_SECRET);
 

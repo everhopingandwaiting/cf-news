@@ -49,13 +49,15 @@ new_sqlite_classes = ["ClipboardRoom"]
 tag = "v2"
 new_sqlite_classes = ["CommentsRoom"]
 
-# 环境变量（从 .env 注入）
+# 环境变量（用 wrangler secret 设置的密钥不在此显示）
 [vars]
-JWT_SECRET = "${JWT_SECRET}"           # 用户认证 token 签发密钥
 NEWS_FETCH_INTERVAL = "3600"           # 新闻抓取间隔（秒）
-OPENROUTER_API_KEY = "${OPENROUTER_API_KEY}"  # AI 摘要服务（主）
-NVIDIA_API_KEY = "${NVIDIA_API_KEY}"   # AI 摘要服务（备）
-MANGO_API_KEY = "${MANGO_API_KEY}"     # AI 摘要服务（备）
+
+# 以下密钥需通过 `wrangler secret put` 设置：
+#   JWT_SECRET — 用户认证 token 签发密钥
+#   OPENROUTER_API_KEY — AI 摘要服务（主）
+#   NVIDIA_API_KEY — AI 摘要服务（备）
+#   MANGO_API_KEY — AI 摘要服务（备）
 
 [[routes]]
 pattern = "${ROUTE_PATTERN}"

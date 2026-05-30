@@ -25,10 +25,6 @@ jobs:
           export KV_NAMESPACE_ID="${{ secrets.KV_NAMESPACE_ID }}"
           export ZONE_ID="${{ secrets.ZONE_ID }}"
           export ROUTE_PATTERN="${{ secrets.ROUTE_PATTERN }}"
-          export JWT_SECRET="${{ secrets.JWT_SECRET }}"
-          export OPENROUTER_API_KEY="${{ secrets.OPENROUTER_API_KEY }}"
-          export NVIDIA_API_KEY="${{ secrets.NVIDIA_API_KEY }}"
-          export MANGO_API_KEY="${{ secrets.MANGO_API_KEY }}"
           envsubst < wrangler.toml.example > wrangler.toml
 
       - name: Build frontend
@@ -38,6 +34,17 @@ jobs:
           npm run build
           rm -rf ../cf-news-worker/public/*
           cp -r dist/* ../cf-news-worker/public/
+
+      - name: Push secrets to Cloudflare
+        run: |
+          cd cf-news-worker
+          npm ci
+          echo "${{ secrets.JWT_SECRET }}" | npx wrangler secret put JWT_SECRET
+          echo "${{ secrets.OPENROUTER_API_KEY }}" | npx wrangler secret put OPENROUTER_API_KEY
+          echo "${{ secrets.NVIDIA_API_KEY }}" | npx wrangler secret put NVIDIA_API_KEY
+          echo "${{ secrets.MANGO_API_KEY }}" | npx wrangler secret put MANGO_API_KEY
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
 
       - name: Deploy Worker
         run: |
