@@ -35,21 +35,20 @@ jobs:
           rm -rf ../cf-news-worker/public/*
           cp -r dist/* ../cf-news-worker/public/
 
-      - name: Push secrets to Cloudflare
-        run: |
-          cd cf-news-worker
-          npm ci
-          echo "${{ secrets.JWT_SECRET }}" | npx wrangler secret put JWT_SECRET
-          echo "${{ secrets.OPENROUTER_API_KEY }}" | npx wrangler secret put OPENROUTER_API_KEY
-          echo "${{ secrets.NVIDIA_API_KEY }}" | npx wrangler secret put NVIDIA_API_KEY
-          echo "${{ secrets.MANGO_API_KEY }}" | npx wrangler secret put MANGO_API_KEY
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-
       - name: Deploy Worker
         run: |
           cd cf-news-worker
           npm ci
           npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+
+      - name: Push secrets to Cloudflare
+        run: |
+          cd cf-news-worker
+          echo "${{ secrets.JWT_SECRET }}" | npx wrangler secret put JWT_SECRET
+          echo "${{ secrets.OPENROUTER_API_KEY }}" | npx wrangler secret put OPENROUTER_API_KEY
+          echo "${{ secrets.NVIDIA_API_KEY }}" | npx wrangler secret put NVIDIA_API_KEY
+          echo "${{ secrets.MANGO_API_KEY }}" | npx wrangler secret put MANGO_API_KEY
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}

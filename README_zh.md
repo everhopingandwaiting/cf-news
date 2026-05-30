@@ -133,6 +133,26 @@ MANGO_API_KEY=你的Mango密钥
 3. 进入 **Settings** → **Triggers** → **Custom Domains**
 4. 添加你的域名（如 `news.yourdomain.com`）
 
+## CI/CD 配置（GitHub Actions）
+
+项目自带 GitHub Actions 自动部署工作流。需要在仓库设置中添加以下 Secrets：
+
+**Settings → Secrets and variables → Actions → New repository secret**
+
+| Secret 名称 | 说明 |
+|-------------|------|
+| `CF_API_TOKEN` | Cloudflare API Token |
+| `D1_DATABASE_ID` | D1 数据库 ID |
+| `KV_NAMESPACE_ID` | KV 命名空间 ID |
+| `ZONE_ID` | Cloudflare Zone ID |
+| `ROUTE_PATTERN` | 域名路由（如 `yourdomain.com/*`） |
+| `JWT_SECRET` | JWT 签名密钥 |
+| `OPENROUTER_API_KEY` | OpenRouter API Key |
+| `NVIDIA_API_KEY` | NVIDIA API Key |
+| `MANGO_API_KEY` | Mango API Key |
+
+工作流运行时会自动将这些值推到 Cloudflare Secrets（`wrangler secret put`），不会明文存储。推送到 main 分支即可触发自动部署。
+
 ## 快速开始
 
 ### 前置条件

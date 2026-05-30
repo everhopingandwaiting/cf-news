@@ -133,6 +133,26 @@ After first deploy, add your domain:
 3. Go to **Settings** → **Triggers** → **Custom Domains**
 4. Add your domain (e.g., `news.yourdomain.com`)
 
+## CI/CD Setup (GitHub Actions)
+
+The project includes a GitHub Actions workflow for automatic deployment. To use it, configure these secrets in your repository:
+
+**Settings → Secrets and variables → Actions → New repository secret**
+
+| Secret Name | Description |
+|-------------|-------------|
+| `CF_API_TOKEN` | Cloudflare API Token (from Step 2) |
+| `D1_DATABASE_ID` | D1 database ID |
+| `KV_NAMESPACE_ID` | KV namespace ID |
+| `ZONE_ID` | Cloudflare Zone ID |
+| `ROUTE_PATTERN` | Your domain route (e.g., `yourdomain.com/*`) |
+| `JWT_SECRET` | JWT signing secret |
+| `OPENROUTER_API_KEY` | OpenRouter API key |
+| `NVIDIA_API_KEY` | NVIDIA API key |
+| `MANGO_API_KEY` | Mango API key |
+
+Secrets are automatically pushed to Cloudflare Secrets (`wrangler secret put`) during the workflow run.
+
 ## Quick Start
 
 ### Prerequisites
