@@ -48,6 +48,15 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
 
+      - name: Upload build artifacts to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            cf-news-worker/public/**
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Push secrets to Cloudflare
         run: |
           cd cf-news-worker
