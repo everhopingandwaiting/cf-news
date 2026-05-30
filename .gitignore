@@ -19,3 +19,7 @@ cf-news-worker/AGENTS.md
 .wrangler/
 cf-news-worker/wrangler.toml
 cf-news-worker/public/
+
+.dev.vars*
+!.dev.vars.example
+!.env.example
