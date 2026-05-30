@@ -2,6 +2,7 @@ import { Bindings, NewsSource } from '../types';
 import { generateSummaryForNews } from './summarizer';
 import { indexNewsItem } from './tokenizer';
 import { checkDuplicate, storeDedupHash } from './dedup';
+import { uploadNewsItem } from './aiSearch';
 import { fetchWithBrowser, needsBrowser } from './browserFetcher';
 
 interface RSSItem {
@@ -226,6 +227,17 @@ async function saveNewsItems(env: Bindings, source: NewsSource, items: RSSItem[]
                 );
                 storeDedupHash(env, row.id, item.title, item.description).catch(e =>
                     console.error(`Dedup hash failed for "${item.title}":`, e)
+                );
+                // Upload to AI Search
+                uploadNewsItem(env, {
+                    id: row.id,
+                    title: item.title,
+                    description: item.description,
+                    content: item.content,
+                    category,
+                    published_at: publishedAt || undefined,
+                }).catch(e =>
+                    console.error(`AI Search upload failed for "${item.title}":`, e)
                 );
             }
         } catch (error) {

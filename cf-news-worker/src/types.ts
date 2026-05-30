@@ -14,6 +14,7 @@ export interface Bindings {
     BROWSER: Fetcher;
     NEWS_QUEUE: Queue<NewsQueueMessage>;
     GLOBAL_RATE_LIMITER: RateLimit;
+    AI_SEARCH?: Fetcher;
 }
 
 export interface NewsQueueMessage {

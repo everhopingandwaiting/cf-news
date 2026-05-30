@@ -75,6 +75,11 @@ namespace_id = "1001"
   limit = 100
   period = 60
 
+# AI Search 绑定
+[[ai_search]]
+binding = "AI_SEARCH"
+instance_name = "news-search"
+
 # 以下密钥需通过 `wrangler secret put` 设置：
 #   JWT_SECRET — 用户认证 token 签发密钥
 #   OPENROUTER_API_KEY — AI 摘要服务（主）

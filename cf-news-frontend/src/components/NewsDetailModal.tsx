@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { NewsItem } from '../types';
 import { triggerSummarizeOne, getNewsItem, triggerTake } from '../api/client';
 import Comments from './Comments';
+import RelatedArticles from './RelatedArticles';
 
 function stripHtml(text: string): string {
   return text.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/\s+/g, ' ').trim();
@@ -63,11 +64,26 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
   const [taking, setTaking] = useState(false);
   const [takeError, setTakeError] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [wechatCopied, setWechatCopied] = useState(false);
   const [currentItem, setCurrentItem] = useState<NewsItem | null>(null);
   const [translating, setTranslating] = useState(false);
   const [translated, setTranslated] = useState<{ title?: string; description?: string } | null>(null);
+  const [showShare, setShowShare] = useState(false);
+  const shareRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { setCurrentItem(item); setTranslated(null); setTakeError(false); }, [item]);
+
+  // Share dropdown: click outside to close
+  useEffect(() => {
+    if (!showShare) return;
+    function handleClick(e: MouseEvent) {
+      if (shareRef.current && !shareRef.current.contains(e.target as Node)) {
+        setShowShare(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [showShare]);
 
   async function handleTake() {
     if (!currentItem) return;
@@ -97,6 +113,17 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
       onSummaryGenerated();
     } catch {}
     setSummarizing(false);
+  }
+
+  async function handleRelatedSelect(newsId: number) {
+    try {
+      const item = await getNewsItem(newsId);
+      if (item) {
+        setCurrentItem(item);
+        document.title = `${item.title} - News`;
+        window.history.replaceState({}, '', `/share/${newsId}`);
+      }
+    } catch {}
   }
 
   async function handleTranslate() {
@@ -197,22 +224,28 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
           <Comments newsId={currentItem!.id} token={token} />
         </div>
 
+        <RelatedArticles newsId={itemId} title={currentItem!.title} onSelect={handleRelatedSelect} />
+
         <div className="flex gap-3 mt-4 flex-wrap">
           <button className="px-5 py-2.5 bg-indigo-500 text-white rounded-lg text-[13px] font-medium hover:bg-indigo-600 transition" onClick={() => onOpenUrl(currentItem!.url)}>◈ 阅读原文</button>
           <button className="px-5 py-2.5 rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 transition" onClick={copyLink}>
             {copied ? '✓ 已复制' : '⇋ 复制链接'}
           </button>
-          <div className="relative group">
-            <button className="px-5 py-2.5 rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 transition">↗ 分享到</button>
-            <div className="absolute bottom-full left-0 mb-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[140px] opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-10">
-              <a href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(currentItem!.title)}&url=${encodeURIComponent(shareUrl)}`} target="_blank" rel="noopener noreferrer" className="block px-4 py-2 text-[13px] text-gray-700 hover:bg-gray-50">𝕏 Twitter</a>
-              <a href={`https://t.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(currentItem!.title)}`} target="_blank" rel="noopener noreferrer" className="block px-4 py-2 text-[13px] text-gray-700 hover:bg-gray-50">✈ Telegram</a>
-              <a href={`https://wa.me/?text=${encodeURIComponent(currentItem!.title + ' ' + shareUrl)}`} target="_blank" rel="noopener noreferrer" className="block px-4 py-2 text-[13px] text-gray-700 hover:bg-gray-50">💬 WhatsApp</a>
-              <button onClick={copyLink} className="block w-full text-left px-4 py-2 text-[13px] text-gray-700 hover:bg-gray-50">🔗 复制链接</button>
-            </div>
+          <div className="relative" ref={shareRef}>
+            <button className="px-5 py-2.5 rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 transition" onClick={() => setShowShare(!showShare)}>↗ 分享到</button>
+            {showShare && (
+              <div className="absolute bottom-full left-0 mb-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[140px] z-10 animate-[slideUp_0.15s_ease]">
+                <a href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(currentItem!.title)}&url=${encodeURIComponent(shareUrl)}`} target="_blank" rel="noopener noreferrer" className="block px-4 py-2 text-[13px] text-gray-700 hover:bg-gray-50" onClick={() => setShowShare(false)}>𝕏 Twitter</a>
+                <a href={`https://t.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(currentItem!.title)}`} target="_blank" rel="noopener noreferrer" className="block px-4 py-2 text-[13px] text-gray-700 hover:bg-gray-50" onClick={() => setShowShare(false)}>✈ Telegram</a>
+                <a href={`https://wa.me/?text=${encodeURIComponent(currentItem!.title + ' ' + shareUrl)}`} target="_blank" rel="noopener noreferrer" className="block px-4 py-2 text-[13px] text-gray-700 hover:bg-gray-50" onClick={() => setShowShare(false)}>💬 WhatsApp</a>
+                <button onClick={() => { copyLink(); setShowShare(false); }} className="block w-full text-left px-4 py-2 text-[13px] text-gray-700 hover:bg-gray-50">🔗 复制链接</button>
+                <button onClick={() => { navigator.clipboard.writeText(shareUrl); setWechatCopied(true); setTimeout(() => setWechatCopied(false), 2500); setShowShare(false); }} className="block w-full text-left px-4 py-2 text-[13px] text-gray-700 hover:bg-gray-50">💚 微信</button>
+              </div>
+            )}
           </div>
           <button className="px-5 py-2.5 rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 transition" onClick={onClose}>关闭</button>
         </div>
+        {wechatCopied && <div className="mt-3 text-center text-[12px] text-emerald-600 bg-emerald-50 px-4 py-2 rounded-lg">✓ 已复制链接，打开微信粘贴分享给好友</div>}
       </div>
     </div>
   );

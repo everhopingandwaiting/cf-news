@@ -1,0 +1,316 @@
+import { Bindings } from '../types';
+
+interface AISearchChunk {
+    id: string;
+    text: string;
+    score: number;
+    item?: { key?: string; metadata?: Record<string, any> };
+}
+
+interface DigestResult {
+    id?: number;
+    date: string;
+    content: string;
+    news_ids: number[];
+    created_at?: string;
+}
+
+function getToday(): string {
+    const now = new Date();
+    // 使用 Asia/Shanghai 时区
+    const opts = { timeZone: 'Asia/Shanghai', year: 'numeric' as const, month: '2-digit' as const, day: '2-digit' as const };
+    const parts = new Intl.DateTimeFormat('en-CA', opts).formatToParts(now);
+    const y = parts.find(p => p.type === 'year')!.value;
+    const m = parts.find(p => p.type === 'month')!.value;
+    const d = parts.find(p => p.type === 'day')!.value;
+    return `${y}-${m}-${d}`;
+}
+
+function getTodayStart(): string {
+    // 当天 00:00:00 Asia/Shanghai 转 UTC
+    const now = new Date();
+    const opts = { timeZone: 'Asia/Shanghai', year: 'numeric' as const, month: '2-digit' as const, day: '2-digit' as const };
+    const parts = new Intl.DateTimeFormat('en-CA', opts).formatToParts(now);
+    const y = parts.find(p => p.type === 'year')!.value;
+    const m = parts.find(p => p.type === 'month')!.value;
+    const d = parts.find(p => p.type === 'day')!.value;
+    return new Date(`${y}-${m}-${d}T00:00:00+08:00`).toISOString();
+}
+
+const AI_SEARCH_PREFIX = 'ai_search:uploaded:';
+
+function hasAISearch(env: Bindings): boolean {
+    return !!(env as any).AI_SEARCH;
+}
+
+function getSearchInstance(env: Bindings) {
+    const aiSearch = (env as any).AI_SEARCH;
+    if (!aiSearch) return null;
+    return aiSearch;
+}
+
+async function wasUploaded(env: Bindings, newsId: number): Promise<boolean> {
+    const row = await env.DB.prepare(
+        'SELECT ai_search_uploaded FROM news_items WHERE id = ?'
+    ).bind(newsId).first<{ ai_search_uploaded: number }>();
+    return row?.ai_search_uploaded === 1;
+}
+
+async function markUploaded(env: Bindings, newsId: number): Promise<void> {
+    await env.DB.prepare(
+        'UPDATE news_items SET ai_search_uploaded = 1 WHERE id = ?'
+    ).bind(newsId).run();
+}
+
+export async function askQuestion(
+    env: Bindings,
+    question: string,
+    stream = false
+): Promise<{ answer: string; chunks: any[] } | ReadableStream> {
+    const instance = getSearchInstance(env);
+
+    if (instance) {
+        const searchOptions: any = {
+            retrieval: { max_num_results: 5, retrieval_type: 'hybrid' },
+            reranking: { enabled: true, model: '@cf/baai/bge-reranker-base' },
+        };
+
+        if (stream) {
+            return instance.chatCompletions({
+                messages: [
+                    {
+                        role: 'system',
+                        content: '你是一个新闻助手。根据提供的新闻内容回答用户问题。回答简洁清晰，用中文。如果内容不足以回答问题，请如实说明。',
+                    },
+                    { role: 'user', content: question },
+                ],
+                model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+                stream: true,
+                ai_search_options: searchOptions,
+            });
+        }
+
+        const response = await instance.chatCompletions({
+            messages: [
+                {
+                    role: 'system',
+                    content: '你是一个新闻助手。根据提供的新闻内容回答用户问题。回答简洁清晰，用中文。如果内容不足以回答问题，请如实说明。',
+                },
+                { role: 'user', content: question },
+            ],
+            model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+            ai_search_options: searchOptions,
+        });
+
+        return {
+            answer: response.choices?.[0]?.message?.content || '无法生成回答',
+            chunks: response.chunks || [],
+        };
+    }
+
+    // Fallback: use Workers AI directly with recent news as context
+    const recentNews = await env.DB.prepare(
+        `SELECT title, description FROM news_items WHERE is_deleted = 0 ORDER BY created_at DESC LIMIT 10`
+    ).all<{ title: string; description: string }>();
+
+    const context = recentNews.results
+        .map(n => `标题: ${n.title}\n内容: ${(n.description || '').substring(0, 200)}`)
+        .join('\n---\n');
+
+    const prompt = `以下是最近的新闻:\n${context}\n\n用户问题: ${question}\n\n请基于以上新闻回答问题。如果新闻内容不足以回答，请说明。`;
+
+    const aiResponse = await env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', {
+        messages: [
+            { role: 'system', content: '你是一个新闻助手。回答简洁清晰，用中文。' },
+            { role: 'user', content: prompt },
+        ],
+    });
+
+    return {
+        answer: (aiResponse as any).response || '无法生成回答',
+        chunks: [],
+    };
+}
+
+export async function findRelated(
+    env: Bindings,
+    title: string,
+    limit = 5
+): Promise<AISearchChunk[]> {
+    const instance = getSearchInstance(env);
+
+    if (instance) {
+        const results = await instance.search({
+            messages: [{ role: 'user', content: title }],
+            ai_search_options: {
+                retrieval: { max_num_results: limit, retrieval_type: 'hybrid' },
+            },
+        });
+
+        if (results?.chunks) {
+            return results.chunks.map((chunk: any) => ({
+                id: chunk.id,
+                text: chunk.text,
+                score: chunk.score || 0,
+                item: chunk.item,
+            }));
+        }
+        return [];
+    }
+
+    // Fallback: query D1 for similar category news
+    return [];
+}
+
+export async function getDailyDigest(env: Bindings, date?: string): Promise<DigestResult | null> {
+    const targetDate = date || getToday();
+    const row = await env.DB.prepare(
+        'SELECT id, date, content, news_ids, created_at FROM daily_digests WHERE date = ?'
+    ).bind(targetDate).first<{ id: number; date: string; content: string; news_ids: string; created_at: string }>();
+
+    if (row) {
+        return {
+            id: row.id,
+            date: row.date,
+            content: row.content,
+            news_ids: JSON.parse(row.news_ids || '[]'),
+            created_at: row.created_at,
+        };
+    }
+
+    // Only auto-generate for today
+    if (!date || date === getToday()) {
+        return generateDailyDigest(env);
+    }
+    return null;
+}
+
+export async function listDigestDates(env: Bindings): Promise<string[]> {
+    const rows = await env.DB.prepare(
+        'SELECT date FROM daily_digests ORDER BY date DESC LIMIT 30'
+    ).all<{ date: string }>();
+    return rows.results.map(r => r.date);
+}
+
+export async function generateDailyDigest(env: Bindings): Promise<DigestResult | null> {
+    const today = getToday();
+
+    // Fetch all news published today in Asia/Shanghai timezone
+    const sinceStr = getTodayStart();
+
+    const news = await env.DB.prepare(
+        `SELECT n.id, n.title, n.description, n.published_at, COALESCE(s.language, 'zh') as lang
+         FROM news_items n
+         LEFT JOIN news_sources s ON n.source_id = s.id
+         WHERE n.is_deleted = 0 AND (n.published_at >= ? OR n.published_at IS NULL)
+         ORDER BY n.published_at DESC`
+    ).bind(sinceStr).all<{ id: number; title: string; description: string; published_at: string; lang: string }>();
+
+    if (news.results.length === 0) {
+        return null;
+    }
+
+    const newsIds = news.results.map(n => n.id);
+    function fmtTime(published_at: string): string {
+        if (!published_at) return '';
+        try {
+            const d = new Date(published_at);
+            if (isNaN(d.getTime())) return '';
+            // 转 Asia/Shanghai
+            const opts = { timeZone: 'Asia/Shanghai', hour: '2-digit' as const, minute: '2-digit' as const, hour12: false };
+            const parts = new Intl.DateTimeFormat('en-CA', opts).formatToParts(d);
+            const h = parts.find(p => p.type === 'hour')!.value;
+            const m = parts.find(p => p.type === 'minute')!.value;
+            return `${h}:${m}`;
+        } catch { return ''; }
+    }
+    const newsText = news.results
+        .map(n => `时间: ${fmtTime(n.published_at)}\t语言: ${n.lang === 'zh' ? 'CN' : 'EN'}\n标题: ${n.title}\n内容: ${(n.description || '').substring(0, 300)}`)
+        .join('\n---\n');
+
+    const instance = getSearchInstance(env);
+
+    let content: string;
+
+    if (instance) {
+        try {
+            const response = await instance.chatCompletions({
+                messages: [
+                    {
+                        role: 'system',
+                        content: '你是新闻编辑。将以下今日新闻整理成一份简洁的"今日要闻"摘要。用中文，按时间顺序，用数字序号（1. 2. 3. ...）列出每条新闻，每点1-2句话。每条末尾标注语言 [CN]/[EN] 和时间（HH:MM）。格式: 1. **标题** [CN/EN] HH:MM\n要点说明',
+                    },
+                    { role: 'user', content: `以下是今日新闻:\n${newsText}` },
+                ],
+                model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+            });
+
+            content = response.choices?.[0]?.message?.content || '';
+        } catch {
+            content = '';
+        }
+    } else {
+        // Fallback: use Workers AI
+        try {
+            const aiResponse = await env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', {
+                messages: [
+                    {
+                        role: 'system',
+                        content: '你是新闻编辑。将以下今日新闻整理成一份简洁的"今日要闻"摘要。用中文，按时间顺序，用数字序号（1. 2. 3. ...）列出每条新闻，每点1-2句话。每条末尾标注语言 [CN]/[EN] 和时间（HH:MM）。',
+                    },
+                    { role: 'user', content: `今日新闻:\n${newsText}` },
+                ],
+            });
+            content = (aiResponse as any).response || '';
+        } catch {
+            content = '';
+        }
+    }
+
+    if (!content) {
+        // Last resort: simple numbered list
+        content = news.results.map((n, i) => `${i + 1}. ${n.title}`).join('\n');
+    }
+
+    // Save to D1
+    await env.DB.prepare(
+        'INSERT OR REPLACE INTO daily_digests (date, content, news_ids) VALUES (?, ?, ?)'
+    ).bind(today, content, JSON.stringify(newsIds)).run();
+
+    return { date: today, content, news_ids: newsIds };
+}
+
+export async function uploadNewsItem(
+    env: Bindings,
+    item: { id: number; title: string; description?: string; content?: string; category?: string; published_at?: string }
+): Promise<boolean> {
+    const instance = getSearchInstance(env);
+    if (!instance) return false;
+
+    // Skip if already uploaded (KV dedup)
+    if (await wasUploaded(env, item.id)) return true;
+
+    try {
+        const body = (item.description || item.content || '')
+            .replace(/<[^>]+>/g, '')
+            .trim()
+            .substring(0, 8000);
+
+        const text = body ? `# ${item.title}\n\n${body}` : `# ${item.title}`;
+
+        await instance.items.upload(`news-${item.id}.md`, text, {
+            metadata: {
+                news_id: String(item.id),
+                category: item.category || 'general',
+                published_at: item.published_at || '',
+            },
+        });
+
+        await markUploaded(env, item.id);
+        return true;
+    } catch (e) {
+        console.error(`AI Search upload failed for news-${item.id}:`, e);
+        // Don't mark as uploaded on failure, will retry next cycle
+        return false;
+    }
+}

@@ -19,6 +19,7 @@ interface Props {
   onToggleDigest: () => void;
   onExport: () => void;
   onRecommendations: () => void;
+  onQA: () => void;
   onLogin: () => void;
   onRegister: () => void;
   onRefresh: () => void;
@@ -31,7 +32,7 @@ interface Props {
   onToggleClipboard: () => void;
 }
 
-export default function Header({ user, refreshing, cooldown, search, lang, sourceCount, totalNews, lastFetchedAt, showManager, showClipboard, sources, sourceId, digestEnabled, clipboardHasNew, onClearClipboardFlag, onToggleDigest, onExport, onRecommendations, onLogin, onRegister, onRefresh, onLogout, onSearchChange, onSearch, onLangChange, onSourceChange, onManageSources, onToggleClipboard }: Props) {
+export default function Header({ user, refreshing, cooldown, search, lang, sourceCount, totalNews, lastFetchedAt, showManager, showClipboard, sources, sourceId, digestEnabled, clipboardHasNew, onClearClipboardFlag, onToggleDigest, onExport, onRecommendations, onQA, onLogin, onRegister, onRefresh, onLogout, onSearchChange, onSearch, onLangChange, onSourceChange, onManageSources, onToggleClipboard }: Props) {
   const [showMenu, setShowMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const disabled = refreshing || cooldown > 0;
@@ -51,8 +52,8 @@ export default function Header({ user, refreshing, cooldown, search, lang, sourc
     <header className="bg-white border border-gray-200 rounded-2xl px-5 py-3 mb-4 shadow-sm">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
-          <div className="w-8 h-8 bg-gradient-to-br from-indigo-500 to-purple-500 rounded-lg flex items-center justify-center text-white font-bold text-sm shrink-0">✦</div>
-          <h1 className="text-base font-semibold text-gray-900 whitespace-nowrap">AI News Hub</h1>
+          <div className="w-8 h-8 bg-gradient-to-br from-indigo-500 to-purple-500 rounded-lg flex items-center justify-center text-white font-bold text-sm shrink-0 cursor-pointer hover:opacity-85 transition" onClick={onQA} title="AI 问答">✦</div>
+          <h1 className="text-base font-semibold text-gray-900 whitespace-nowrap cursor-pointer hover:text-indigo-600 transition" onClick={onQA} title="AI 问答">AI News Hub</h1>
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
           {sourceCount > 0 && (

@@ -52,3 +52,18 @@ export interface User {
   email: string;
   username: string;
 }
+
+export interface DailyDigest {
+  id: number;
+  date: string;
+  content: string;
+  news_ids: number[];
+  created_at: string;
+}
+
+export interface RelatedArticle {
+  id: string;
+  text: string;
+  score: number;
+  item?: { metadata?: { description?: string; image_url?: string } };
+}

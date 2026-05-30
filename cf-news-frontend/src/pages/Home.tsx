@@ -8,7 +8,10 @@ import AuthModal from '../components/AuthModal';
 import NewsDetailModal from '../components/NewsDetailModal';
 import SourceManager from '../components/SourceManager';
 import ClipboardShare from '../components/ClipboardShare';
+import DailyDigest from '../components/DailyDigest';
+import NewsQA from '../components/NewsQA';
 import { useClipboardWS } from '../hooks/useClipboardWS';
+import { getDailyDigest, getDigestDates } from '../api/client';
 
 const CATEGORIES = [
   { key: 'all', label: '全部', emoji: '✦' },
@@ -42,6 +45,12 @@ export default function Home() {
   const [showClipboard, setShowClipboard] = useState(() => { try { return localStorage.getItem('cb_panel_open') === '1'; } catch { return false; } });
   const [digestEnabled, setDigestEnabled] = useState(false);
   const [cooldown, setCooldown] = useState(0);
+  const [digestData, setDigestData] = useState<import('../types').DailyDigest | null>(null);
+  const [digestLoading, setDigestLoading] = useState(true);
+  const [digestCollapsed, setDigestCollapsed] = useState(true);
+  const [digestRegenerating, setDigestRegenerating] = useState(false);
+  const [digestDates, setDigestDates] = useState<string[]>([]);
+  const [showQA, setShowQA] = useState(false);
   const latestIdRef = useRef(0);
   const cooldownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const clipboard = useClipboardWS(token || '', showClipboard);
@@ -55,6 +64,43 @@ export default function Home() {
   const showToast = (msg: string, type = 'success') => { setToast({ msg, type }); setTimeout(() => setToast(null), 3000); };
 
   useEffect(() => { try { localStorage.setItem('cb_panel_open', showClipboard ? '1' : '0'); } catch {} }, [showClipboard]);
+
+  // Load daily digest
+  useEffect(() => {
+    getDailyDigest().then(data => {
+      setDigestData(data.digest || null);
+      setDigestLoading(false);
+    }).catch(() => {
+      setDigestLoading(false);
+    });
+    getDigestDates().then(setDigestDates).catch(() => {});
+  }, []);
+
+  async function handleDigestDateChange(date: string) {
+    setDigestLoading(true);
+    try {
+      const data = await getDailyDigest(date);
+      setDigestData(data.digest || null);
+      setDigestCollapsed(false);
+    } catch {}
+    setDigestLoading(false);
+  }
+
+  async function handleRegenerateDigest() {
+    setDigestRegenerating(true);
+    try {
+      const res = await fetch('/api/ai/digest/generate', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (data.digest) {
+        setDigestData(data.digest);
+        setDigestCollapsed(false);
+      }
+    } catch {}
+    setDigestRegenerating(false);
+  }
 
   useEffect(() => { if (token) { getMe().then(setUser).catch(() => { localStorage.removeItem('token'); setToken(null); }); } }, [token]);
   useEffect(() => { getSources().then(setSources).catch(() => {}); }, []);
@@ -215,6 +261,7 @@ export default function Home() {
         digestEnabled={digestEnabled}
         onToggleDigest={handleToggleDigest}
         onExport={handleExport} onRecommendations={handleRecommendations}
+        onQA={() => setShowQA(true)}
         onLogin={() => setShowAuth(true)} onRegister={() => setShowAuth(true)}
         onRefresh={handleRefresh} onLogout={handleLogout}
         onSearchChange={setSearch} onSearch={() => { setPage(1); loadNews(); }}
@@ -226,6 +273,7 @@ export default function Home() {
         onClearClipboardFlag={clipboard.clearNewDataFlag}
       />
       {hasNewNews && <div className="bg-gradient-to-r from-indigo-500 to-purple-500 text-white px-5 py-3 rounded-lg mb-4 cursor-pointer font-medium text-sm text-center shadow animate-pulse hover:opacity-95" onClick={() => { setHasNewNews(false); setPage(1); loadNews(1); }}>⟡ 有新新闻，点击刷新</div>}
+      <DailyDigest digest={digestData} loading={digestLoading} collapsed={digestCollapsed} regenerating={digestRegenerating} dates={digestDates} onToggle={() => setDigestCollapsed(!digestCollapsed)} onRegenerate={handleRegenerateDigest} onDateChange={handleDigestDateChange} />
       <CategoryNav categories={CATEGORIES} active={category} onSelect={k => { setCategory(k); setSourceId(null); setPage(1); }} />
       <div className="flex gap-2.5 mb-5 items-center flex-wrap">
         <button className="px-4 py-2.5 rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 hover:border-indigo-500 hover:text-indigo-500 transition disabled:opacity-40 disabled:cursor-not-allowed" onClick={handleSummarize} disabled={summarizing}>{summarizing ? '⟡ 生成中...' : '⟡ AI 摘要'}</button>
@@ -264,6 +312,7 @@ export default function Home() {
         </>
       )}
       <AuthModal visible={showAuth} onClose={() => setShowAuth(false)} onLoginSuccess={handleLoginSuccess} />
+      <NewsQA visible={showQA} onClose={() => setShowQA(false)} token={token} />
       <NewsDetailModal item={selectedNews} token={token} onClose={closeNews} onOpenUrl={url => window.open(url, '_blank')} onSummaryGenerated={() => { loadNews(); }} />
       {toast && <div className={`fixed bottom-5 right-5 px-5 py-3 rounded-lg text-[13px] shadow-lg z-50 animate-[slideIn_0.2s_ease] ${toast.type === 'success' ? 'bg-white border border-emerald-500 text-gray-900' : 'bg-white border border-red-500 text-gray-900'}`}>{toast.msg}</div>}
     </div>

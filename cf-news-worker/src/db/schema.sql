@@ -43,6 +43,9 @@ CREATE TABLE IF NOT EXISTS news_items (
     FOREIGN KEY (source_id) REFERENCES news_sources(id)
 );
 
+-- AI Search 上传标记
+ALTER TABLE news_items ADD COLUMN ai_search_uploaded INTEGER DEFAULT 0;
+
 -- 用户收藏表
 CREATE TABLE IF NOT EXISTS user_favorites (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -180,4 +183,13 @@ CREATE TABLE IF NOT EXISTS neuron_usage (
 -- FTS5 全文搜索索引（替代 KV 搜索索引，避免 KV 写入配额超限）
 CREATE VIRTUAL TABLE IF NOT EXISTS news_fts USING fts5(
     title, description, tokenize='unicode61'
+);
+
+-- 今日要闻表
+CREATE TABLE IF NOT EXISTS daily_digests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT UNIQUE NOT NULL,
+    content TEXT NOT NULL,
+    news_ids TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );

@@ -106,4 +106,32 @@ export async function translateText(text: string, lang: string): Promise<string 
   }
 }
 
+export async function askQuestion(question: string): Promise<{ answer: string; chunks?: any[] }> {
+  const { data } = await api.post('/api/ai/ask', { question, stream: false });
+  return data;
+}
+
+export async function askQuestionStream(question: string): Promise<Response> {
+  return fetch('/api/ai/ask', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+    body: JSON.stringify({ question, stream: true }),
+  });
+}
+
+export async function getDailyDigest(date?: string): Promise<{ digest: import('../types').DailyDigest | null }> {
+  const { data } = await api.get('/api/ai/digest', { params: date ? { date } : {} });
+  return data;
+}
+
+export async function getDigestDates(): Promise<string[]> {
+  const { data } = await api.get('/api/ai/digest/dates');
+  return data.dates || [];
+}
+
+export async function getRelatedArticles(newsId: number): Promise<{ related: import('../types').RelatedArticle[] }> {
+  const { data } = await api.get(`/api/ai/related/${newsId}`);
+  return data;
+}
+
 export default api;

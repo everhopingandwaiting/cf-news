@@ -7,10 +7,12 @@ import newsRoutes from './routes/news';
 import userRoutes from './routes/user';
 import commentsRoutes from './routes/comments';
 import adminRoutes from './routes/admin';
+import aiRoutes from './routes/ai';
 import { fetchNews } from './services/newsFetcher';
 import { fetchRichArticleContent } from './services/contentFetcher';
 import { generateSummaryForNews, generateAITake } from './services/summarizer';
 import { sendDailyDigest } from './services/emailDigest';
+import { generateDailyDigest } from './services/aiSearch';
 import { translateText } from './services/translator';
 import { verifyJWT } from './routes/auth';
 import { handleNewsQueue } from './services/queueConsumer';
@@ -107,6 +109,8 @@ app.use('/api/admin/*', async (c, next) => {
     await next();
 });
 app.route('/api/admin', adminRoutes);
+
+app.route('/api/ai', aiRoutes);
 
 
 
@@ -323,7 +327,9 @@ ${imgUrl ? `<meta property="og:image" content="${imgUrl}"><meta name="twitter:im
             console.log('Fetch cron fired, fetching news...');
             ctx.waitUntil(fetchNews(env, true));
         } else if (event.cron === '0 8 * * *') {
-            console.log('Daily digest cron fired, sending emails...');
+            console.log('Daily digest cron fired, generating digest...');
+            ctx.waitUntil(generateDailyDigest(env).then(r => console.log(`Digest: ${r ? 'generated' : 'skipped'}`)));
+            console.log('Daily digest email cron fired, sending emails...');
             ctx.waitUntil(sendDailyDigest(env).then(r => console.log(`Digest: sent=${r.sent}, failed=${r.failed}`)));
         } else {
             console.log('Summary cron fired, generating summaries...');
