@@ -4,6 +4,21 @@
 
 A daily news aggregation platform built on Cloudflare's edge infrastructure. Collects RSS feeds from 20+ sources, provides AI-powered summaries, and delivers a fast reading experience.
 
+## Highlights
+
+### Cross-Device Clipboard Sharing
+
+Sync text and images across your devices in real-time. Works on desktop and mobile.
+
+- **Real-time sync** — Type or paste, other devices see it instantly
+- **Push to clipboard** — Click "Push" to auto-copy text to other devices' system clipboard
+- **Image support** — Paste or select images, auto-compress if >5MB
+- **Offline queue** — Messages queued when disconnected, sent on reconnect
+- **Sender identification** — See which device sent each message
+- **Clipboard history** — Last 20 pushed texts, click to restore
+- **Auto-open panel** — Panel opens automatically when data arrives from another device
+- **Secure** — WSS encrypted, data only flows between your devices, not stored on server
+
 ## Features
 
 - **Multi-source RSS aggregation** — 20+ built-in sources (36氪, Hacker News, TechCrunch, The Verge, BBC, etc.)
@@ -12,7 +27,6 @@ A daily news aggregation platform built on Cloudflare's edge infrastructure. Col
 - **AI summaries** — OpenRouter, NVIDIA, Mango APIs with automatic fallback
 - **User system** — Registration, login, JWT authentication
 - **Favorites & history** — Bookmark articles, track read history
-- **Clipboard sharing** — Real-time text & image sync across devices via WebSocket
 - **Email digest** — Subscribe to daily news summaries
 - **Auto-update** — Cron triggers fetch new articles every hour
 - **Responsive UI** — React 19 + Tailwind 4, works on desktop and mobile
