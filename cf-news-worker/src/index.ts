@@ -13,6 +13,7 @@ import { generateSummaryForNews, generateAITake } from './services/summarizer';
 import { sendDailyDigest } from './services/emailDigest';
 import { translateText } from './services/translator';
 import { verifyJWT } from './routes/auth';
+import { logVisitor } from './services/analytics';
 export { ClipboardRoom } from './durable-objects/clipboard';
 export { CommentsRoom } from './durable-objects/comments';
 
@@ -69,6 +70,22 @@ app.use('/api/*', cors({
     allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization'],
 }));
+
+app.use('/api/*', async (c, next) => {
+    const start = Date.now();
+    await next();
+    const elapsed = Date.now() - start;
+    const path = new URL(c.req.url).pathname;
+    const authHeader = c.req.header('Authorization');
+    let userId: number | undefined;
+    if (authHeader?.startsWith('Bearer ')) {
+        try {
+            const payload = await verifyJWT(authHeader.substring(7), c.env.JWT_SECRET);
+            if (payload) userId = payload.sub;
+        } catch {}
+    }
+    c.executionCtx.waitUntil(logVisitor(c.env, c.req.raw, path, c.res.status, elapsed, userId));
+});
 
 app.route('/api/auth', authRoutes);
 app.route('/api/news', newsRoutes);

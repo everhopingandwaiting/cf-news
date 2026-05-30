@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 192 192">
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#6366f1"/>
+      <stop offset="100%" style="stop-color:#8b5cf6"/>
+    </linearGradient>
+  </defs>
+  <rect width="192" height="192" rx="32" fill="url(#g)"/>
+  <text x="96" y="100" font-size="80" text-anchor="middle" dominant-baseline="middle" fill="white">📰</text>
+</svg>

@@ -197,11 +197,20 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
           <Comments newsId={currentItem!.id} token={token} />
         </div>
 
-        <div className="flex gap-3 mt-4">
+        <div className="flex gap-3 mt-4 flex-wrap">
           <button className="px-5 py-2.5 bg-indigo-500 text-white rounded-lg text-[13px] font-medium hover:bg-indigo-600 transition" onClick={() => onOpenUrl(currentItem!.url)}>◈ 阅读原文</button>
           <button className="px-5 py-2.5 rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 transition" onClick={copyLink}>
-            {copied ? '✓ 已复制' : '⇋ 分享'}
+            {copied ? '✓ 已复制' : '⇋ 复制链接'}
           </button>
+          <div className="relative group">
+            <button className="px-5 py-2.5 rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 transition">↗ 分享到</button>
+            <div className="absolute bottom-full left-0 mb-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[140px] opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-10">
+              <a href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(currentItem!.title)}&url=${encodeURIComponent(shareUrl)}`} target="_blank" rel="noopener noreferrer" className="block px-4 py-2 text-[13px] text-gray-700 hover:bg-gray-50">𝕏 Twitter</a>
+              <a href={`https://t.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(currentItem!.title)}`} target="_blank" rel="noopener noreferrer" className="block px-4 py-2 text-[13px] text-gray-700 hover:bg-gray-50">✈ Telegram</a>
+              <a href={`https://wa.me/?text=${encodeURIComponent(currentItem!.title + ' ' + shareUrl)}`} target="_blank" rel="noopener noreferrer" className="block px-4 py-2 text-[13px] text-gray-700 hover:bg-gray-50">💬 WhatsApp</a>
+              <button onClick={copyLink} className="block w-full text-left px-4 py-2 text-[13px] text-gray-700 hover:bg-gray-50">🔗 复制链接</button>
+            </div>
+          </div>
           <button className="px-5 py-2.5 rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 transition" onClick={onClose}>关闭</button>
         </div>
       </div>
