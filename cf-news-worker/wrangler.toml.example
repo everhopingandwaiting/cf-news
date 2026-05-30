@@ -1,0 +1,82 @@
+name = "cf-news-worker"
+main = "src/index.ts"
+compatibility_date = "2026-05-28"
+
+# Static assets (React frontend)
+[assets]
+directory = "./public"
+not_found_handling = "single-page-application"
+
+# D1 Database
+[[d1_databases]]
+binding = "DB"
+database_name = "news-db"
+database_id = "${D1_DATABASE_ID}"
+
+# Workers AI
+[ai]
+binding = "AI"
+
+# KV Namespace
+[[kv_namespaces]]
+binding = "KV"
+id = "${KV_NAMESPACE_ID}"
+
+# Durable Object - 共享粘贴板
+[[durable_objects.bindings]]
+name = "CLIPBOARD"
+class_name = "ClipboardRoom"
+
+# Vectorize - 语义去重
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "news-dedup"
+
+# Durable Object - 实时评论
+[[durable_objects.bindings]]
+name = "COMMENTS"
+class_name = "CommentsRoom"
+
+# Email Sending
+[[send_email]]
+name = "EMAIL"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ClipboardRoom"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["CommentsRoom"]
+
+# 环境变量（从 .env 注入）
+[vars]
+JWT_SECRET = "${JWT_SECRET}"           # 用户认证 token 签发密钥
+NEWS_FETCH_INTERVAL = "3600"           # 新闻抓取间隔（秒）
+OPENROUTER_API_KEY = "${OPENROUTER_API_KEY}"  # AI 摘要服务（主）
+NVIDIA_API_KEY = "${NVIDIA_API_KEY}"   # AI 摘要服务（备）
+MANGO_API_KEY = "${MANGO_API_KEY}"     # AI 摘要服务（备）
+
+[[routes]]
+pattern = "${ROUTE_PATTERN}"
+zone_id = "${ZONE_ID}"
+
+# Cron Triggers
+[triggers]
+crons = ["0 * * * *", "*/15 * * * *", "0 8 * * *"]
+
+[observability]
+enabled = true
+
+# 开发环境配置
+[env.dev]
+name = "cf-news-worker-dev"
+
+[[env.dev.d1_databases]]
+binding = "DB"
+database_name = "news-db-dev"
+database_id = "YOUR_DEV_D1_DATABASE_ID"
+
+[[env.dev.kv_namespaces]]
+binding = "KV"
+id = "YOUR_DEV_KV_NAMESPACE_ID"

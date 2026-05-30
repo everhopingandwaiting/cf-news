@@ -1,0 +1,21 @@
+node_modules/
+dist/
+.env
+*.log
+__pycache__/
+*.pyc
+.omo/
+thoughts/
+AGENTS.md
+PLAN-*.md
+cf-news-frontend/AGENTS.md
+cf-news-worker/AGENTS.md
+.admin-token
+
+# Separate project (not part of this repo)
+/cf-dns-manager/
+
+# Cloudflare
+.wrangler/
+cf-news-worker/wrangler.toml
+cf-news-worker/public/

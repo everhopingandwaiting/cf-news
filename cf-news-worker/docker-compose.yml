@@ -1,0 +1,24 @@
+services:
+  worker-dev:
+    image: cf-news-worker
+    container_name: cf-news-worker-dev
+    ports:
+      - "8787:8787"
+    env_file: .env
+    command: npx wrangler dev --local --port 8787
+
+  db-init:
+    image: cf-news-worker
+    container_name: cf-news-db-init
+    env_file: .env
+    command: npx wrangler d1 execute news-db --local --file=./src/db/schema.sql
+    profiles:
+      - setup
+
+  deploy:
+    image: cf-news-worker
+    container_name: cf-news-deploy
+    env_file: .env
+    command: npx wrangler deploy
+    profiles:
+      - deploy

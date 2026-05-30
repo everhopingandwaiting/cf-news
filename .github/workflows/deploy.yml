@@ -1,0 +1,48 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: |
+            cf-news-frontend/package-lock.json
+            cf-news-worker/package-lock.json
+
+      - name: Generate wrangler.toml
+        run: |
+          cd cf-news-worker
+          export D1_DATABASE_ID="${{ secrets.D1_DATABASE_ID }}"
+          export KV_NAMESPACE_ID="${{ secrets.KV_NAMESPACE_ID }}"
+          export ZONE_ID="${{ secrets.ZONE_ID }}"
+          export ROUTE_PATTERN="${{ secrets.ROUTE_PATTERN }}"
+          export JWT_SECRET="${{ secrets.JWT_SECRET }}"
+          export OPENROUTER_API_KEY="${{ secrets.OPENROUTER_API_KEY }}"
+          export NVIDIA_API_KEY="${{ secrets.NVIDIA_API_KEY }}"
+          export MANGO_API_KEY="${{ secrets.MANGO_API_KEY }}"
+          envsubst < wrangler.toml.example > wrangler.toml
+
+      - name: Build frontend
+        run: |
+          cd cf-news-frontend
+          npm ci
+          npm run build
+          rm -rf ../cf-news-worker/public/*
+          cp -r dist/* ../cf-news-worker/public/
+
+      - name: Deploy Worker
+        run: |
+          cd cf-news-worker
+          npm ci
+          npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}

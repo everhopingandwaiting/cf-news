@@ -1,0 +1,23 @@
+{
+  "name": "cf-news-worker",
+  "version": "1.0.0",
+  "description": "Cloudflare Worker for daily news aggregation",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:init": "wrangler d1 execute news-db --local --file=./src/db/schema.sql",
+    "db:init:remote": "wrangler d1 execute news-db --remote --file=./src/db/schema.sql"
+  },
+  "keywords": ["cloudflare", "worker", "news", "rss"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "hono": "^4.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.0.0",
+    "typescript": "^5.0.0",
+    "wrangler": "^4.0.0"
+  }
+}
