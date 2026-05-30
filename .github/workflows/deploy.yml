@@ -31,6 +31,7 @@ jobs:
           cd cf-news-frontend
           npm ci
           npm run build
+          mkdir -p ../cf-news-worker/public
           rm -rf ../cf-news-worker/public/*
           cp -r dist/* ../cf-news-worker/public/
 
