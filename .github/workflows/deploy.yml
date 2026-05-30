@@ -27,6 +27,11 @@ jobs:
           envsubst < wrangler.toml.example > wrangler.toml
 
       - name: Build frontend
+        env:
+          VITE_BUILD_TIME: "${{ github.event.head_commit.timestamp }}"
+          VITE_BUILD_PLATFORM: "GitHub Actions"
+          VITE_BUILD_VERSION: "${{ github.ref_name }}"
+          VITE_BUILD_COMMIT: "${{ github.sha }}"
         run: |
           cd cf-news-frontend
           npm ci

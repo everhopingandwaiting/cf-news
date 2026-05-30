@@ -10,6 +10,7 @@ import SourceManager from '../components/SourceManager';
 import ClipboardShare from '../components/ClipboardShare';
 import DailyDigest from '../components/DailyDigest';
 import NewsQA from '../components/NewsQA';
+import Footer from '../components/Footer';
 import { useClipboardWS } from '../hooks/useClipboardWS';
 import { getDailyDigest, getDigestDates } from '../api/client';
 
@@ -314,6 +315,7 @@ export default function Home() {
       <AuthModal visible={showAuth} onClose={() => setShowAuth(false)} onLoginSuccess={handleLoginSuccess} />
       <NewsQA visible={showQA} onClose={() => setShowQA(false)} token={token} />
       <NewsDetailModal item={selectedNews} token={token} onClose={closeNews} onOpenUrl={url => window.open(url, '_blank')} onSummaryGenerated={() => { loadNews(); }} />
+      <Footer />
       {toast && <div className={`fixed bottom-5 right-5 px-5 py-3 rounded-lg text-[13px] shadow-lg z-50 animate-[slideIn_0.2s_ease] ${toast.type === 'success' ? 'bg-white border border-emerald-500 text-gray-900' : 'bg-white border border-red-500 text-gray-900'}`}>{toast.msg}</div>}
     </div>
   );

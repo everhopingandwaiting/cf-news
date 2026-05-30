@@ -17,6 +17,10 @@ envsubst < "$WORKER_DIR/wrangler.toml.example" > "$WORKER_DIR/wrangler.toml"
 # 1. Build frontend
 echo "==> Building frontend..."
 cd "$FRONTEND_DIR"
+export VITE_BUILD_TIME="${VITE_BUILD_TIME:-$(date -u +"%Y-%m-%dT%H:%M:%SZ")}"
+export VITE_BUILD_PLATFORM="${VITE_BUILD_PLATFORM:-Local}"
+export VITE_BUILD_VERSION="${VITE_BUILD_VERSION:-$(git describe --tags --abbrev=0 2>/dev/null || echo "")}"
+export VITE_BUILD_COMMIT="${VITE_BUILD_COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo "")}"
 npm run build 2>&1 | tail -3
 
 # 2. Copy dist to worker/public (Cloudflare [assets] handles serving)
