@@ -285,8 +285,14 @@ export async function generateDailyDigest(env: Bindings): Promise<DigestResult |
         const t = fmtTime(n.published_at);
         const lang = langTag(n.lang);
         const src = n.source_name ? ` (${n.source_name})` : '';
-        const desc = enTranslations.get(i) || (lang === 'EN' ? `[英] ${n.title}` : n.title);
-        return `${i + 1}. **${n.title}** [${lang}]${t ? ' ' + t : ''}${src}\n${desc}`;
+        const translated = enTranslations.get(i);
+        // For Chinese items: no extra line (title already shown above)
+        // For English items: show Chinese translation
+        if (lang === 'EN') {
+            const desc = translated || `[英] ${n.title}`;
+            return `${i + 1}. **${n.title}** [${lang}]${t ? ' ' + t : ''}${src}\n${desc}`;
+        }
+        return `${i + 1}. **${n.title}** [${lang}]${t ? ' ' + t : ''}${src}`;
     }).join('\n\n');
 
     // Save to D1
