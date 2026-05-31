@@ -1,4 +1,4 @@
-import { useState, useEffect, type FormEvent } from 'react';
+import { useState, useEffect, useRef, type FormEvent } from 'react';
 import { login, register } from '../api/client';
 
 interface Props {
@@ -15,22 +15,38 @@ export default function AuthModal({ visible, onClose, onLoginSuccess }: Props) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
-  const [turnstileKey, setTurnstileKey] = useState('');
+  const [loading, setLoading] = useState(false);
+  const turnstileRef = useRef<HTMLDivElement>(null);
+  const widgetIdRef = useRef<string | null>(null);
 
+  // Render Turnstile widget after we have the site key
   useEffect(() => {
+    if (!visible) return;
     fetch('/api/config').then(r => r.json()).then(c => {
-      if (c.turnstileSiteKey) {
-        setTurnstileKey(c.turnstileSiteKey);
+      if (c.turnstileSiteKey && turnstileRef.current && !widgetIdRef.current) {
+        widgetIdRef.current = (window as any).turnstile?.render(turnstileRef.current, {
+          sitekey: c.turnstileSiteKey,
+        });
       }
     }).catch(() => {});
-  }, []);
+    return () => {
+      if (widgetIdRef.current) {
+        try { (window as any).turnstile?.remove(widgetIdRef.current); } catch {}
+        widgetIdRef.current = null;
+      }
+    };
+  }, [visible]);
 
   if (!visible) return null;
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError('');
-    const token = (window as any).turnstile?.getResponse();
+    setLoading(true);
+    let token = '';
+    if (widgetIdRef.current) {
+      token = (window as any).turnstile?.getResponse(widgetIdRef.current) || '';
+    }
     try {
       if (mode === 'register') {
         await register(username, email, password, token);
@@ -42,6 +58,7 @@ export default function AuthModal({ visible, onClose, onLoginSuccess }: Props) {
         onClose();
       }
     } catch (err: any) { setError(err.response?.data?.error || '操作失败'); }
+    setLoading(false);
   }
 
   return (
@@ -64,8 +81,8 @@ export default function AuthModal({ visible, onClose, onLoginSuccess }: Props) {
             <input type="password" className="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/20" value={password} onChange={e => setPassword(e.target.value)} placeholder="输入密码" required />
           </div>
           {error && <div className="text-red-500 text-[13px] text-center mb-3">{error}</div>}
-          {turnstileKey && <div className="cf-turnstile mb-3 flex justify-center" data-sitekey={turnstileKey} />}
-          <button type="submit" className="w-full py-3 rounded-lg bg-indigo-500 text-white font-medium text-sm hover:bg-indigo-600 transition">{mode === 'login' ? '登录' : '注册'}</button>
+          <div ref={turnstileRef} className="mb-3 flex justify-center" />
+          <button type="submit" disabled={loading} className="w-full py-3 rounded-lg bg-indigo-500 text-white font-medium text-sm hover:bg-indigo-600 transition disabled:opacity-50">{loading ? '处理中...' : mode === 'login' ? '登录' : '注册'}</button>
         </form>
         <div className="text-center mt-4 text-gray-400 text-[13px]">
           {mode === 'login' ? <>还没有账号？ <a className="text-indigo-500 cursor-pointer font-medium" onClick={() => { setMode('register'); setError(''); }}>立即注册</a></>

@@ -11,7 +11,7 @@ import ClipboardShare from '../components/ClipboardShare';
 import DailyDigest from '../components/DailyDigest';
 import NewsQA from '../components/NewsQA';
 import Footer from '../components/Footer';
-import { useClipboardWS } from '../hooks/useClipboardWS';
+import { useClipboardWS, jwtUserId } from '../hooks/useClipboardWS';
 import { getDailyDigest, getDigestDates } from '../api/client';
 
 const CATEGORIES = [
@@ -292,6 +292,7 @@ export default function Home() {
       {showClipboard && token && <ClipboardShare
         visible={showClipboard}
         onClose={() => setShowClipboard(false)}
+        userId={jwtUserId(token)}
         text={clipboard.text}
         images={clipboard.images}
         connected={clipboard.connected}

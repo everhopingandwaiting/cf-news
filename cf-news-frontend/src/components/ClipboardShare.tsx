@@ -25,6 +25,7 @@ interface FileTransfer {
 interface Props {
     visible: boolean;
     onClose: () => void;
+    userId: string;
     text: string;
     images: { data: string; mime: string; sender?: string }[];
     connected: boolean;
@@ -44,8 +45,11 @@ interface Props {
 }
 
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
-const LS_HISTORY_KEY = 'cb_history';
 const MAX_HISTORY = 20;
+
+function historyKey(userId: string): string {
+    return userId ? `cb_history_${userId}` : 'cb_history';
+}
 
 function formatFileSize(bytes: number): string {
     if (bytes < 1024) return bytes + ' B';
@@ -54,20 +58,20 @@ function formatFileSize(bytes: number): string {
     return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
 }
 
-function loadHistory(): string[] {
-    try { const v = localStorage.getItem(LS_HISTORY_KEY); return v ? JSON.parse(v) : []; } catch { return []; }
+function loadHistory(userId: string): string[] {
+    try { const v = localStorage.getItem(historyKey(userId)); return v ? JSON.parse(v) : []; } catch { return []; }
 }
 
-function saveHistory(items: string[]) {
-    try { localStorage.setItem(LS_HISTORY_KEY, JSON.stringify(items.slice(0, MAX_HISTORY))); } catch {}
+function saveHistory(userId: string, items: string[]) {
+    try { localStorage.setItem(historyKey(userId), JSON.stringify(items.slice(0, MAX_HISTORY))); } catch {}
 }
 
-function appendHistory(text: string) {
+function appendHistory(userId: string, text: string) {
     if (!text.trim()) return;
-    const history = loadHistory();
+    const history = loadHistory(userId);
     const filtered = history.filter(h => h !== text);
     filtered.unshift(text);
-    saveHistory(filtered);
+    saveHistory(userId, filtered);
 }
 
 function compressImage(blob: Blob): Promise<Blob> {
@@ -94,7 +98,7 @@ function compressImage(blob: Blob): Promise<Blob> {
 }
 
 export default function ClipboardShare({
-    visible, onClose, text, images, connected, connecting, pendingCount, deviceName,
+    visible, onClose, userId, text, images, connected, connecting, pendingCount, deviceName,
     onSendText, onSendImage, onSyncClipboard, onClearImages,
     incomingOffers, fileTransfers, onSendFile, onAcceptFile, onRejectFile, onCancelFile,
 }: Props) {
@@ -176,7 +180,7 @@ const [expandedTimeId, setExpandedTimeId] = useState<string | null>(null);
     function handleSync() {
         if (text.trim()) {
             onSyncClipboard(text);
-            appendHistory(text);
+            appendHistory(userId, text);
             setStatus('✅ 已推送到其他设备剪贴板');
             setTimeout(() => setStatus(''), 2000);
         }
@@ -210,7 +214,7 @@ const [expandedTimeId, setExpandedTimeId] = useState<string | null>(null);
         if (fileTransferInputRef.current) fileTransferInputRef.current.value = '';
     }
 
-    const history = loadHistory();
+    const history = loadHistory(userId);
 
     return (
         <>
@@ -297,7 +301,7 @@ const [expandedTimeId, setExpandedTimeId] = useState<string | null>(null);
                                     <button
                                         key={i}
                                         className="w-full text-left px-3 py-2 text-[12px] text-gray-700 hover:bg-gray-50 border-b border-gray-100 last:border-b-0 truncate"
-                                        onClick={() => { onSendText(h); appendHistory(h); setShowHistory(false); }}
+                                        onClick={() => { onSendText(h); appendHistory(userId, h); setShowHistory(false); }}
                                     >
                                         {h}
                                     </button>

@@ -1,11 +1,28 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 
 const MAX_CACHED_IMAGES = 10;
-const LS_TEXT_KEY = 'cb_text';
-const LS_IMAGES_KEY = 'cb_images';
+const CHUNK_SIZE = 1024 * 1024; // 1MB per WS chunk
+
+export function jwtUserId(token: string): string {
+    try {
+        return JSON.parse(atob(token.split('.')[1])).sub || '';
+    } catch { return ''; }
+}
+
+function lsUserKeys(token: string) {
+    const uid = jwtUserId(token);
+    const suffix = uid ? `_${uid}` : '';
+    return {
+        text: `cb_text${suffix}`,
+        images: `cb_images${suffix}`,
+        deviceName: `cb_device_name${suffix}`,
+        deviceId: `cb_device_id${suffix}`,
+        history: `cb_history${suffix}`,
+    };
+}
+
 const LS_DEVICE_KEY = 'cb_device_name';
 const LS_DEVICE_ID_KEY = 'cb_device_id';
-const CHUNK_SIZE = 1024 * 1024; // 1MB per WS chunk
 
 function getDeviceId(): string {
     try {
@@ -88,8 +105,9 @@ function getDeviceName(): string {
 }
 
 export function useClipboardWS(token: string, panelOpen: boolean) {
-    const [text, setText] = useState(() => loadLS(LS_TEXT_KEY, ''));
-    const [images, setImages] = useState<{ data: string; mime: string; sender?: string }[]>(() => loadLS(LS_IMAGES_KEY, []));
+    const ukeys = useMemo(() => lsUserKeys(token), [token]);
+    const [text, setText] = useState(() => loadLS(ukeys.text, ''));
+    const [images, setImages] = useState<{ data: string; mime: string; sender?: string }[]>(() => loadLS(ukeys.images, []));
     const [connectionState, setConnectionState] = useState<'connected' | 'connecting' | 'disconnected'>('disconnected');
     const [hasNewData, setHasNewData] = useState(false);
     const [pendingCount, setPendingCount] = useState(0);
@@ -270,8 +288,8 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
         };
     }, [token, connect, clearReconnect, clearHeartbeat, clearDebounce]);
 
-    useEffect(() => { saveLS(LS_TEXT_KEY, text); }, [text]);
-    useEffect(() => { saveLS(LS_IMAGES_KEY, images.slice(-MAX_CACHED_IMAGES).map(({ sender, ...rest }) => rest)); }, [images]);
+    useEffect(() => { saveLS(ukeys.text, text); }, [text, ukeys.text]);
+    useEffect(() => { saveLS(ukeys.images, images.slice(-MAX_CACHED_IMAGES).map(({ sender, ...rest }) => rest)); }, [images, ukeys.images]);
     useEffect(() => { if (panelOpen) setHasNewData(false); }, [panelOpen]);
 
     const clearNewDataFlag = useCallback(() => { setHasNewData(false); }, []);
@@ -289,8 +307,8 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
     }, [safeSend]);
     const clearImages = useCallback(() => {
         setImages([]);
-        try { localStorage.removeItem(LS_IMAGES_KEY); } catch {}
-    }, []);
+        try { localStorage.removeItem(ukeys.images); } catch {}
+    }, [ukeys.images]);
 
     // WS chunked file send
     const sendFile = useCallback(async (file: File) => {
