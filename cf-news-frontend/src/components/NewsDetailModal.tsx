@@ -64,7 +64,6 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
   const [taking, setTaking] = useState(false);
   const [takeError, setTakeError] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [wechatCopied, setWechatCopied] = useState(false);
   const [currentItem, setCurrentItem] = useState<NewsItem | null>(null);
   const [translating, setTranslating] = useState(false);
   const [translated, setTranslated] = useState<{ title?: string; description?: string } | null>(null);
@@ -239,13 +238,11 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
                 <a href={`https://t.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(currentItem!.title)}`} target="_blank" rel="noopener noreferrer" className="block px-4 py-2 text-[13px] text-gray-700 hover:bg-gray-50" onClick={() => setShowShare(false)}>✈ Telegram</a>
                 <a href={`https://wa.me/?text=${encodeURIComponent(currentItem!.title + ' ' + shareUrl)}`} target="_blank" rel="noopener noreferrer" className="block px-4 py-2 text-[13px] text-gray-700 hover:bg-gray-50" onClick={() => setShowShare(false)}>💬 WhatsApp</a>
                 <button onClick={() => { copyLink(); setShowShare(false); }} className="block w-full text-left px-4 py-2 text-[13px] text-gray-700 hover:bg-gray-50">🔗 复制链接</button>
-                <button onClick={() => { navigator.clipboard.writeText(shareUrl); setWechatCopied(true); setTimeout(() => setWechatCopied(false), 2500); setShowShare(false); }} className="block w-full text-left px-4 py-2 text-[13px] text-gray-700 hover:bg-gray-50">💚 微信</button>
               </div>
             )}
           </div>
           <button className="px-5 py-2.5 rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 transition" onClick={onClose}>关闭</button>
         </div>
-        {wechatCopied && <div className="mt-3 text-center text-[12px] text-emerald-600 bg-emerald-50 px-4 py-2 rounded-lg">✓ 已复制链接，打开微信粘贴分享给好友</div>}
       </div>
     </div>
   );
