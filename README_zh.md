@@ -31,6 +31,8 @@
 - **相关推荐** — 标题关键词匹配，点击一键跳转
 - **用户系统** — 注册、登录、JWT 认证
 - **收藏与历史** — 收藏文章、记录阅读历史
+- **评论系统** — WebSocket 实时评论，支持多设备同步
+- **源管理** — 后台管理面板，增删改排 RSS 源
 - **邮件摘要** — 订阅每日新闻邮件
 - **自动更新** — Cron Triggers 每小时抓取新文章
 - **响应式界面** — React 19 + Tailwind 4，适配桌面和移动端
@@ -228,18 +230,23 @@ cf-news/
 | GET | `/api/news` | 获取新闻列表（分页、可筛选） |
 | GET | `/api/news/:id` | 获取新闻详情 |
 | GET | `/api/news/sources/list` | 获取 RSS 源列表 |
+| GET | `/api/comments/:newsId` | 获取新闻评论 |
 | POST | `/api/auth/register` | 用户注册 |
 | POST | `/api/auth/login` | 用户登录 |
 | GET | `/api/ai/digest` | 获取今日要闻 |
 | GET | `/api/ai/digest?date=YYYY-MM-DD` | 获取指定日期要闻 |
 | GET | `/api/ai/digest/dates` | 列出有要闻的日期 |
 | GET | `/api/ai/related/:id` | 获取相关文章 |
+| GET | `/api/health` | 健康检查 |
+| GET | `/api/image?url=` | 图片代理（CF 边缘缓存） |
 
 ### 认证接口（需要 Bearer Token）
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/auth/me` | 获取当前用户信息 |
+| POST | `/api/comments/:newsId` | 发表评论 |
+| DELETE | `/api/comments/:commentId` | 删除自己的评论 |
 | GET | `/api/user/favorites` | 获取收藏列表 |
 | POST | `/api/user/favorites/:id` | 添加收藏 |
 | DELETE | `/api/user/favorites/:id` | 取消收藏 |
@@ -247,6 +254,18 @@ cf-news/
 | POST | `/api/user/history/:id` | 标记已读 |
 | POST | `/api/ai/ask` | AI 问答（支持流式响应） |
 | POST | `/api/ai/digest/generate` | 强制重新生成要闻（管理） |
+
+### 管理接口（需要 Bearer Token，管理员）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/admin/sources` | 获取所有 RSS 源（含统计） |
+| POST | `/api/admin/sources` | 添加 RSS 源 |
+| PUT | `/api/admin/sources/:id` | 更新 RSS 源 |
+| DELETE | `/api/admin/sources/:id` | 删除 RSS 源 |
+| POST | `/api/admin/sources/reorder` | 排序 RSS 源 |
+| POST | `/api/admin/sources/refresh/:id` | 强制刷新某源 |
+| GET | `/api/admin/stats` | 源统计信息 |
 
 ## 添加 RSS 源
 

@@ -39,6 +39,8 @@ AI-generated summary of today's top news, sorted by time with language markers (
 - **Related articles** — Keyword-matched related articles with one-click navigation
 - **User system** — Registration, login, JWT authentication
 - **Favorites & history** — Bookmark articles, track read history
+- **Comments** — Real-time WebSocket comments on news articles
+- **Source manager** — Admin panel to add, edit, delete, and reorder RSS sources
 - **Email digest** — Subscribe to daily news summaries
 - **Auto-update** — Cron triggers fetch new articles every hour
 - **Responsive UI** — React 19 + Tailwind 4, works on desktop and mobile
@@ -237,25 +239,42 @@ cf-news/
 | GET | `/api/news` | List news (paginated, filterable) |
 | GET | `/api/news/:id` | Get news detail |
 | GET | `/api/news/sources/list` | List RSS sources |
+| GET | `/api/comments/:newsId` | Get comments for a news item |
 | POST | `/api/auth/register` | Register |
 | POST | `/api/auth/login` | Login |
 | GET | `/api/ai/digest` | Get today's daily digest |
 | GET | `/api/ai/digest?date=YYYY-MM-DD` | Get digest for a specific date |
 | GET | `/api/ai/digest/dates` | List available digest dates |
 | GET | `/api/ai/related/:id` | Get related articles |
+| GET | `/api/health` | Health check |
+| GET | `/api/image?url=` | Image proxy via CF edge cache |
 
 ### Authenticated (Bearer token)
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/auth/me` | Current user info |
+| POST | `/api/comments/:newsId` | Post a comment |
+| DELETE | `/api/comments/:commentId` | Delete own comment |
 | GET | `/api/user/favorites` | List favorites |
 | POST | `/api/user/favorites/:id` | Add favorite |
 | DELETE | `/api/user/favorites/:id` | Remove favorite |
 | GET | `/api/user/history` | Read history |
 | POST | `/api/user/history/:id` | Mark as read |
 | POST | `/api/ai/ask` | Ask a question about news (supports streaming) |
-| POST | `/api/ai/digest/generate` | Force regenerate digest (admin only)
+| POST | `/api/ai/digest/generate` | Force regenerate digest (admin only) |
+
+### Admin (Bearer token, admin user only)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/admin/sources` | List all RSS sources (with stats) |
+| POST | `/api/admin/sources` | Add a new RSS source |
+| PUT | `/api/admin/sources/:id` | Update an RSS source |
+| DELETE | `/api/admin/sources/:id` | Delete an RSS source |
+| POST | `/api/admin/sources/reorder` | Reorder sources |
+| POST | `/api/admin/sources/refresh/:id` | Force refresh a source |
+| GET | `/api/admin/stats` | Source statistics |
 
 ## Adding RSS Sources
 
