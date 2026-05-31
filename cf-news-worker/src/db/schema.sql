@@ -177,6 +177,10 @@ VALUES ('澎湃新闻', 'https://www.thepaper.cn', 'https://decemberpei.cyou/rss
 INSERT OR IGNORE INTO news_sources (name, url, feed_url, category, language, source_type, sort_order)
 VALUES ('知乎热榜', 'https://www.zhihu.com', 'https://decemberpei.cyou/rssbox/zhihu.xml', 'news', 'zh', 'rss', 60);
 
+-- 人民日报（微信公众号版，通过第三方 RSS 桥）
+INSERT OR IGNORE INTO news_sources (name, url, feed_url, category, language, source_type, sort_order)
+VALUES ('人民日报', 'https://www.people.com.cn', 'https://decemberpei.cyou/rssbox/wechat-renminribao.xml', 'news', 'zh', 'rss', 55);
+
 -- Provider 模型评分表
 CREATE TABLE IF NOT EXISTS provider_models (
     provider TEXT NOT NULL,
