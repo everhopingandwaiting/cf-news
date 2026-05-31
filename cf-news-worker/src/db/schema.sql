@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS news_sources (
     feed_url TEXT NOT NULL,
     category TEXT DEFAULT 'news',
     language TEXT DEFAULT 'zh',
+    source_type TEXT DEFAULT 'rss',
     enabled INTEGER DEFAULT 1,
     sort_order INTEGER DEFAULT 99,
     last_fetched_at TEXT,
@@ -164,6 +165,13 @@ CREATE TABLE IF NOT EXISTS app_config (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- 为已有表添加 source_type 列（幂等）
+ALTER TABLE news_sources ADD COLUMN source_type TEXT DEFAULT 'rss';
+
+-- 澎湃新闻（页面抓取，无 RSS）
+INSERT OR IGNORE INTO news_sources (name, url, feed_url, category, language, source_type, sort_order)
+VALUES ('澎湃新闻', 'https://www.thepaper.cn', 'https://m.thepaper.cn/', 'news', 'zh', 'scrape', 50);
 
 -- Provider 模型评分表
 CREATE TABLE IF NOT EXISTS provider_models (

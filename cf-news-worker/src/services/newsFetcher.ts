@@ -4,6 +4,7 @@ import { indexNewsItem } from './tokenizer';
 import { checkDuplicate, storeDedupHash } from './dedup';
 import { uploadNewsItem } from './aiSearch';
 import { fetchWithBrowser, needsBrowser } from './browserFetcher';
+import { getScraper } from './scraper';
 
 interface RSSItem {
     title: string;
@@ -138,6 +139,24 @@ function determineCategory(source: NewsSource, title: string, description?: stri
 // Fetch a single RSS feed
 async function fetchFeed(env: Bindings, source: NewsSource): Promise<RSSItem[]> {
     try {
+        // Scrape-type sources use browser rendering + HTML parsing
+        if (source.source_type === 'scrape') {
+            console.log(`Scraping ${source.name} via browser...`);
+            const scraper = getScraper(source.feed_url);
+            if (!scraper) {
+                console.error(`No scraper available for ${source.name}`);
+                return [];
+            }
+            const scraped = await scraper(env);
+            return scraped.map(item => ({
+                title: item.title,
+                link: item.link,
+                description: item.description,
+                pubDate: item.pubDate,
+            }));
+        }
+
+        // RSS/Atom sources proceed as before
         let xml: string | null = null;
 
         // Use Browser Rendering for JS-heavy sources

@@ -43,6 +43,7 @@ export interface NewsSource {
     feed_url: string;
     category: string;
     language: string;
+    source_type: string;
     enabled: number;
     sort_order?: number;
     last_fetched_at?: string;
