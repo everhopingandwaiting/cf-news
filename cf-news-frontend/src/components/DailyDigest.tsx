@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
 import type { DailyDigest as DailyDigestType } from '../types';
 
+const COPY_MAX_LEN = 3000;
+
 interface Props {
   digest: DailyDigestType | null;
   loading: boolean;
@@ -33,7 +35,15 @@ export default function DailyDigest({ digest, loading, collapsed, regenerating, 
   async function handleCopy() {
     if (!digest) return;
     try {
-      await navigator.clipboard.writeText(`今日要闻 ${digest.date}\n\n${digest.content}`);
+      let content = digest.content;
+      const truncated = content.length > COPY_MAX_LEN;
+      if (truncated) {
+        content = content.slice(0, content.lastIndexOf('\n', COPY_MAX_LEN));
+      }
+      const footer = truncated
+        ? `\n\n…… 内容较长已截断，查看完整全文请访问:\n📡 ${location.origin}`
+        : `\n\n——\n📡 CF News: ${location.origin}`;
+      await navigator.clipboard.writeText(`📰 今日要闻 ${digest.date}\n\n${content}${footer}`);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {}
