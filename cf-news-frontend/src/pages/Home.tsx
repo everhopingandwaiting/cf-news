@@ -52,6 +52,7 @@ export default function Home() {
   const [digestRegenerating, setDigestRegenerating] = useState(false);
   const [digestDates, setDigestDates] = useState<string[]>([]);
   const [showQA, setShowQA] = useState(false);
+  const [loginToast, setLoginToast] = useState<string | null>(null);
   const latestIdRef = useRef(0);
   const cooldownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const clipboard = useClipboardWS(token || '', showClipboard);
@@ -269,7 +270,14 @@ export default function Home() {
         onLangChange={v => { setLang(v); setPage(1); }}
         onSourceChange={id => { setSourceId(id); setPage(1); }}
         showManager={showManager} onManageSources={() => setShowManager(!showManager)}
-        showClipboard={showClipboard} onToggleClipboard={() => setShowClipboard(!showClipboard)}
+        showClipboard={showClipboard} onToggleClipboard={() => {
+          if (!token) {
+            setLoginToast('请先登录以使用共享粘贴板');
+            setTimeout(() => setLoginToast(null), 2500);
+            return;
+          }
+          setShowClipboard(!showClipboard);
+        }}
         clipboardHasNew={clipboard.hasNewData}
         onClearClipboardFlag={clipboard.clearNewDataFlag}
       />
@@ -317,6 +325,9 @@ export default function Home() {
       <NewsDetailModal item={selectedNews} token={token} onClose={closeNews} onOpenUrl={url => window.open(url, '_blank')} onSummaryGenerated={() => { loadNews(); }} />
       <Footer />
       {toast && <div className={`fixed bottom-5 right-5 px-5 py-3 rounded-lg text-[13px] shadow-lg z-50 animate-[slideIn_0.2s_ease] ${toast.type === 'success' ? 'bg-white border border-emerald-500 text-gray-900' : 'bg-white border border-red-500 text-gray-900'}`}>{toast.msg}</div>}
+      {loginToast && <div className="fixed top-4 right-4 px-4 py-2.5 rounded-lg text-[13px] shadow-lg z-50 animate-[slideIn_0.2s_ease] bg-white border border-amber-400 text-amber-700 flex items-center gap-2">
+        <span>📋</span> {loginToast}
+      </div>}
     </div>
   );
 }

@@ -7,9 +7,14 @@ interface ClipboardMessage {
     sender?: string;
 }
 
+interface ConnInfo {
+    userId: number;
+    deviceId: string;
+}
+
 // Durable Object for real-time clipboard sharing between same-user sessions
 export class ClipboardRoom {
-    private connections: Map<WebSocket, number> = new Map();
+    private connections: Map<WebSocket, ConnInfo> = new Map();
     private storage: DurableObjectStorage;
 
     constructor(state: DurableObjectState, env: any) {
@@ -19,14 +24,15 @@ export class ClipboardRoom {
     async fetch(request: Request): Promise<Response> {
         const url = new URL(request.url);
         const userId = parseInt(url.searchParams.get('uid') || '0');
+        const deviceId = url.searchParams.get('device_id') || '';
         if (!userId) return new Response('Unauthorized', { status: 401 });
 
         const pair = new WebSocketPair();
         const [client, server] = Object.values(pair);
 
         server.accept();
-        this.connections.set(server, userId);
-        console.log(`Clipboard: user ${userId} connected (${this.connectionCount(userId)} active)`);
+        this.connections.set(server, { userId, deviceId });
+        console.log(`Clipboard: user ${userId} device ${deviceId} connected (${this.connectionCount(userId)} active)`);
 
         // Deliver pending sync_clipboard messages to newly connecting clients
         this.deliverPendingSync(server, userId);
@@ -34,11 +40,13 @@ export class ClipboardRoom {
         server.addEventListener('message', (event) => {
             try {
                 const msg: ClipboardMessage = JSON.parse(event.data as string);
+                const info = this.connections.get(server);
+                if (!info) return;
                 if (msg.type === 'sync_clipboard') {
                     this.storage.put(`sync:${userId}`, event.data as string).catch(() => {});
                 }
                 if (msg.type && msg.type !== 'heartbeat') {
-                    this.broadcast(userId, server, msg);
+                    this.broadcast(server, info, msg);
                 }
             } catch (e) {
                 console.error('Clipboard: invalid message', e);
@@ -48,7 +56,7 @@ export class ClipboardRoom {
         server.addEventListener('close', () => {
             this.connections.delete(server);
             const remaining = this.connectionCount(userId);
-            console.log(`Clipboard: user ${userId} disconnected (${remaining} remaining)`);
+            console.log(`Clipboard: user ${userId} device ${deviceId} disconnected (${remaining} remaining)`);
             // If no more connections for this user, clear pending sync
             if (remaining === 0) {
                 this.storage.delete(`sync:${userId}`).catch(() => {});
@@ -70,10 +78,10 @@ export class ClipboardRoom {
         }
     }
 
-    private broadcast(senderUserId: number, senderWs: WebSocket, msg: ClipboardMessage) {
+    private broadcast(senderWs: WebSocket, senderInfo: ConnInfo, msg: ClipboardMessage) {
         const raw = JSON.stringify(msg);
-        for (const [ws, uid] of this.connections) {
-            if (uid === senderUserId && ws !== senderWs && ws.readyState === WebSocket.OPEN) {
+        for (const [ws, info] of this.connections) {
+            if (info.userId === senderInfo.userId && ws !== senderWs && info.deviceId !== senderInfo.deviceId && ws.readyState === WebSocket.OPEN) {
                 try { ws.send(raw); } catch {}
             }
         }
@@ -81,8 +89,8 @@ export class ClipboardRoom {
 
     private connectionCount(userId: number): number {
         let count = 0;
-        for (const [, uid] of this.connections) {
-            if (uid === userId) count++;
+        for (const [, info] of this.connections) {
+            if (info.userId === userId) count++;
         }
         return count;
     }

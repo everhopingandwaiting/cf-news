@@ -4,6 +4,17 @@ const MAX_CACHED_IMAGES = 10;
 const LS_TEXT_KEY = 'cb_text';
 const LS_IMAGES_KEY = 'cb_images';
 const LS_DEVICE_KEY = 'cb_device_name';
+const LS_DEVICE_ID_KEY = 'cb_device_id';
+
+function getDeviceId(): string {
+    try {
+        const stored = localStorage.getItem(LS_DEVICE_ID_KEY);
+        if (stored) return stored;
+    } catch {}
+    const id = crypto.randomUUID();
+    try { localStorage.setItem(LS_DEVICE_ID_KEY, id); } catch {}
+    return id;
+}
 
 const BACKOFF_BASE = 1000;
 const BACKOFF_MAX = 30000;
@@ -63,6 +74,7 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
     const backoffRef = useRef(0);
     const queueRef = useRef<ClipboardMsg[]>([]);
     const deviceNameRef = useRef(getDeviceName());
+    const deviceIdRef = useRef(getDeviceId());
     const [deviceName] = useState(deviceNameRef.current);
 
     const clearHeartbeat = useCallback(() => {
@@ -119,7 +131,7 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
         clearHeartbeat();
 
         setConnectionState('connecting');
-        const wsUrl = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/clipboard/ws?token=${encodeURIComponent(token)}`;
+        const wsUrl = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/clipboard/ws?token=${encodeURIComponent(token)}&device_id=${encodeURIComponent(deviceIdRef.current)}`;
         const ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {

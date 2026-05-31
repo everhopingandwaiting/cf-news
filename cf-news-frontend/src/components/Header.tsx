@@ -70,6 +70,11 @@ export default function Header({ user, refreshing, cooldown, search, lang, sourc
             onClick={onRefresh} disabled={disabled} title={btnText}>
             {btnText}
           </button>
+          <button
+            className="relative w-8 h-8 rounded-lg text-[13px] font-medium transition inline-flex items-center justify-center hover:bg-gray-100 text-gray-500"
+            onClick={onToggleClipboard} title="共享粘贴板">
+            📋{clipboardHasNew && <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white" />}
+          </button>
           {user ? (
             <div className="relative" ref={menuRef}>
               <button
