@@ -33,6 +33,11 @@ async function searchNewsFTS(env: Bindings, query: string): Promise<number[] | n
 }
 
 news.get('/', async (c) => {
+    const cacheKey = new Request(c.req.url, { headers: { 'Accept': 'application/json' } });
+    const cache = caches.default;
+    const cached = await cache.match(cacheKey);
+    if (cached) return cached;
+
     const page = parseInt(c.req.query('page') || '1');
     const limit = parseInt(c.req.query('limit') || '20');
     const category = c.req.query('category');
@@ -114,7 +119,12 @@ news.get('/', async (c) => {
             pagination: { page, limit, total, totalPages, hasMore: page < totalPages },
         };
 
-        return c.json(result);
+        const response = c.json(result);
+        if (!search) {
+            response.headers.set('Cache-Control', 'public, s-maxage=60');
+            c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+        }
+        return response;
     } catch (error) {
         console.error('Error fetching news:', error);
         return c.json({ error: '获取新闻失败' }, 500);

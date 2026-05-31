@@ -47,13 +47,13 @@ export async function deleteComment(commentId: number): Promise<void> {
   await api.delete(`/api/comments/${commentId}`);
 }
 
-export async function login(email: string, password: string): Promise<{ token: string; user: User }> {
-  const { data } = await api.post('/api/auth/login', { email, password });
+export async function login(email: string, password: string, turnstileToken?: string): Promise<{ token: string; user: User }> {
+  const { data } = await api.post('/api/auth/login', { email, password, turnstileToken });
   return data;
 }
 
-export async function register(username: string, email: string, password: string): Promise<void> {
-  await api.post('/api/auth/register', { username, email, password });
+export async function register(username: string, email: string, password: string, turnstileToken?: string): Promise<void> {
+  await api.post('/api/auth/register', { username, email, password, turnstileToken });
 }
 
 export async function getMe(): Promise<User> {

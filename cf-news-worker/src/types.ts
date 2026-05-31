@@ -16,6 +16,8 @@ export interface Bindings {
     NEWS_QUEUE: Queue<NewsQueueMessage>;
     GLOBAL_RATE_LIMITER: RateLimit;
     AI_SEARCH?: Fetcher;
+    TURNSTILE_SECRET: string;
+    TURNSTILE_SITE_KEY: string;
 }
 
 export interface NewsQueueMessage {

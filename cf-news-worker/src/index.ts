@@ -119,6 +119,12 @@ app.get('/api/health', (c) => {
     return c.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+app.get('/api/config', (c) => {
+    return c.json({
+        turnstileSiteKey: c.env.TURNSTILE_SITE_KEY || '',
+    });
+});
+
 app.post('/api/fetch', async (c) => {
     const row = await c.env.DB.prepare("SELECT value FROM app_config WHERE key = 'last_fetch_time'").first<{ value: string }>();
     const lastFetch = row?.value;

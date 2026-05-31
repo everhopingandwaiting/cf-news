@@ -141,6 +141,7 @@ Category:`;
             prompt,
             max_tokens: 8,
             temperature: 0.1,
+            gateway: { id: 'default', cacheTtl: 86400, skipCache: false },
         }) as { response: string };
 
         const cat = (result.response || '').trim().toLowerCase();

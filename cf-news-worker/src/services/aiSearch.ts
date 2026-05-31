@@ -152,6 +152,7 @@ export async function askQuestion(
             { role: 'system', content: '你是一个新闻助手。回答简洁清晰，用中文。' },
             { role: 'user', content: prompt },
         ],
+        gateway: { id: 'default', cacheTtl: 86400, skipCache: false },
     });
 
     return {

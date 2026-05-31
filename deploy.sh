@@ -42,7 +42,7 @@ docker run --rm --env-file .env cf-news-worker npx wrangler deploy 2>&1 | tail -
 
 # 6. Push secrets to Cloudflare (idempotent, updates if changed)
 echo "==> Updating secrets..."
-for key in JWT_SECRET OPENROUTER_API_KEY NVIDIA_API_KEY MANGO_API_KEY; do
+for key in JWT_SECRET OPENROUTER_API_KEY NVIDIA_API_KEY MANGO_API_KEY TURNSTILE_SECRET; do
   value=$(grep "^${key}=" .env | cut -d= -f2-)
   if [ -n "$value" ]; then
     echo "$value" | docker run --rm -i --env-file .env cf-news-worker npx wrangler secret put "$key" 2>&1 | tail -1

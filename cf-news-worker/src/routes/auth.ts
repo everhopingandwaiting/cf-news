@@ -76,7 +76,20 @@ async function verifyJWT(token: string, secret: string): Promise<JWTPayload | nu
 
 // Register
 auth.post('/register', async (c) => {
-    const { email, password, username } = await c.req.json();
+    const { email, password, username, turnstileToken } = await c.req.json();
+
+    // Verify Turnstile
+    if (turnstileToken) {
+        const verify = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+            method: 'POST',
+            body: `secret=${c.env.TURNSTILE_SECRET}&response=${turnstileToken}`,
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        });
+        const outcome = await verify.json<any>();
+        if (!outcome.success) {
+            return c.json({ error: '验证失败，请重试' }, 403);
+        }
+    }
 
     if (!email || !password) {
         return c.json({ error: '邮箱和密码必填' }, 400);
@@ -121,7 +134,20 @@ const LOGIN_LOCK_TTL = 900; // 15 minutes
 
 // Login
 auth.post('/login', async (c) => {
-    const { email, password } = await c.req.json();
+    const { email, password, turnstileToken } = await c.req.json();
+
+    // Verify Turnstile
+    if (turnstileToken) {
+        const verify = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+            method: 'POST',
+            body: `secret=${c.env.TURNSTILE_SECRET}&response=${turnstileToken}`,
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        });
+        const outcome = await verify.json<any>();
+        if (!outcome.success) {
+            return c.json({ error: '验证失败，请重试' }, 403);
+        }
+    }
 
     if (!email || !password) {
         return c.json({ error: '邮箱和密码必填' }, 400);
