@@ -102,10 +102,38 @@ export async function askQuestion(
             ai_search_options: searchOptions,
         });
 
-        return {
-            answer: response.choices?.[0]?.message?.content || '无法生成回答',
-            chunks: response.chunks || [],
-        };
+        const answer = response.choices?.[0]?.message?.content || '';
+        const chunks = response.chunks || [];
+
+        if (!chunks || chunks.length === 0) {
+            // AI Search found no relevant content - fall back to D1 recent news
+            const recentNews = await env.DB.prepare(
+                `SELECT n.title, n.description, COALESCE(s.language, 'zh') as lang
+                 FROM news_items n
+                 LEFT JOIN news_sources s ON n.source_id = s.id
+                 WHERE n.is_deleted = 0 ORDER BY n.published_at DESC LIMIT 20`
+            ).all<{ title: string; description: string; lang: string }>();
+
+            if (recentNews.results.length > 0) {
+                const context = recentNews.results
+                    .map(n => `[${n.lang === 'zh' ? 'CN' : 'EN'}] ${n.title}\n${(n.description || '').substring(0, 200)}`)
+                    .join('\n---\n');
+
+                const fallbackResponse = await instance.chatCompletions({
+                    messages: [
+                        { role: 'system', content: '你是一个新闻助手。根据提供的新闻内容回答用户问题。回答简洁清晰，用中文。如果内容不足以回答问题，请如实说明。' },
+                        { role: 'user', content: `以下是最近的新闻:\n${context}\n\n用户问题: ${question}` },
+                    ],
+                    model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+                });
+                return {
+                    answer: fallbackResponse.choices?.[0]?.message?.content || '无法生成回答',
+                    chunks: [],
+                };
+            }
+        }
+
+        return { answer, chunks };
     }
 
     // Fallback: use Workers AI directly with recent news as context
@@ -216,7 +244,6 @@ export async function generateDailyDigest(env: Bindings): Promise<DigestResult |
         try {
             const d = new Date(published_at);
             if (isNaN(d.getTime())) return '';
-            // 转 Asia/Shanghai
             const opts = { timeZone: 'Asia/Shanghai', hour: '2-digit' as const, minute: '2-digit' as const, hour12: false };
             const parts = new Intl.DateTimeFormat('en-CA', opts).formatToParts(d);
             const h = parts.find(p => p.type === 'hour')!.value;
@@ -224,13 +251,15 @@ export async function generateDailyDigest(env: Bindings): Promise<DigestResult |
             return `${h}:${m}`;
         } catch { return ''; }
     }
+    function langTag(lang: string): string { return lang === 'zh' ? 'CN' : 'EN'; }
+
     const newsText = news.results
-        .map(n => `时间: ${fmtTime(n.published_at)}\t语言: ${n.lang === 'zh' ? 'CN' : 'EN'}\n标题: ${n.title}\n内容: ${(n.description || '').substring(0, 300)}`)
+        .map(n => `时间: ${fmtTime(n.published_at)}\t语言: ${langTag(n.lang)}\n标题: ${n.title}\n内容: ${(n.description || '').substring(0, 300)}`)
         .join('\n---\n');
 
     const instance = getSearchInstance(env);
 
-    let content: string;
+    let summary: string;
 
     if (instance) {
         try {
@@ -238,39 +267,41 @@ export async function generateDailyDigest(env: Bindings): Promise<DigestResult |
                 messages: [
                     {
                         role: 'system',
-                        content: '你是新闻编辑。将以下今日新闻整理成一份简洁的"今日要闻"摘要。用中文，按时间顺序，用数字序号（1. 2. 3. ...）列出每条新闻，每点1-2句话。每条末尾标注语言 [CN]/[EN] 和时间（HH:MM）。格式: 1. **标题** [CN/EN] HH:MM\n要点说明',
+                        content: '你是新闻编辑。为每条新闻生成一句简洁的中文摘要（20字以内）。直接返回摘要文本，每行一条，不要序号和标题。',
                     },
-                    { role: 'user', content: `以下是今日新闻:\n${newsText}` },
+                    { role: 'user', content: `为以下每条新闻生成一句摘要:\n${newsText}` },
                 ],
                 model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
             });
-
-            content = response.choices?.[0]?.message?.content || '';
+            summary = response.choices?.[0]?.message?.content || '';
         } catch {
-            content = '';
+            summary = '';
         }
     } else {
-        // Fallback: use Workers AI
         try {
             const aiResponse = await env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', {
                 messages: [
                     {
                         role: 'system',
-                        content: '你是新闻编辑。将以下今日新闻整理成一份简洁的"今日要闻"摘要。用中文，按时间顺序，用数字序号（1. 2. 3. ...）列出每条新闻，每点1-2句话。每条末尾标注语言 [CN]/[EN] 和时间（HH:MM）。',
+                        content: '你是新闻编辑。为每条新闻生成一句简洁的中文摘要（20字以内）。直接返回摘要文本，每行一条，不要序号和标题。',
                     },
-                    { role: 'user', content: `今日新闻:\n${newsText}` },
+                    { role: 'user', content: `为以下每条新闻生成一句摘要:\n${newsText}` },
                 ],
             });
-            content = (aiResponse as any).response || '';
+            summary = (aiResponse as any).response || '';
         } catch {
-            content = '';
+            summary = '';
         }
     }
 
-    if (!content) {
-        // Last resort: simple numbered list
-        content = news.results.map((n, i) => `${i + 1}. ${n.title}`).join('\n');
-    }
+    // Build content server-side with guaranteed times
+    const summaryLines = summary ? summary.trim().split('\n').filter((l: string) => l.trim()) : [];
+    const content = news.results.map((n, i) => {
+        const t = fmtTime(n.published_at);
+        const lang = langTag(n.lang);
+        const desc = summaryLines[i]?.trim() || n.title;
+        return `${i + 1}. **${n.title}** [${lang}]${t ? ' ' + t : ''}\n${desc}`;
+    }).join('\n\n');
 
     // Save to D1
     await env.DB.prepare(

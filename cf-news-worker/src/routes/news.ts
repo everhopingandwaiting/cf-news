@@ -4,22 +4,9 @@ import { generatePerspectives } from '../services/summarizer';
 
 const news = new Hono<{ Bindings: Bindings }>();
 
-const SEARCH_CACHE_PREFIX = 'search_cache:';
-const SEARCH_CACHE_TTL = 300; // 5 minutes
-
 async function searchNewsFTS(env: Bindings, query: string): Promise<number[] | null> {
     const normalized = query.toLowerCase().trim();
     if (!normalized) return null;
-
-    // Try KV hot cache first
-    const cacheKey = SEARCH_CACHE_PREFIX + normalized;
-    try {
-        const cached = await env.KV.get(cacheKey);
-        if (cached) {
-            const ids = JSON.parse(cached);
-            if (Array.isArray(ids)) return ids;
-        }
-    } catch {}
 
     // Sanitize FTS5 query — strip special chars, keep alphanumeric, CJK, spaces, hyphens
     const sanitized = normalized.replace(/[^\w\u4e00-\u9fff\s-]/g, ' ').trim();
@@ -35,13 +22,7 @@ async function searchNewsFTS(env: Bindings, query: string): Promise<number[] | n
         ids = result.results.map(r => r.rowid);
     } catch (e) {
         console.error('FTS5 search error:', e);
-        // Fallback: LIKE search
         return null;
-    }
-
-    // Cache results in KV (only non-empty, with short TTL)
-    if (ids.length > 0) {
-        env.KV.put(cacheKey, JSON.stringify(ids), { expirationTtl: SEARCH_CACHE_TTL }).catch(() => {});
     }
 
     return ids.length > 0 ? ids : null;

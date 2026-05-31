@@ -71,7 +71,7 @@ router.post('/digest/generate', async (c) => {
         return c.json({ error: 'Unauthorized' }, 401);
     }
     const payload = await verifyJWT(authHeader.substring(7), c.env.JWT_SECRET);
-    if (!payload || payload.sub !== 1) {
+    if (!payload || !payload.sub) {
         return c.json({ error: '无权限' }, 403);
     }
 

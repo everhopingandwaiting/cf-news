@@ -119,7 +119,8 @@ app.get('/api/health', (c) => {
 });
 
 app.post('/api/fetch', async (c) => {
-    const lastFetch = await c.env.KV.get('last_fetch_time');
+    const row = await c.env.DB.prepare("SELECT value FROM app_config WHERE key = 'last_fetch_time'").first<{ value: string }>();
+    const lastFetch = row?.value;
     const now = Date.now();
     if (lastFetch && (now - parseInt(lastFetch)) < 300000) {
         const remaining = Math.ceil((300000 - (now - parseInt(lastFetch))) / 1000);
@@ -127,7 +128,7 @@ app.post('/api/fetch', async (c) => {
     }
     try {
         await fetchNews(c.env, true);
-        await c.env.KV.put('last_fetch_time', String(now));
+        await c.env.DB.prepare("INSERT OR REPLACE INTO app_config (key, value) VALUES ('last_fetch_time', ?)").bind(String(now)).run();
         return c.json({ success: true, message: 'News fetch triggered' });
     } catch (error) {
         return c.json({ success: false, error: String(error) }, 500);

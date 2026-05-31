@@ -23,14 +23,10 @@ async function logAICall(env: Bindings, data: {
 
 // ========== 配置管理 ==========
 
-const CFG_CACHE_PREFIX = 'cfg_';
-
 async function getConfig(env: Bindings, key: string): Promise<string | null> {
-    const cached = await env.KV.get(CFG_CACHE_PREFIX + key);
-    if (cached) return cached;
     try {
         const row = await env.DB.prepare('SELECT value FROM app_config WHERE key = ?').bind(key).first<{ value: string }>();
-        if (row) { env.KV.put(CFG_CACHE_PREFIX + key, row.value, { expirationTtl: 300 }).catch(() => {}); return row.value; }
+        return row?.value || null;
     } catch {}
     return null;
 }
@@ -89,8 +85,8 @@ async function getProviderOrder(env: Bindings): Promise<string[]> {
 
 async function getFailed(env: Bindings): Promise<string[]> {
     try {
-        const raw = await env.KV.get('ai_failed_models');
-        return raw ? JSON.parse(raw) : [];
+        const row = await env.DB.prepare("SELECT value FROM app_config WHERE key = 'ai_failed_models'").first<{ value: string }>();
+        return row ? JSON.parse(row.value) : [];
     } catch { return []; }
 }
 
@@ -100,7 +96,7 @@ async function markFailed(env: Bindings, model: string, provider: string): Promi
     const failed = await getFailed(env);
     if (!failed.includes(model)) {
         failed.push(model);
-        env.KV.put('ai_failed_models', JSON.stringify(failed), { expirationTtl: ttl }).catch(() => {});
+        await env.DB.prepare("INSERT OR REPLACE INTO app_config (key, value) VALUES ('ai_failed_models', ?)").bind(JSON.stringify(failed)).run();
     }
 }
 
