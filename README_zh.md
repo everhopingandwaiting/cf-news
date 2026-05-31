@@ -35,6 +35,10 @@
 - **源管理** — 后台管理面板，增删改排 RSS 源
 - **邮件摘要** — 订阅每日新闻邮件
 - **自动更新** — Cron Triggers 每小时抓取新文章
+- **语音播报** — 浏览器原生 SpeechSynthesis，免费离线
+- **AI 分类** — LLaMA 按内容准确分类，不依赖 RSS 源
+- **机器人防护** — Turnstile 验证码保护注册/登录
+- **边缘缓存** — 新闻列表 CF 边缘缓存（60s），响应更快
 - **响应式界面** — React 19 + Tailwind 4，适配桌面和移动端
 
 ## 技术栈
@@ -49,6 +53,9 @@
 | 搜索 | D1 FTS5 全文搜索 |
 | AI 聊天 | Workers AI (LLaMA 3.3 70B) |
 | AI 搜索 | Cloudflare AI Search（语义+关键词） |
+| AI 缓存 | AI Gateway（分类和问答结果缓存） |
+| 机器人防护 | Turnstile（免费无感验证码） |
+| 边缘缓存 | Cache API（新闻列表 60s 缓存） |
 | AI 摘要 | OpenRouter, NVIDIA, Mango APIs |
 | 向量 | Vectorize 语义去重 |
 | 浏览器 | Browser Rendering（无头 Chrome，抓取 JS 重度渲染的 RSS 源） |
@@ -132,6 +139,8 @@ JWT_SECRET=任意随机字符串用于JWT签名
 OPENROUTER_API_KEY=你的OpenRouter密钥
 NVIDIA_API_KEY=你的NVIDIA密钥
 MANGO_API_KEY=你的Mango密钥
+TURNSTILE_SECRET=你的Turnstile密钥       # 从 CF 面板获取
+TURNSTILE_SITE_KEY=0x4AAAA...             # 从 CF 面板获取
 ```
 
 ### 第七步：绑定自定义域名
@@ -159,8 +168,9 @@ MANGO_API_KEY=你的Mango密钥
 | `OPENROUTER_API_KEY` | OpenRouter API Key |
 | `NVIDIA_API_KEY` | NVIDIA API Key |
 | `MANGO_API_KEY` | Mango API Key |
+| `TURNSTILE_SECRET` | Turnstile 验证码密钥 |
 
-工作流运行时会自动将这些值推到 Cloudflare Secrets（`wrangler secret put`），不会明文存储。推送到 main 分支即可触发自动部署。
+工作流运行时会自动将这些值推到 Cloudflare Secrets（`wrangler secret put`），不会明文存储。
 
 ## 快速开始
 
@@ -239,6 +249,7 @@ cf-news/
 | GET | `/api/ai/related/:id` | 获取相关文章 |
 | GET | `/api/health` | 健康检查 |
 | GET | `/api/image?url=` | 图片代理（CF 边缘缓存） |
+| GET | `/api/config` | 公共配置（Turnstile 站点 key 等） |
 
 ### 认证接口（需要 Bearer Token）
 

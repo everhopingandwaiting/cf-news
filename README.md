@@ -43,6 +43,10 @@ AI-generated summary of today's top news, sorted by time with language markers (
 - **Source manager** — Admin panel to add, edit, delete, and reorder RSS sources
 - **Email digest** — Subscribe to daily news summaries
 - **Auto-update** — Cron triggers fetch new articles every hour
+- **News voice playback** — Browser-native SpeechSynthesis, free, no API calls
+- **AI classification** — LLaMA 3.1 8B classifies news by content, not source defaults
+- **Bot protection** — Turnstile verification on login/register
+- **Edge caching** — News list cached on CF edge (60s) for faster response
 - **Responsive UI** — React 19 + Tailwind 4, works on desktop and mobile
 
 ## Tech Stack
@@ -57,6 +61,9 @@ AI-generated summary of today's top news, sorted by time with language markers (
 | Search | D1 FTS5 full-text search |
 | AI Chat | Workers AI (LLaMA 3.3 70B) |
 | AI Search | Cloudflare AI Search (semantic + keyword) |
+| AI Cache | AI Gateway (caches classification, Q&A) |
+| Bot Protection | Turnstile (free, no CAPTCHA) |
+| Edge Cache | Cache API (news list 60s) |
 | Summaries | OpenRouter, NVIDIA, Mango APIs |
 | Vector | Vectorize for semantic dedup |
 | Browser | Browser Rendering (headless Chrome for JS-heavy RSS) |
@@ -141,6 +148,8 @@ JWT_SECRET=any-random-string-for-jwt-signing
 OPENROUTER_API_KEY=your-openrouter-key
 NVIDIA_API_KEY=your-nvidia-key
 MANGO_API_KEY=your-mango-key
+TURNSTILE_SECRET=your-turnstile-secret    # from dashboard
+TURNSTILE_SITE_KEY=0x4AAAA...            # from dashboard
 ```
 
 ### Step 7: Add Custom Domain to Workers
@@ -168,6 +177,7 @@ The project includes a GitHub Actions workflow for automatic deployment. To use 
 | `OPENROUTER_API_KEY` | OpenRouter API key |
 | `NVIDIA_API_KEY` | NVIDIA API key |
 | `MANGO_API_KEY` | Mango API key |
+| `TURNSTILE_SECRET` | Turnstile secret key (bot protection) |
 
 Secrets are automatically pushed to Cloudflare Secrets (`wrangler secret put`) during the workflow run.
 
@@ -248,6 +258,7 @@ cf-news/
 | GET | `/api/ai/related/:id` | Get related articles |
 | GET | `/api/health` | Health check |
 | GET | `/api/image?url=` | Image proxy via CF edge cache |
+| GET | `/api/config` | Public config (Turnstile site key, etc.) |
 
 ### Authenticated (Bearer token)
 
