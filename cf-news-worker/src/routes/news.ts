@@ -12,9 +12,13 @@ async function searchNewsFTS(env: Bindings, query: string): Promise<number[] | n
     const sanitized = normalized.replace(/[^\w\u4e00-\u9fff\s-]/g, ' ').trim();
     if (!sanitized) return null;
 
+    // FTS5 unicode61 tokenizer treats each CJK char as a separate token,
+    // making multi-char CJK queries unreliable. Use LIKE for CJK-heavy text.
+    const hasCJK = /[\u4e00-\u9fff]/.test(sanitized);
+    if (hasCJK) return null;
+
     let ids: number[] = [];
     try {
-        // Wrap each word with FTS5 prefix match for fuzzy search
         const ftsQuery = sanitized.split(/\s+/).map(w => w + '*').join(' ');
         const result = await env.DB.prepare(
             'SELECT rowid FROM news_fts WHERE news_fts MATCH ? LIMIT 200'
@@ -81,9 +85,9 @@ news.get('/', async (c) => {
             conditions.push(`n.id IN (${placeholders})`);
             params.push(...indexedIds);
         } else {
-            // Fallback: LIKE search
-            conditions.push('(n.title LIKE ? OR n.description LIKE ?)');
-            params.push(`%${search}%`, `%${search}%`);
+            // Fallback: LIKE search on title only (description is too noisy)
+            conditions.push('n.title LIKE ?');
+            params.push(`%${search}%`);
         }
     }
 
