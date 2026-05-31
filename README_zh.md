@@ -125,7 +125,14 @@ docker run --rm -e CLOUDFLARE_API_TOKEN=你的Token \
 
 从输出中复制 `id`，后面配置 `.env` 需要。
 
-### 第六步：配置环境变量
+### 第六步：创建 Turnstile 验证码（机器人防护）
+
+1. 前往 [dash.cloudflare.com/?to=/:account/turnstile](https://dash.cloudflare.com/?to=/:account/turnstile)
+2. 点击 **"Add widget"**
+3. Widget 名称：`cf-news`，域名：`news.slivermoss.site`（或你的域名），模式：**Invisible**
+4. 复制 **Site Key** 和 **Secret Key**，填入 `.env` 的 `TURNSTILE_SITE_KEY` 和 `TURNSTILE_SECRET`
+
+### 第七步：配置环境变量
 
 编辑 `cf-news-worker/.env`，填入你的值：
 
@@ -143,7 +150,7 @@ TURNSTILE_SECRET=你的Turnstile密钥       # 从 CF 面板获取
 TURNSTILE_SITE_KEY=0x4AAAA...             # 从 CF 面板获取
 ```
 
-### 第七步：绑定自定义域名
+### 第八步：绑定自定义域名
 
 首次部署后，需要绑定域名：
 

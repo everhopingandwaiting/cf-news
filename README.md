@@ -134,7 +134,14 @@ docker run --rm -e CLOUDFLARE_API_TOKEN=your-token-here \
 
 Copy the `id` from the output — you'll need it for `.env`.
 
-### Step 6: Configure Environment Variables
+### Step 6: Create Turnstile Widget (Bot Protection)
+
+1. Go to [dash.cloudflare.com/?to=/:account/turnstile](https://dash.cloudflare.com/?to=/:account/turnstile)
+2. Click **"Add widget"**
+3. Widget name: `cf-news`, Domain: `news.slivermoss.site` (or your domain), Mode: **Invisible**
+4. Copy the **Site Key** and **Secret Key** — add them to `.env` as `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET`
+
+### Step 7: Configure Environment Variables
 
 Edit `cf-news-worker/.env` with your values:
 
@@ -152,7 +159,7 @@ TURNSTILE_SECRET=your-turnstile-secret    # from dashboard
 TURNSTILE_SITE_KEY=0x4AAAA...            # from dashboard
 ```
 
-### Step 7: Add Custom Domain to Workers
+### Step 8: Add Custom Domain to Workers
 
 After first deploy, add your domain:
 
