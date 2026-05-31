@@ -503,9 +503,6 @@ const [expandedTimeId, setExpandedTimeId] = useState<string | null>(null);
                         <div className="flex items-center gap-2 mb-3">
                             <span className="text-2xl">📥</span>
                             <span className="text-sm font-medium text-gray-900">收到文件传输请求</span>
-                            {autoAcceptRemaining > 0 && (
-                                <span className="ml-auto text-[11px] text-gray-400">{autoAcceptRemaining}s 后自动接受</span>
-                            )}
                         </div>
                         {incomingOffers.map((offer) => (
                             <div key={offer.transferId} className="bg-gray-50 rounded-lg p-3 mb-3 last:mb-0">
@@ -515,10 +512,10 @@ const [expandedTimeId, setExpandedTimeId] = useState<string | null>(null);
                                 <div className="text-[11px] text-gray-400 mt-1">{formatFileSize(offer.fileSize)}</div>
                                 <div className="flex gap-2 mt-2.5">
                                     <button 
-                                        className="px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-[12px] font-medium hover:bg-emerald-600 transition active:scale-[0.98]"
+                                        className="px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-[12px] font-medium hover:bg-emerald-600 transition active:scale-[0.98] flex items-center gap-1"
                                         onClick={() => handleManualAccept(offer.transferId)}
                                     >
-                                        ✓ 接受
+                                        ✓ 接受{autoAcceptRemaining > 0 && <span className="text-[11px] opacity-80">({autoAcceptRemaining}s)</span>}
                                     </button>
                                     <button 
                                         className="px-3 py-1.5 bg-gray-200 text-gray-600 rounded-lg text-[12px] font-medium hover:bg-gray-300 transition active:scale-[0.98]"
