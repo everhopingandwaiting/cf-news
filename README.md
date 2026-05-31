@@ -17,7 +17,7 @@ Sync text and images across your devices in real-time. Works on desktop and mobi
 - **Sender identification** — See which device sent each message
 - **Clipboard history** — Last 20 pushed texts, click to restore
 - **Auto-open panel** — Panel opens automatically when data arrives from another device
-- **File transfer** — Drag & drop or select files up to 50MB, receiver gets accept/reject prompt, auto-download on accept
+- **File transfer** — Drag & drop or select any file. Chunked streaming via WebSocket with backpressure; no hard size limit, actual speed depends on network conditions between your devices. Receiver sees an accept/reject prompt, auto-downloads on accept. Data is relayed in-memory only — never persisted on the server
 - **Secure** — WSS encrypted, data only flows between your devices, not stored on server
 
 ### News Q&A
