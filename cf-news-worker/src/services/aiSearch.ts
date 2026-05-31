@@ -259,48 +259,33 @@ export async function generateDailyDigest(env: Bindings): Promise<DigestResult |
 
     const instance = getSearchInstance(env);
 
-    let summary: string;
+    // Only ask AI to translate English titles (shorter task, more reliable)
+    const enItems = news.results.filter(n => n.lang !== 'zh').map((n, i) => ({ idx: news.results.indexOf(n), title: n.title }));
+    const enTranslations = new Map<number, string>();
 
-    if (instance) {
+    if (enItems.length > 0 && instance) {
+        const translatePrompt = `将以下英文新闻标题翻译为中文，只返回翻译结果，每行一条:\n${enItems.map((n, i) => `${i + 1}. ${n.title}`).join('\n')}`;
         try {
-            const response = await instance.chatCompletions({
+            const resp = await instance.chatCompletions({
                 messages: [
-                    {
-                        role: 'system',
-                        content: '你是新闻编辑。为每条新闻生成一句简洁的中文摘要（20字以内）。英文新闻标题先翻译为中文再写摘要。直接返回摘要文本，每行一条，不要序号和标题。',
-                    },
-                    { role: 'user', content: `为以下每条新闻生成一句中文摘要，英文的请先翻译标题:\n${newsText}` },
+                    { role: 'system', content: '将英文新闻标题翻译为简洁的中文标题。只返回翻译结果，不要序号。' },
+                    { role: 'user', content: translatePrompt },
                 ],
                 model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
             });
-            summary = response.choices?.[0]?.message?.content || '';
-        } catch {
-
-        }
-    } else {
-        try {
-            const aiResponse = await env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', {
-                messages: [
-                    {
-                        role: 'system',
-                        content: '你是新闻编辑。为每条新闻生成一句简洁的中文摘要（20字以内）。英文新闻标题先翻译为中文再写摘要。直接返回摘要文本，每行一条，不要序号和标题。',
-                    },
-                    { role: 'user', content: `为以下每条新闻生成一句中文摘要，英文的请先翻译标题:\n${newsText}` },
-                ],
+            const text = resp.choices?.[0]?.message?.content || '';
+            text.trim().split('\n').filter(l => l.trim()).forEach((line, i) => {
+                if (i < enItems.length) enTranslations.set(enItems[i].idx, line.replace(/^\d+[\.\s]+/, '').trim());
             });
-            summary = (aiResponse as any).response || '';
-        } catch {
-            summary = '';
-        }
+        } catch {}
     }
 
     // Build content server-side with guaranteed times, translated titles, and source info
-    const summaryLines = summary ? summary.trim().split('\n').filter((l: string) => l.trim()) : [];
     const content = news.results.map((n, i) => {
         const t = fmtTime(n.published_at);
         const lang = langTag(n.lang);
         const src = n.source_name ? ` (${n.source_name})` : '';
-        const desc = summaryLines[i]?.trim() || (lang === 'EN' ? `[英] ${n.title}` : n.title);
+        const desc = enTranslations.get(i) || (lang === 'EN' ? `[英] ${n.title}` : n.title);
         return `${i + 1}. **${n.title}** [${lang}]${t ? ' ' + t : ''}${src}\n${desc}`;
     }).join('\n\n');
 
