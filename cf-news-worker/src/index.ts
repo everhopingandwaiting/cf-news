@@ -18,6 +18,7 @@ import { verifyJWT } from './routes/auth';
 import { handleNewsQueue } from './services/queueConsumer';
 export { ClipboardRoom } from './durable-objects/clipboard';
 export { CommentsRoom } from './durable-objects/comments';
+export { PipingRoom } from './durable-objects/piping';
 
 const app = new Hono<{ Bindings: Bindings }>();
 
@@ -316,6 +317,15 @@ ${imgUrl ? `<meta property="og:image" content="${imgUrl}"><meta name="twitter:im
             wsUrl.searchParams.set('uid', String(payload.sub));
             return stub.fetch(new Request(wsUrl.toString(), request));
         }
+        // HTTP piping for file transfer (PUT upload / GET download)
+        const pipingMatch = reqUrl.pathname.match(/^\/api\/piping\/(upload|download)\/(.+)$/);
+        if (pipingMatch) {
+            const stub = env.PIPING.get(env.PIPING.idFromName(pipingMatch[2]));
+            // Forward the full request, path is handled by PipingRoom
+            const pipingUrl = new URL(request.url);
+            return stub.fetch(new Request(pipingUrl.toString(), request));
+        }
+
         if (reqUrl.pathname.startsWith('/api/')) {
             return app.fetch(request, env, ctx);
         }

@@ -1,10 +1,16 @@
 interface ClipboardMessage {
-    type: 'text' | 'image' | 'sync_clipboard' | 'heartbeat';
+    type: 'text' | 'image' | 'sync_clipboard' | 'heartbeat'
+        | 'file_offer' | 'file_accept' | 'file_reject' | 'file_complete' | 'file_cancel';
     content?: string;
     data?: string;
     mime?: string;
     size?: number;
     sender?: string;
+    // file transfer fields
+    transferId?: string;
+    fileName?: string;
+    fileSize?: number;
+    totalChunks?: number;
 }
 
 interface ConnInfo {
@@ -30,6 +36,7 @@ export class ClipboardRoom {
         const pair = new WebSocketPair();
         const [client, server] = Object.values(pair);
 
+        server.binaryType = 'arraybuffer';
         server.accept();
         this.connections.set(server, { userId, deviceId });
         console.log(`Clipboard: user ${userId} device ${deviceId} connected (${this.connectionCount(userId)} active)`);
@@ -38,10 +45,15 @@ export class ClipboardRoom {
         this.deliverPendingSync(server, userId);
 
         server.addEventListener('message', (event) => {
+            const info = this.connections.get(server);
+            if (!info) return;
+            // Binary: relay file chunks as-is
+            if (typeof event.data === 'object') {
+                this.broadcastBinary(server, info, event.data as ArrayBuffer);
+                return;
+            }
             try {
                 const msg: ClipboardMessage = JSON.parse(event.data as string);
-                const info = this.connections.get(server);
-                if (!info) return;
                 if (msg.type === 'sync_clipboard') {
                     this.storage.put(`sync:${userId}`, event.data as string).catch(() => {});
                 }
@@ -83,6 +95,14 @@ export class ClipboardRoom {
         for (const [ws, info] of this.connections) {
             if (info.userId === senderInfo.userId && ws !== senderWs && info.deviceId !== senderInfo.deviceId && ws.readyState === WebSocket.OPEN) {
                 try { ws.send(raw); } catch {}
+            }
+        }
+    }
+
+    private broadcastBinary(senderWs: WebSocket, senderInfo: ConnInfo, buf: ArrayBuffer) {
+        for (const [ws, info] of this.connections) {
+            if (info.userId === senderInfo.userId && ws !== senderWs && info.deviceId !== senderInfo.deviceId && ws.readyState === WebSocket.OPEN) {
+                try { ws.send(buf); } catch {}
             }
         }
     }

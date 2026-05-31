@@ -302,6 +302,12 @@ export default function Home() {
         onSendImage={clipboard.sendImage}
         onSyncClipboard={clipboard.syncClipboard}
         onClearImages={clipboard.clearImages}
+        incomingOffers={clipboard.incomingOffers}
+        fileTransfers={clipboard.fileTransfers}
+        onSendFile={clipboard.sendFile}
+        onAcceptFile={clipboard.acceptFileOffer}
+        onRejectFile={clipboard.rejectFileOffer}
+        onCancelFile={clipboard.cancelFileTransfer}
       />}
       {loading ? (
         <div className="text-center py-20 text-gray-400 flex flex-col items-center gap-4"><div className="w-8 h-8 border-2 border-gray-200 border-t-indigo-500 rounded-full animate-spin"></div><p>加载中...</p></div>

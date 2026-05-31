@@ -17,6 +17,7 @@ Sync text and images across your devices in real-time. Works on desktop and mobi
 - **Sender identification** — See which device sent each message
 - **Clipboard history** — Last 20 pushed texts, click to restore
 - **Auto-open panel** — Panel opens automatically when data arrives from another device
+- **File transfer** — Drag & drop or select files up to 50MB, receiver gets accept/reject prompt, auto-download on accept
 - **Secure** — WSS encrypted, data only flows between your devices, not stored on server
 
 ### News Q&A

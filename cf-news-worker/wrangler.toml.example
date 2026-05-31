@@ -36,6 +36,11 @@ index_name = "news-dedup"
 name = "COMMENTS"
 class_name = "CommentsRoom"
 
+# Durable Object - 文件传输 HTTP Piping
+[[durable_objects.bindings]]
+name = "PIPING"
+class_name = "PipingRoom"
+
 # Email Sending
 [[send_email]]
 name = "EMAIL"
@@ -61,6 +66,10 @@ new_sqlite_classes = ["ClipboardRoom"]
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["CommentsRoom"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["PipingRoom"]
 
 # 环境变量（用 wrangler secret 设置的密钥不在此显示）
 [vars]

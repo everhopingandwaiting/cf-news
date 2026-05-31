@@ -5,6 +5,7 @@ export interface Bindings {
     VECTORIZE: VectorizeIndex;
     CLIPBOARD: DurableObjectNamespace;
     COMMENTS: DurableObjectNamespace;
+    PIPING: DurableObjectNamespace;
     EMAIL: SendEmail;
     JWT_SECRET: string;
     NEWS_FETCH_INTERVAL: string;
