@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 
 interface IncomingFileOffer {
     transferId: string;
@@ -109,6 +109,47 @@ const [isDragOver, setIsDragOver] = useState(false);
 const [expandedTimeId, setExpandedTimeId] = useState<string | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const fileTransferInputRef = useRef<HTMLInputElement>(null);
+    const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const [autoAcceptRemaining, setAutoAcceptRemaining] = useState<number>(0);
+
+    useEffect(() => {
+        if (incomingOffers.length > 0) {
+            setAutoAcceptRemaining(10);
+            timerRef.current = setTimeout(() => {
+                for (const offer of incomingOffers) {
+                    onAcceptFile(offer.transferId);
+                }
+                setAutoAcceptRemaining(0);
+            }, 10000);
+        } else {
+            if (timerRef.current) {
+                clearTimeout(timerRef.current);
+                timerRef.current = null;
+            }
+            setAutoAcceptRemaining(0);
+        }
+        const interval = setInterval(() => {
+            setAutoAcceptRemaining(prev => prev > 0 ? prev - 1 : 0);
+        }, 1000);
+        return () => {
+            if (timerRef.current) clearTimeout(timerRef.current);
+            clearInterval(interval);
+        };
+    }, [incomingOffers.length]);
+
+    function handleManualAccept(transferId: string) {
+        if (timerRef.current) clearTimeout(timerRef.current);
+        timerRef.current = null;
+        setAutoAcceptRemaining(0);
+        onAcceptFile(transferId);
+    }
+
+    function handleManualReject(transferId: string) {
+        if (timerRef.current) clearTimeout(timerRef.current);
+        timerRef.current = null;
+        setAutoAcceptRemaining(0);
+        onRejectFile(transferId);
+    }
 
     function handleTextChange(value: string) {
         onSendText(value);
@@ -462,6 +503,9 @@ const [expandedTimeId, setExpandedTimeId] = useState<string | null>(null);
                         <div className="flex items-center gap-2 mb-3">
                             <span className="text-2xl">📥</span>
                             <span className="text-sm font-medium text-gray-900">收到文件传输请求</span>
+                            {autoAcceptRemaining > 0 && (
+                                <span className="ml-auto text-[11px] text-gray-400">{autoAcceptRemaining}s 后自动接受</span>
+                            )}
                         </div>
                         {incomingOffers.map((offer) => (
                             <div key={offer.transferId} className="bg-gray-50 rounded-lg p-3 mb-3 last:mb-0">
@@ -472,13 +516,13 @@ const [expandedTimeId, setExpandedTimeId] = useState<string | null>(null);
                                 <div className="flex gap-2 mt-2.5">
                                     <button 
                                         className="px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-[12px] font-medium hover:bg-emerald-600 transition active:scale-[0.98]"
-                                        onClick={() => onAcceptFile(offer.transferId)}
+                                        onClick={() => handleManualAccept(offer.transferId)}
                                     >
                                         ✓ 接受
                                     </button>
                                     <button 
                                         className="px-3 py-1.5 bg-gray-200 text-gray-600 rounded-lg text-[12px] font-medium hover:bg-gray-300 transition active:scale-[0.98]"
-                                        onClick={() => onRejectFile(offer.transferId)}
+                                        onClick={() => handleManualReject(offer.transferId)}
                                     >
                                         ✕ 拒绝
                                     </button>
