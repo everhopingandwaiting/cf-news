@@ -56,11 +56,15 @@ export default function Header({ user, refreshing, cooldown, search, lang, sourc
           <h1 className="text-base font-semibold text-gray-900 whitespace-nowrap cursor-pointer hover:text-indigo-600 transition" onClick={onQA} title="AI 问答">AI News Hub</h1>
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
-          {sourceCount > 0 && (
-            <span className="hidden sm:inline text-[12px] text-gray-400">
-              📡 {sourceCount}源 · {totalNews > 0 ? totalNews.toLocaleString() : '-'}条
-            </span>
-          )}
+        {sourceCount > 0 && (
+          <button
+            className={`hidden sm:inline text-[12px] transition ${user ? 'hover:text-indigo-500 cursor-pointer' : 'text-gray-400 cursor-default'}`}
+            onClick={user ? onManageSources : undefined}
+            title={user ? (showManager ? '关闭源管理' : '源管理') : undefined}
+          >
+            📡 {sourceCount}源 · {totalNews > 0 ? totalNews.toLocaleString() : '-'}条
+          </button>
+        )}
           <button
             className={`w-8 h-8 rounded-lg text-[13px] font-medium transition inline-flex items-center justify-center ${disabled ? 'opacity-50 cursor-not-allowed' : 'hover:opacity-90'} bg-emerald-500 text-white`}
             onClick={onRefresh} disabled={disabled} title={btnText}>
