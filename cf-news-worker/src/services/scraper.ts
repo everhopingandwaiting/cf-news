@@ -8,49 +8,69 @@ interface ScrapedItem {
     pubDate?: string;
 }
 
-// 澎湃新闻 (thepaper.cn) 首页抓取
-// 页面结构: 新闻列表在 div[class*="news"] 或 a[class*="link"] 中
+// 从首页 HTML 中提取 Next.js build ID
+function extractBuildId(html: string): string | null {
+    const m = html.match(/\/_next\/static\/chunks\/pages\/_app-[a-f0-9]+\.js/);
+    if (!m) return null;
+    // Build ID 是 pages/_app-{buildId}.js 中的 hash
+    return m[0].match(/_app-([a-f0-9]+)\./)?.[1] || null;
+}
+
+// 澎湃新闻 - 通过 Next.js 数据接口获取
+// buildId 会随部署变化，需要从首页 HTML 中提取
 export async function scrapeThePaper(env: Bindings): Promise<ScrapedItem[]> {
-    const html = await fetchWithBrowser(env, 'https://m.thepaper.cn/');
-    if (!html) return [];
+    // 先从首页获取 buildId
+    const resp = await fetch('https://www.thepaper.cn/', {
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+    });
+    if (!resp.ok) return [];
+    const html = await resp.text();
+
+    const buildId = extractBuildId(html);
+    if (!buildId) return [];
+
+    // 请求 Next.js 数据 API
+    const apiUrl = `https://www.thepaper.cn/_next/data/${buildId}/index.json`;
+    const apiResp = await fetch(apiUrl);
+    if (!apiResp.ok) return [];
+    let json: any;
+    try { json = await apiResp.json(); } catch { return []; }
 
     const items: ScrapedItem[] = [];
     const seen = new Set<string>();
 
-    // 匹配新闻链接: <a[^>]*href="/(newsDetail|detail)_\d+"[^>]*>标题</a>
-    const linkRegex = /<a[^>]*href="(\/(?:newsDetail|detail)_\d+)"[^>]*>([^<]+)<\/a>/gi;
-    let match: RegExpExecArray | null;
+    const extractArticles = (data: any) => {
+        if (!data || typeof data !== 'object') return;
+        for (const val of Object.values(data)) {
+            if (Array.isArray(val)) {
+                for (const item of val) {
+                    if (item && item.contId && item.name) {
+                        const link = item.link || `https://www.thepaper.cn/newsDetail_forward_${item.contId}`;
+                        if (seen.has(link)) continue;
+                        seen.add(link);
 
-    while ((match = linkRegex.exec(html)) !== null) {
-        const link = match[1];
-        const title = match[2].trim();
-        const fullUrl = `https://m.thepaper.cn${link}`;
+                        let pubDate: string | undefined;
+                        if (item.pubTimeLong) pubDate = new Date(item.pubTimeLong).toISOString();
 
-        if (title.length < 5 || seen.has(fullUrl)) continue;
-        seen.add(fullUrl);
-
-        // 提取发布时间（如果有）
-        let pubDate: string | undefined;
-        const timeMatch = html.substr(Math.max(0, match.index - 200), 400).match(/(\d+)分钟前/);
-        if (timeMatch) {
-            const minutesAgo = parseInt(timeMatch[1]);
-            pubDate = new Date(Date.now() - minutesAgo * 60000).toISOString();
+                        items.push({
+                            title: item.name,
+                            link,
+                            description: item.abstract || item.name,
+                            pubDate,
+                        });
+                    }
+                }
+            } else if (typeof val === 'object') {
+                extractArticles(val);
+            }
         }
+    };
 
-        items.push({
-            title,
-            link: fullUrl,
-            description: title,
-            pubDate,
-        });
+    extractArticles(json);
 
-        if (items.length >= 30) break;
-    }
-
-    return items;
+    return items.slice(0, 50);
 }
 
-// 根据域名选择对应的抓取函数
 export function getScraper(url: string): ((env: Bindings) => Promise<ScrapedItem[]>) | null {
     const hostname = new URL(url).hostname;
     if (hostname.includes('thepaper.cn')) return scrapeThePaper;

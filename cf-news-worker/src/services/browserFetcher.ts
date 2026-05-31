@@ -30,7 +30,6 @@ export async function fetchWithBrowser(env: Bindings, url: string): Promise<stri
 export const JS_RENDER_SOURCES: Set<string> = new Set([
     'https://36kr.com/feed',
     'https://sspai.com/feed',
-    'https://www.thepaper.cn/rss_newsDetail_wap.jsp',
 ]);
 
 /**
