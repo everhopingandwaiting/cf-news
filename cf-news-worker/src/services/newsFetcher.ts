@@ -113,26 +113,47 @@ function cleanHTML(html: string): string {
         .trim();
 }
 
-// Determine category based on source and content
-function determineCategory(source: NewsSource, title: string, description?: string): string {
-    const text = `${title} ${description || ''}`.toLowerCase();
+const classifyCache = new Map<string, string>();
+async function determineCategory(env: Bindings, source: NewsSource, title: string, description?: string): Promise<string> {
+    const text = `${title} ${description || ''}`;
+    const cached = classifyCache.get(text);
+    if (cached) return cached;
     
-    // Tech keywords
-    if (text.match(/ai|人工智能|机器学习|编程|开发|软件|硬件|芯片|crypto|区块链|web3|startup|融资/)) {
-        return 'tech';
+    try {
+        const prompt = `Classify this news title into exactly one category: tech, ai, news, finance, entertainment
+
+Examples:
+"英伟达发布Blackwell Ultra GPU" → tech
+"OpenAI推出GPT-5推理模型" → ai
+"美联储宣布加息25个基点" → finance
+"好莱坞编剧罢工结束" → entertainment
+"日本首相今日开始访华" → news
+"Apple releases M4 chip" → tech
+"New AI model beats benchmarks" → ai
+"Stock market hits all-time high" → finance
+"New movie breaks box office record" → entertainment
+"Earthquake hits Japan" → news
+
+Title: ${title.slice(0, 200)}
+Category:`;
+
+        const result = await env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
+            prompt,
+            max_tokens: 8,
+            temperature: 0.1,
+        }) as { response: string };
+
+        const cat = (result.response || '').trim().toLowerCase();
+        const valid = ['tech', 'ai', 'news', 'finance', 'entertainment'];
+        const matched = valid.find(v => cat.includes(v));
+        if (matched) {
+            classifyCache.set(text, matched);
+            return matched;
+        }
+    } catch (e) {
+        console.error(`AI classify failed for "${title}":`, e);
     }
     
-    // Finance keywords
-    if (text.match(/股票|基金|金融|投资|经济|银行|利率|通胀|market|stock|finance/)) {
-        return 'finance';
-    }
-    
-    // Entertainment keywords
-    if (text.match(/电影|音乐|游戏|娱乐|明星|综艺|movie|music|game|entertainment/)) {
-        return 'entertainment';
-    }
-    
-    // Default to source category
     return source.category;
 }
 
@@ -201,7 +222,7 @@ async function saveNewsItems(env: Bindings, source: NewsSource, items: RSSItem[]
             const isDup = await checkDuplicate(env, item.title, item.description);
             if (isDup) continue;
 
-            const category = determineCategory(source, item.title, item.description);
+            const category = await determineCategory(env, source, item.title, item.description);
             const publishedAt = item.pubDate ? new Date(item.pubDate).toISOString() : null;
 
             const result = await env.DB.prepare(`

@@ -68,6 +68,7 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
   const [translating, setTranslating] = useState(false);
   const [translated, setTranslated] = useState<{ title?: string; description?: string } | null>(null);
   const [showShare, setShowShare] = useState(false);
+  const [playing, setPlaying] = useState(false);
   const shareRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { setCurrentItem(item); setTranslated(null); setTakeError(false); }, [item]);
@@ -143,6 +144,23 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
     setTranslating(false);
   }
 
+  async function handlePlay() {
+    if (!currentItem) return;
+    if (speechSynthesis.speaking) {
+      speechSynthesis.cancel();
+      setPlaying(false);
+      return;
+    }
+    const text = stripHtml(currentItem.ai_summary || currentItem.title);
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = currentItem.source_lang === 'zh' ? 'zh-CN' : 'en-US';
+    utterance.rate = 1.0;
+    utterance.onend = () => setPlaying(false);
+    utterance.onerror = () => setPlaying(false);
+    setPlaying(true);
+    speechSynthesis.speak(utterance);
+  }
+
   async function copyLink() {
     try {
       await navigator.clipboard.writeText(shareUrl);
@@ -174,6 +192,9 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
         <div className="flex gap-4 text-[13px] text-gray-400 mb-5">
           <span>◷ {date}</span>
           <span>◈ {currentItem.source_lang === 'zh' ? '中文' : '英文'}</span>
+          <button className="hover:text-indigo-500 transition cursor-pointer" onClick={handlePlay}>
+            {playing ? '■ 停止' : '♫ 播报'}
+          </button>
         </div>
 
         {currentItem.ai_summary ? (
