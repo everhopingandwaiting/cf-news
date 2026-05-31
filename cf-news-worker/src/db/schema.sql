@@ -173,6 +173,10 @@ ALTER TABLE news_sources ADD COLUMN source_type TEXT DEFAULT 'rss';
 INSERT OR IGNORE INTO news_sources (name, url, feed_url, category, language, source_type, sort_order)
 VALUES ('澎湃新闻', 'https://www.thepaper.cn', 'https://decemberpei.cyou/rssbox/wechat-pengpaixinwen.xml', 'news', 'zh', 'rss', 50);
 
+-- 知乎热榜（通过第三方 RSS 桥）
+INSERT OR IGNORE INTO news_sources (name, url, feed_url, category, language, source_type, sort_order)
+VALUES ('知乎热榜', 'https://www.zhihu.com', 'https://decemberpei.cyou/rssbox/zhihu.xml', 'tech', 'zh', 'rss', 60);
+
 -- Provider 模型评分表
 CREATE TABLE IF NOT EXISTS provider_models (
     provider TEXT NOT NULL,
