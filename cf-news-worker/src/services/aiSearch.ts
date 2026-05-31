@@ -227,12 +227,12 @@ export async function generateDailyDigest(env: Bindings): Promise<DigestResult |
     const sinceStr = getTodayStart();
 
     const news = await env.DB.prepare(
-        `SELECT n.id, n.title, n.description, n.published_at, COALESCE(s.language, 'zh') as lang
+        `SELECT n.id, n.title, n.description, n.published_at, COALESCE(s.language, 'zh') as lang, COALESCE(s.name, '') as source_name
          FROM news_items n
          LEFT JOIN news_sources s ON n.source_id = s.id
          WHERE n.is_deleted = 0 AND (n.published_at >= ? OR n.published_at IS NULL)
          ORDER BY n.published_at DESC`
-    ).bind(sinceStr).all<{ id: number; title: string; description: string; published_at: string; lang: string }>();
+    ).bind(sinceStr).all<{ id: number; title: string; description: string; published_at: string; lang: string; source_name: string }>();
 
     if (news.results.length === 0) {
         return null;
@@ -254,7 +254,7 @@ export async function generateDailyDigest(env: Bindings): Promise<DigestResult |
     function langTag(lang: string): string { return lang === 'zh' ? 'CN' : 'EN'; }
 
     const newsText = news.results
-        .map(n => `时间: ${fmtTime(n.published_at)}\t语言: ${langTag(n.lang)}\n标题: ${n.title}\n内容: ${(n.description || '').substring(0, 300)}`)
+        .map(n => `来源: ${n.source_name}\t语言: ${langTag(n.lang)}\t时间: ${fmtTime(n.published_at)}\n标题: ${n.title}\n内容: ${(n.description || '').substring(0, 300)}`)
         .join('\n---\n');
 
     const instance = getSearchInstance(env);
@@ -267,15 +267,15 @@ export async function generateDailyDigest(env: Bindings): Promise<DigestResult |
                 messages: [
                     {
                         role: 'system',
-                        content: '你是新闻编辑。为每条新闻生成一句简洁的中文摘要（20字以内）。直接返回摘要文本，每行一条，不要序号和标题。',
+                        content: '你是新闻编辑。为每条新闻生成一句简洁的中文摘要（20字以内）。英文新闻标题先翻译为中文再写摘要。直接返回摘要文本，每行一条，不要序号和标题。',
                     },
-                    { role: 'user', content: `为以下每条新闻生成一句摘要:\n${newsText}` },
+                    { role: 'user', content: `为以下每条新闻生成一句中文摘要，英文的请先翻译标题:\n${newsText}` },
                 ],
                 model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
             });
             summary = response.choices?.[0]?.message?.content || '';
         } catch {
-            summary = '';
+
         }
     } else {
         try {
@@ -283,9 +283,9 @@ export async function generateDailyDigest(env: Bindings): Promise<DigestResult |
                 messages: [
                     {
                         role: 'system',
-                        content: '你是新闻编辑。为每条新闻生成一句简洁的中文摘要（20字以内）。直接返回摘要文本，每行一条，不要序号和标题。',
+                        content: '你是新闻编辑。为每条新闻生成一句简洁的中文摘要（20字以内）。英文新闻标题先翻译为中文再写摘要。直接返回摘要文本，每行一条，不要序号和标题。',
                     },
-                    { role: 'user', content: `为以下每条新闻生成一句摘要:\n${newsText}` },
+                    { role: 'user', content: `为以下每条新闻生成一句中文摘要，英文的请先翻译标题:\n${newsText}` },
                 ],
             });
             summary = (aiResponse as any).response || '';
@@ -294,13 +294,14 @@ export async function generateDailyDigest(env: Bindings): Promise<DigestResult |
         }
     }
 
-    // Build content server-side with guaranteed times
+    // Build content server-side with guaranteed times, translated titles, and source info
     const summaryLines = summary ? summary.trim().split('\n').filter((l: string) => l.trim()) : [];
     const content = news.results.map((n, i) => {
         const t = fmtTime(n.published_at);
         const lang = langTag(n.lang);
-        const desc = summaryLines[i]?.trim() || n.title;
-        return `${i + 1}. **${n.title}** [${lang}]${t ? ' ' + t : ''}\n${desc}`;
+        const src = n.source_name ? ` (${n.source_name})` : '';
+        const desc = summaryLines[i]?.trim() || (lang === 'EN' ? `[英] ${n.title}` : n.title);
+        return `${i + 1}. **${n.title}** [${lang}]${t ? ' ' + t : ''}${src}\n${desc}`;
     }).join('\n\n');
 
     // Save to D1
