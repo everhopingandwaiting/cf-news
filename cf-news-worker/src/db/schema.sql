@@ -209,3 +209,49 @@ CREATE TABLE IF NOT EXISTS daily_digests (
     news_ids TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Push notification subscriptions
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    endpoint TEXT NOT NULL,
+    p256dh_key TEXT NOT NULL,
+    auth_key TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    UNIQUE(user_id, endpoint)
+);
+
+-- Trending topics hourly aggregation
+CREATE TABLE IF NOT EXISTS trending_topics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    keyword TEXT NOT NULL,
+    date_hour TEXT NOT NULL,
+    count INTEGER DEFAULT 1,
+    UNIQUE(keyword, date_hour)
+);
+CREATE INDEX IF NOT EXISTS idx_trending_topics_hour ON trending_topics(date_hour DESC);
+CREATE INDEX IF NOT EXISTS idx_trending_topics_keyword ON trending_topics(keyword);
+
+-- 停用词表（用于趋势热词过滤，可通过 INSERT/ DELETE 维护）
+CREATE TABLE IF NOT EXISTS stop_words (
+    word TEXT PRIMARY KEY
+);
+INSERT OR IGNORE INTO stop_words (word) VALUES
+('the'),('and'),('for'),('that'),('this'),('with'),('from'),('have'),('will'),('what'),
+('about'),('when'),('their'),('they'),('been'),('after'),('also'),('than'),('into'),('more'),
+('some'),('them'),('very'),('just'),('like'),('which'),('these'),('those'),('were'),('over'),
+('such'),('only'),('other'),('your'),('its'),('has'),('can'),('new'),('all'),('are'),
+('not'),('but'),('was'),('out'),('one'),('how'),('get'),('our'),('said'),('each'),
+('than'),('most'),('much'),('were'),('does'),('down'),('way'),('make'),('even'),('back'),
+('still'),('here'),('well'),('too'),('many'),('now'),('then'),('who'),('why'),('where'),
+('made'),('may'),('could'),('should'),('while'),('first'),('last'),('next'),('every'),('both'),
+('same'),('another'),('being'),('done'),('know'),('see'),('think'),('take'),('come'),('got'),
+('say'),('going'),('really'),('actually'),('little'),('old'),('good'),('great'),('big'),('high'),
+('long'),('right'),('says'),('us'),('two'),('three'),('year'),('time'),('people'),('world'),
+('years'),('week'),('day'),('days'),('way'),('life'),('part'),('work'),('thing'),('things'),
+('company'),('companies'),('million'),('billion'),('percent'),('according'),('including'),
+('without'),('within'),('across'),('around'),('already'),('always'),('never'),('ever'),('yet'),
+('still'),('https'),('http'),('www'),('com'),('img'),('src'),('alt'),('data'),('class'),
+('span'),('div'),('href'),('nbsp'),('amp'),('lt'),('gt'),('quot'),('style'),('width'),
+('height'),('srcset'),('content'),('type'),('none');

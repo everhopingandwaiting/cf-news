@@ -238,10 +238,6 @@ export default {
         const reqUrl = new URL(request.url);
         // Image proxy - fetch external images through CF edge cache
         if (reqUrl.pathname === '/api/image' && reqUrl.searchParams.has('url')) {
-            const referer = request.headers.get('Referer') || '';
-            if (!referer || !referer.includes(reqUrl.hostname)) {
-                return new Response('Forbidden', { status: 403 });
-            }
             const imgUrl = reqUrl.searchParams.get('url')!;
             const imgRes = await fetch(imgUrl, {
                 headers: { 'User-Agent': 'Mozilla/5.0 (compatible; CFNewsImage/1.0)', 'Referer': '' },
@@ -327,14 +323,32 @@ ${imgUrl ? `<meta property="og:image" content="${imgUrl}"><meta name="twitter:im
             wsUrl.searchParams.set('uid', String(payload.sub));
             return stub.fetch(new Request(wsUrl.toString(), request));
         }
+        // Screenshot via Browser Rendering
+        if (reqUrl.pathname === '/api/screenshot' && reqUrl.searchParams.has('url')) {
+            try {
+                const ssUrl = reqUrl.searchParams.get('url')!;
+                const resp = await env.BROWSER.fetch('https://browser-rendering.cloudflare.com/chrome-screenshot', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: ssUrl, viewport: { width: 1280, height: 720 } }),
+                });
+                if (!resp.ok) return new Response(await resp.text() || 'Failed', { status: 502 });
+                return new Response(resp.body, {
+                    headers: { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=3600' },
+                });
+            } catch (e: any) {
+                return new Response(e.message || 'Error', { status: 502 });
+            }
+        }
+
         // HTTP piping for file transfer (PUT upload / GET download)
         const pipingMatch = reqUrl.pathname.match(/^\/api\/piping\/(upload|download)\/(.+)$/);
         if (pipingMatch) {
             const stub = env.PIPING.get(env.PIPING.idFromName(pipingMatch[2]));
-            // Forward the full request, path is handled by PipingRoom
             const pipingUrl = new URL(request.url);
             return stub.fetch(new Request(pipingUrl.toString(), request));
         }
+
 
         if (reqUrl.pathname.startsWith('/api/')) {
             return app.fetch(request, env, ctx);
@@ -347,6 +361,34 @@ ${imgUrl ? `<meta property="og:image" content="${imgUrl}"><meta name="twitter:im
         if (event.cron === '0 * * * *') {
             console.log('Fetch cron fired, fetching news...');
             ctx.waitUntil(fetchNews(env, true));
+            ctx.waitUntil((async () => {
+                const topicRows = await env.DB.prepare(`
+                    SELECT title, description FROM news_items
+                    WHERE is_deleted = 0 AND created_at > datetime('now', '-1 day')
+                    ORDER BY created_at DESC LIMIT 200
+                `).all<{ title: string; description: string }>();
+                const words: Record<string, number> = {};
+                for (const row of topicRows.results) {
+                    const clean = (row.title + ' ' + (row.description || ''))
+                        .replace(/<[^>]+>/g, ' ')
+                        .replace(/https?:\/\/\S+/g, ' ')
+                        .replace(/[^\w\u4e00-\u9fff\s]/g, ' ')
+                        .toLowerCase();
+                    const eng = clean.match(/\b[a-z]{3,}\b/g) || [];
+                    const chn = clean.match(/[\u4e00-\u9fff]{2,}/g) || [];
+                    for (const w of [...eng, ...chn]) {
+                        if (w.length > 1) words[w] = (words[w] || 0) + 1;
+                    }
+                }
+                const stopRows = await env.DB.prepare('SELECT word FROM stop_words').all<{ word: string }>();
+                const stopWords = new Set(stopRows.results.map(r => r.word));
+                const dateHour = new Date().toISOString().substring(0, 13) + ':00:00';
+                const topWords = Object.entries(words).filter(([w, c]) => c >= 3 && !stopWords.has(w)).sort((a, b) => b[1] - a[1]).slice(0, 50);
+                for (const [keyword, count] of topWords) {
+                    await env.DB.prepare('INSERT OR REPLACE INTO trending_topics (keyword, date_hour, count) VALUES (?, ?, ?)').bind(keyword, dateHour, count).run();
+                }
+                console.log(`Trending topics aggregated: ${topWords.length} keywords`);
+            })());
         } else if (event.cron === '0 8 * * *') {
             console.log('Daily digest cron fired, generating digest...');
             ctx.waitUntil(generateDailyDigest(env).then(r => console.log(`Digest: ${r ? 'generated' : 'skipped'}`)));

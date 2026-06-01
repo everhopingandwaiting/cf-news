@@ -29,6 +29,12 @@
 - **AI 问答** — 自然语言提问，AI 基于当日新闻回答
 - **今日要闻** — AI 每日自动汇总，按时间排序，携带语言标记和发布时间，支持历史浏览
 - **相关推荐** — 标题关键词匹配，点击一键跳转
+- **趋势热词** — 实时提取 24h 内新闻高频关键词，点击直接搜索
+- **热点追踪** — 3 天时间跨度热门话题柱状图，每小时粒度，支持切换
+- **阅读模式** — 全文提取，深/浅色主题，阅读时间估算，完善的排版（标题、图片、表格、代码块）
+- **站内浏览** — 内嵌 iframe 查看原文，或通过 Browser Rendering 截图查看
+- **语音速度** — 播报速度可调（0.5x–1.5x）
+- **推送通知** — 订阅浏览器推送，接收最新消息通知
 - **用户系统** — 注册、登录、JWT 认证
 - **收藏与历史** — 收藏文章、记录阅读历史
 - **评论系统** — WebSocket 实时评论，支持多设备同步
@@ -247,6 +253,9 @@ cf-news/
 | GET | `/api/news` | 获取新闻列表（分页、可筛选） |
 | GET | `/api/news/:id` | 获取新闻详情 |
 | GET | `/api/news/sources/list` | 获取 RSS 源列表 |
+| GET | `/api/news/trending` | 24h 趋势热词 |
+| GET | `/api/news/trending/topics?days=3` | 热点追踪时间序列 |
+| GET | `/api/news/:id/content` | 获取文章全文 |
 | GET | `/api/comments/:newsId` | 获取新闻评论 |
 | POST | `/api/auth/register` | 用户注册 |
 | POST | `/api/auth/login` | 用户登录 |
@@ -256,6 +265,7 @@ cf-news/
 | GET | `/api/ai/related/:id` | 获取相关文章 |
 | GET | `/api/health` | 健康检查 |
 | GET | `/api/image?url=` | 图片代理（CF 边缘缓存） |
+| GET | `/api/screenshot?url=` | 网页截图（Browser Rendering） |
 | GET | `/api/config` | 公共配置（Turnstile 站点 key 等） |
 
 ### 认证接口（需要 Bearer Token）
@@ -272,6 +282,8 @@ cf-news/
 | POST | `/api/user/history/:id` | 标记已读 |
 | POST | `/api/ai/ask` | AI 问答（支持流式响应） |
 | POST | `/api/ai/digest/generate` | 强制重新生成要闻（管理） |
+| POST | `/api/user/push/subscribe` | 订阅推送通知 |
+| DELETE | `/api/user/push/unsubscribe` | 取消订阅推送通知 |
 
 ### 管理接口（需要 Bearer Token，管理员）
 

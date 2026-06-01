@@ -131,6 +131,82 @@ news.get('/', async (c) => {
     }
 });
 
+// GET /trending/topics — Time series of trending topics
+news.get('/trending/topics', async (c) => {
+    const days = parseInt(c.req.query('days') || '7');
+    const stopRows = await c.env.DB.prepare('SELECT word FROM stop_words').all<{ word: string }>();
+    const stopWords = new Set(stopRows.results.map(r => r.word));
+    try {
+        const rows = await c.env.DB.prepare(`
+            SELECT keyword, date_hour, count FROM trending_topics
+            WHERE date_hour > datetime('now', '-' || ? || ' days')
+            ORDER BY date_hour DESC, count DESC LIMIT 500
+        `).bind(days).all<{ keyword: string; date_hour: string; count: number }>();
+        if (rows.results.length === 0) {
+            const newsRows = await c.env.DB.prepare(`
+                SELECT title, description FROM news_items
+                WHERE is_deleted = 0 AND created_at > datetime('now', '-1 day')
+                ORDER BY created_at DESC LIMIT 100
+            `).all<{ title: string; description: string }>();
+            const words: Record<string, number> = {};
+            for (const row of newsRows.results) {
+                const text = (row.title + ' ' + (row.description || '')).toLowerCase();
+                const eng = text.match(/\b[a-z]{2,}\b/g) || [];
+                const chn = text.match(/[\u4e00-\u9fff]{2,}/g) || [];
+                for (const w of [...eng, ...chn]) {
+                    if (w.length > 1 && !['the','and','for','that','this','with'].includes(w))
+                        words[w] = (words[w] || 0) + 1;
+                }
+            }
+            const sorted = Object.entries(words).filter(([w, c]) => c >= 3 && !stopWords.has(w)).sort((a, b) => b[1] - a[1]).slice(0, 20);
+            const now = new Date().toISOString().substring(0, 13) + ':00:00';
+            return c.json({ topics: sorted.map(([keyword, total]) => ({ keyword, total, points: [{ date_hour: now, count: total }] })) });
+        }
+        const series: Record<string, { date_hour: string; count: number }[]> = {};
+        for (const row of rows.results) {
+            if (!series[row.keyword]) series[row.keyword] = [];
+            series[row.keyword].push({ date_hour: row.date_hour, count: row.count });
+        }
+        const sorted = Object.entries(series)
+            .map(([keyword, points]) => ({ keyword, total: points.reduce((s, p) => s + p.count, 0), points }))
+            .sort((a, b) => b.total - a.total).slice(0, 20);
+        return c.json({ topics: sorted });
+    } catch (error) {
+        return c.json({ topics: [] });
+    }
+});
+
+// GET /trending — Trending keywords from last 24h
+news.get('/trending', async (c) => {
+    try {
+        const stopRows = await c.env.DB.prepare('SELECT word FROM stop_words').all<{ word: string }>();
+        const stopWords = new Set(stopRows.results.map(r => r.word));
+        const rows = await c.env.DB.prepare(`
+            SELECT title, description FROM news_items
+            WHERE is_deleted = 0 AND created_at > datetime('now', '-1 day')
+            ORDER BY created_at DESC LIMIT 100
+        `).all<{ title: string; description: string }>();
+        const words: Record<string, number> = {};
+        for (const row of rows.results) {
+            const clean = (row.title + ' ' + (row.description || ''))
+                .replace(/<[^>]+>/g, ' ')  // strip HTML
+                .replace(/https?:\/\/\S+/g, ' ')  // strip URLs
+                .replace(/[^\w\u4e00-\u9fff\s]/g, ' ')  // strip punctuation
+                .toLowerCase();
+            const eng = clean.match(/\b[a-z]{3,}\b/g) || [];
+            const chn = clean.match(/[\u4e00-\u9fff]{2,}/g) || [];
+            for (const w of [...eng, ...chn]) words[w] = (words[w] || 0) + 1;
+        }
+        const filtered = Object.entries(words)
+            .filter(([w, c]) => c >= 3 && !stopWords.has(w) && w.length > 1)
+            .sort((a, b) => b[1] - a[1]).slice(0, 30)
+            .map(([word, count]) => ({ word, count }));
+        return c.json({ trending: filtered });
+    } catch (error) {
+        return c.json({ trending: [] });
+    }
+});
+
 // Get single news item
 news.get('/:id', async (c) => {
     const id = c.req.param('id');
@@ -199,6 +275,35 @@ news.get('/categories/list', async (c) => {
     } catch (error) {
         console.error('Error fetching categories:', error);
         return c.json({ error: '获取分类失败' }, 500);
+    }
+});
+
+// GET /:id/content — Fetch full article content
+news.get('/:id/content', async (c) => {
+    const id = parseInt(c.req.param('id'));
+    try {
+        const item = await c.env.DB.prepare(
+            'SELECT id, title, url, content, description FROM news_items WHERE id = ? AND is_deleted = 0'
+        ).bind(id).first<{ id: number; title: string; url: string; content: string | null; description: string | null }>();
+        if (!item) return c.json({ error: '新闻不存在' }, 404);
+
+        if (item.content && item.content.length > 500) {
+            return c.json({ content: item.content });
+        }
+
+        const { fetchRichArticleContent } = await import('../services/contentFetcher');
+        const rich = await fetchRichArticleContent(item.url);
+        if (rich) {
+            await c.env.DB.prepare(
+                'UPDATE news_items SET content = ? WHERE id = ?'
+            ).bind(rich.html, item.id).run();
+            return c.json({ content: rich.html || rich.text });
+        }
+
+        return c.json({ content: item.description || item.content || '' });
+    } catch (error) {
+        console.error('Error fetching article content:', error);
+        return c.json({ error: '获取文章内容失败' }, 500);
     }
 });
 

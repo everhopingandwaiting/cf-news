@@ -8,6 +8,8 @@ import AuthModal from '../components/AuthModal';
 import NewsDetailModal from '../components/NewsDetailModal';
 import SourceManager from '../components/SourceManager';
 import Footer from '../components/Footer';
+import TrendingKeywords from '../components/TrendingKeywords';
+import TrendingTopics from '../components/TrendingTopics';
 import { useClipboardWS, jwtUserId } from '../hooks/useClipboardWS';
 import { getDailyDigest, getDigestDates } from '../api/client';
 
@@ -285,6 +287,8 @@ export default function Home() {
       {hasNewNews && <div className="bg-gradient-to-r from-indigo-500 to-purple-500 text-white px-5 py-3 rounded-lg mb-4 cursor-pointer font-medium text-sm text-center shadow animate-pulse hover:opacity-95" onClick={() => { setHasNewNews(false); setPage(1); loadNews(1); }}>⟡ 有新新闻，点击刷新</div>}
       <Suspense fallback={null}><DailyDigest digest={digestData} loading={digestLoading} collapsed={digestCollapsed} regenerating={digestRegenerating} dates={digestDates} onToggle={() => setDigestCollapsed(!digestCollapsed)} onRegenerate={handleRegenerateDigest} onDateChange={handleDigestDateChange} /></Suspense>
       <CategoryNav categories={CATEGORIES} active={category} onSelect={k => { setCategory(k); setSourceId(null); setPage(1); }} />
+      <TrendingKeywords onSearch={keyword => { setSearch(keyword); setPage(1); }} />
+      <TrendingTopics />
       <div className="flex gap-2.5 mb-5 items-center flex-wrap">
         <button className="px-4 py-2.5 rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 hover:border-indigo-500 hover:text-indigo-500 transition disabled:opacity-40 disabled:cursor-not-allowed" onClick={handleSummarize} disabled={summarizing}>{summarizing ? '⟡ 生成中...' : '⟡ AI 摘要'}</button>
         <button className={`px-4 py-2.5 rounded-lg text-[13px] font-medium border transition ${filterSummary ? 'bg-indigo-500 text-white border-transparent' : 'bg-transparent text-gray-600 border-gray-200 hover:bg-gray-50'}`} onClick={() => { setFilterSummary(filterSummary ? undefined : '1'); setPage(1); }}>⟡ 有摘要</button>

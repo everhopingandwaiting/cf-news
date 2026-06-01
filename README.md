@@ -37,6 +37,12 @@ AI-generated summary of today's top news, sorted by time with language markers (
 - **AI Q&A** — Ask natural language questions about news
 - **Daily digest** — Auto-generated daily news summary with history browser
 - **Related articles** — Keyword-matched related articles with one-click navigation
+- **Trending keywords** — Real-time trending keywords extracted from last 24h news, click to search
+- **Trending topics** — Time-series bar chart of hot topics over 3 days with hourly granularity
+- **Reader mode** — Full article content extraction with dark/light themes, reading time estimate, and rich typography
+- **In-app source browsing** — Browse original article in an iframe, or take a screenshot via Cloudflare Browser Rendering
+- **TTS speed control** — Adjustable playback speed (0.5x–1.5x) for voice narration
+- **Push notifications** — Subscribe to browser push notifications for breaking news
 - **User system** — Registration, login, JWT authentication
 - **Favorites & history** — Bookmark articles, track read history
 - **Comments** — Real-time WebSocket comments on news articles
@@ -256,6 +262,9 @@ cf-news/
 | GET | `/api/news` | List news (paginated, filterable) |
 | GET | `/api/news/:id` | Get news detail |
 | GET | `/api/news/sources/list` | List RSS sources |
+| GET | `/api/news/trending` | Trending keywords from last 24h |
+| GET | `/api/news/trending/topics?days=3` | Trending topics time series |
+| GET | `/api/news/:id/content` | Fetch full article content |
 | GET | `/api/comments/:newsId` | Get comments for a news item |
 | POST | `/api/auth/register` | Register |
 | POST | `/api/auth/login` | Login |
@@ -265,6 +274,7 @@ cf-news/
 | GET | `/api/ai/related/:id` | Get related articles |
 | GET | `/api/health` | Health check |
 | GET | `/api/image?url=` | Image proxy via CF edge cache |
+| GET | `/api/screenshot?url=` | Page screenshot via Browser Rendering |
 | GET | `/api/config` | Public config (Turnstile site key, etc.) |
 
 ### Authenticated (Bearer token)
@@ -281,6 +291,8 @@ cf-news/
 | POST | `/api/user/history/:id` | Mark as read |
 | POST | `/api/ai/ask` | Ask a question about news (supports streaming) |
 | POST | `/api/ai/digest/generate` | Force regenerate digest (admin only) |
+| POST | `/api/user/push/subscribe` | Subscribe to push notifications |
+| DELETE | `/api/user/push/unsubscribe` | Unsubscribe from push notifications |
 
 ### Admin (Bearer token, admin user only)
 

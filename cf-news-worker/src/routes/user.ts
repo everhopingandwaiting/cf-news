@@ -305,4 +305,33 @@ user.get('/profile', async (c) => {
     }
 });
 
+user.post('/push/subscribe', async (c) => {
+    const userId = await getUserId(c);
+    if (!userId) return c.json({ error: '未授权' }, 401);
+    try {
+        const { endpoint, keys } = await c.req.json();
+        if (!endpoint || !keys?.p256dh || !keys?.auth) return c.json({ error: 'Invalid subscription' }, 400);
+        await c.env.DB.prepare('INSERT OR REPLACE INTO push_subscriptions (user_id, endpoint, p256dh_key, auth_key) VALUES (?, ?, ?, ?)').bind(userId, endpoint, keys.p256dh, keys.auth).run();
+        return c.json({ success: true });
+    } catch (error) {
+        return c.json({ error: '订阅失败' }, 500);
+    }
+});
+
+user.delete('/push/unsubscribe', async (c) => {
+    const userId = await getUserId(c);
+    if (!userId) return c.json({ error: '未授权' }, 401);
+    try {
+        const { endpoint } = await c.req.json();
+        if (endpoint) {
+            await c.env.DB.prepare('DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?').bind(userId, endpoint).run();
+        } else {
+            await c.env.DB.prepare('DELETE FROM push_subscriptions WHERE user_id = ?').bind(userId).run();
+        }
+        return c.json({ success: true });
+    } catch (error) {
+        return c.json({ error: '取消订阅失败' }, 500);
+    }
+});
+
 export default user;
