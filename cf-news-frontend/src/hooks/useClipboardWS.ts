@@ -38,9 +38,12 @@ const BACKOFF_BASE = 1000;
 const BACKOFF_MAX = 30000;
 const DEBOUNCE_MS = 500;
 const HEARTBEAT_MS = 30000;
+const HEARTBEAT_TIMEOUT_MS = 90000;
+const HEARTBEAT_CHECK_MS = 10000;
+const OFFER_TIMEOUT_MS = 60000;
 
 interface ClipboardMsg {
-    type: 'text' | 'image' | 'sync_clipboard'
+    type: 'text' | 'image' | 'sync_clipboard' | 'heartbeat' | 'heartbeat_ack'
         | 'file_offer' | 'file_accept' | 'file_reject' | 'file_complete' | 'file_cancel';
     content?: string;
     data?: string;
@@ -58,6 +61,7 @@ interface IncomingFileOffer {
     fileSize: number;
     mime: string;
     totalChunks: number;
+    receivedAt: number;
 }
 
 interface FileTransfer {
@@ -80,6 +84,40 @@ function loadLS<T>(key: string, fallback: T): T {
 }
 function saveLS(key: string, val: any) {
     try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
+}
+
+const DB_NAME = 'cf_news';
+const DB_VERSION = 1;
+const STORE_NAME = 'clipboard_images';
+
+function dbOpen(): Promise<IDBDatabase> {
+    return new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, DB_VERSION);
+        req.onupgradeneeded = () => {
+            if (!req.result.objectStoreNames.contains(STORE_NAME))
+                req.result.createObjectStore(STORE_NAME, { keyPath: 'id' });
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+    });
+}
+
+function dbGet(key: string): Promise<{ data: string; mime: string; sender?: string }[] | null> {
+    return dbOpen().then(db => new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_NAME, 'readonly');
+        const req = tx.objectStore(STORE_NAME).get(key);
+        req.onsuccess = () => { resolve(req.result?.value ?? null); db.close(); };
+        req.onerror = () => { reject(req.error); db.close(); };
+    }));
+}
+
+function dbSet(key: string, value: { data: string; mime: string; sender?: string }[]) {
+    dbOpen().then(db => new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        tx.objectStore(STORE_NAME).put({ id: key, value });
+        tx.oncomplete = () => { resolve(); db.close(); };
+        tx.onerror = () => { reject(tx.error); db.close(); };
+    }));
 }
 
 function getDeviceName(): string {
@@ -107,7 +145,7 @@ function getDeviceName(): string {
 export function useClipboardWS(token: string, panelOpen: boolean) {
     const ukeys = useMemo(() => lsUserKeys(token), [token]);
     const [text, setText] = useState(() => loadLS(ukeys.text, ''));
-    const [images, setImages] = useState<{ data: string; mime: string; sender?: string }[]>(() => loadLS(ukeys.images, []));
+    const [images, setImages] = useState<{ data: string; mime: string; sender?: string }[]>([]);
     const [connectionState, setConnectionState] = useState<'connected' | 'connecting' | 'disconnected'>('disconnected');
     const [hasNewData, setHasNewData] = useState(false);
     const [pendingCount, setPendingCount] = useState(0);
@@ -118,6 +156,8 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
     const wsRef = useRef<WebSocket | null>(null);
     const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const heartbeatCheckRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const lastPongRef = useRef<number>(Date.now());
     const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const panelOpenRef = useRef(panelOpen);
     panelOpenRef.current = panelOpen;
@@ -125,10 +165,14 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
     const queueRef = useRef<ClipboardMsg[]>([]);
     const deviceNameRef = useRef(getDeviceName());
     const deviceIdRef = useRef(getDeviceId());
+    const disposedRef = useRef(false);
     const [deviceName] = useState(deviceNameRef.current);
 
     const clearHeartbeat = useCallback(() => {
         if (heartbeatRef.current) { clearInterval(heartbeatRef.current); heartbeatRef.current = null; }
+    }, []);
+    const clearHeartbeatCheck = useCallback(() => {
+        if (heartbeatCheckRef.current) { clearInterval(heartbeatCheckRef.current); heartbeatCheckRef.current = null; }
     }, []);
     const clearReconnect = useCallback(() => {
         if (reconnectRef.current) { clearTimeout(reconnectRef.current); reconnectRef.current = null; }
@@ -184,13 +228,20 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
         ws.onopen = () => {
             setConnectionState('connected');
             backoffRef.current = 0;
+            lastPongRef.current = Date.now();
             flushQueue();
             heartbeatRef.current = setInterval(() => {
                 if (ws.readyState === WebSocket.OPEN) ws.send('{"type":"heartbeat"}');
             }, HEARTBEAT_MS);
+            heartbeatCheckRef.current = setInterval(() => {
+                if (Date.now() - lastPongRef.current > HEARTBEAT_TIMEOUT_MS) {
+                    ws.close(4000, 'heartbeat timeout');
+                }
+            }, HEARTBEAT_CHECK_MS);
         };
 
         ws.onmessage = (event) => {
+            lastPongRef.current = Date.now();
             // Binary: file chunk
             if (event.data instanceof ArrayBuffer) {
                 const buf = event.data as ArrayBuffer;
@@ -219,12 +270,17 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
             // Text: control messages
             try {
                 const msg: ClipboardMsg = JSON.parse(event.data);
+                if (msg.type === 'heartbeat' || msg.type === 'heartbeat_ack') return;
                 if (msg.type === 'text' && msg.content !== undefined) {
                     clearDebounce();
                     setText(msg.content);
                     if (!panelOpenRef.current) setHasNewData(true);
                 } else if (msg.type === 'image' && msg.data) {
-                    setImages(prev => [...prev, { data: msg.data!, mime: msg.mime || 'image/png', sender: msg.sender }]);
+                    setImages(prev => {
+                        const next = [...prev, { data: msg.data!, mime: msg.mime || 'image/png', sender: msg.sender }].slice(-MAX_CACHED_IMAGES);
+                        dbSet(ukeys.images, next);
+                        return next;
+                    });
                     if (!panelOpenRef.current) setHasNewData(true);
                 } else if (msg.type === 'sync_clipboard' && msg.content) {
                     navigator.clipboard.writeText(msg.content).catch(() => {});
@@ -232,7 +288,7 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
                     setIncomingOffers(prev => [...prev, {
                         transferId: msg.transferId!, fileName: msg.fileName || 'unknown',
                         fileSize: msg.fileSize || 0, mime: msg.mime || 'application/octet-stream',
-                        totalChunks: msg.totalChunks || 0,
+                        totalChunks: msg.totalChunks || 0, receivedAt: Date.now(),
                     }]);
                     setFileTransfers(prev => {
                         if (prev.find(t => t.transferId === msg.transferId)) return prev;
@@ -266,8 +322,12 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
         };
 
         ws.onclose = () => {
-            clearHeartbeat();
+            clearHeartbeat(); clearHeartbeatCheck();
             wsRef.current = null;
+            if (disposedRef.current) {
+                setConnectionState('disconnected');
+                return;
+            }
             setConnectionState('connecting');
             const delay = Math.min(BACKOFF_BASE * Math.pow(2, backoffRef.current), BACKOFF_MAX);
             backoffRef.current++;
@@ -275,22 +335,67 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
         };
         ws.onerror = () => ws.close();
         wsRef.current = ws;
-    }, [token, clearReconnect, clearHeartbeat, clearDebounce, flushQueue]);
+    }, [token, clearReconnect, clearHeartbeat, clearHeartbeatCheck, clearDebounce, flushQueue, safeSend]);
 
     useEffect(() => {
+        disposedRef.current = false;
         if (!token) return;
         connect();
         return () => {
-            clearReconnect(); clearHeartbeat(); clearDebounce();
+            disposedRef.current = true;
+            clearReconnect(); clearHeartbeat(); clearHeartbeatCheck(); clearDebounce();
             wsRef.current?.close(); wsRef.current = null;
             backoffRef.current = 0;
             setConnectionState('disconnected');
         };
-    }, [token, connect, clearReconnect, clearHeartbeat, clearDebounce]);
+    }, [token, connect, clearReconnect, clearHeartbeat, clearHeartbeatCheck, clearDebounce]);
 
     useEffect(() => { saveLS(ukeys.text, text); }, [text, ukeys.text]);
-    useEffect(() => { saveLS(ukeys.images, images.slice(-MAX_CACHED_IMAGES).map(({ sender, ...rest }) => rest)); }, [images, ukeys.images]);
+    useEffect(() => {
+        dbGet(ukeys.images).then(stored => {
+            if (stored && stored.length) {
+                setImages(stored);
+                return;
+            }
+            const ls = loadLS<{ data: string; mime: string; sender?: string }[]>(ukeys.images, []);
+            if (ls.length) {
+                setImages(ls);
+                dbSet(ukeys.images, ls);
+                try { localStorage.removeItem(ukeys.images); } catch {}
+                return;
+            }
+            const count = loadLS<number>(ukeys.images + ':n', 0);
+            if (count) {
+                const migrated: { data: string; mime: string; sender?: string }[] = [];
+                for (let i = 0; i < Math.min(count, MAX_CACHED_IMAGES); i++) {
+                    const img = loadLS<{ data: string; mime: string; sender?: string } | null>(ukeys.images + ':' + i, null);
+                    if (img) migrated.push(img);
+                    try { localStorage.removeItem(ukeys.images + ':' + i); } catch {}
+                }
+                try { localStorage.removeItem(ukeys.images + ':n'); } catch {}
+                if (migrated.length) {
+                    setImages(migrated);
+                    dbSet(ukeys.images, migrated);
+                }
+            }
+        });
+    }, [ukeys.images]);
     useEffect(() => { if (panelOpen) setHasNewData(false); }, [panelOpen]);
+    useEffect(() => {
+        if (incomingOffers.length === 0) return;
+        const oldest = incomingOffers[0];
+        const elapsed = Date.now() - oldest.receivedAt;
+        if (elapsed >= OFFER_TIMEOUT_MS) {
+            setIncomingOffers(prev => prev.filter(o => o.transferId !== oldest.transferId));
+            safeSend({ type: 'file_reject', transferId: oldest.transferId });
+            return;
+        }
+        const t = setTimeout(() => {
+            setIncomingOffers(prev => prev.filter(o => o.transferId !== oldest.transferId));
+            safeSend({ type: 'file_reject', transferId: oldest.transferId });
+        }, OFFER_TIMEOUT_MS - elapsed);
+        return () => clearTimeout(t);
+    }, [incomingOffers, safeSend]);
 
     const clearNewDataFlag = useCallback(() => { setHasNewData(false); }, []);
     const sendText = useCallback((content: string) => {
@@ -300,14 +405,18 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
     }, [clearDebounce, safeSend]);
     const sendImage = useCallback((data: string, mime: string) => {
         safeSend({ type: 'image', data, mime, sender: deviceNameRef.current });
-        setImages(prev => [...prev, { data, mime, sender: deviceNameRef.current }]);
-    }, [safeSend]);
+        setImages(prev => {
+            const next = [...prev, { data, mime, sender: deviceNameRef.current }].slice(-MAX_CACHED_IMAGES);
+            dbSet(ukeys.images, next);
+            return next;
+        });
+    }, [safeSend, ukeys.images]);
     const syncClipboard = useCallback((content: string) => {
         safeSend({ type: 'sync_clipboard', content, sender: deviceNameRef.current });
     }, [safeSend]);
     const clearImages = useCallback(() => {
         setImages([]);
-        try { localStorage.removeItem(ukeys.images); } catch {}
+        dbSet(ukeys.images, []);
     }, [ukeys.images]);
 
     // WS chunked file send

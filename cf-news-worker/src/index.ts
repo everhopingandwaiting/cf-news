@@ -238,6 +238,10 @@ export default {
         const reqUrl = new URL(request.url);
         // Image proxy - fetch external images through CF edge cache
         if (reqUrl.pathname === '/api/image' && reqUrl.searchParams.has('url')) {
+            const referer = request.headers.get('Referer') || '';
+            if (!referer || !referer.includes(reqUrl.hostname)) {
+                return new Response('Forbidden', { status: 403 });
+            }
             const imgUrl = reqUrl.searchParams.get('url')!;
             const imgRes = await fetch(imgUrl, {
                 headers: { 'User-Agent': 'Mozilla/5.0 (compatible; CFNewsImage/1.0)', 'Referer': '' },

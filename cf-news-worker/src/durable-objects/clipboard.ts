@@ -39,9 +39,7 @@ export class ClipboardRoom {
         server.binaryType = 'arraybuffer';
         server.accept();
         this.connections.set(server, { userId, deviceId });
-        console.log(`Clipboard: user ${userId} device ${deviceId} connected (${this.connectionCount(userId)} active)`);
 
-        // Deliver pending sync_clipboard messages to newly connecting clients
         this.deliverPendingSync(server, userId);
 
         server.addEventListener('message', (event) => {
@@ -54,10 +52,17 @@ export class ClipboardRoom {
             }
             try {
                 const msg: ClipboardMessage = JSON.parse(event.data as string);
+                if (msg.type === 'heartbeat') {
+                    if (server.readyState === WebSocket.OPEN) {
+                        try { server.send('{"type":"heartbeat_ack"}'); } catch {}
+                    }
+                    return;
+                }
                 if (msg.type === 'sync_clipboard') {
                     this.storage.put(`sync:${userId}`, event.data as string).catch(() => {});
+                    this.storage.setAlarm(Date.now() + 60 * 60 * 1000).catch(() => {});
                 }
-                if (msg.type && msg.type !== 'heartbeat') {
+                if (msg.type) {
                     this.broadcast(server, info, msg);
                 }
             } catch (e) {
@@ -69,13 +74,27 @@ export class ClipboardRoom {
             this.connections.delete(server);
             const remaining = this.connectionCount(userId);
             console.log(`Clipboard: user ${userId} device ${deviceId} disconnected (${remaining} remaining)`);
-            // If no more connections for this user, clear pending sync
             if (remaining === 0) {
-                this.storage.delete(`sync:${userId}`).catch(() => {});
+                this.storage.setAlarm(Date.now() + 60 * 60 * 1000).catch(() => {});
             }
         });
 
+        server.addEventListener('error', (e) => {
+            console.error('Clipboard: connection error', e);
+        });
+
         return new Response(null, { status: 101, webSocket: client });
+    }
+
+    async alarm() {
+        try {
+            const keys = await this.storage.list({ prefix: 'sync:' });
+            for (const key of keys.keys()) {
+                await this.storage.delete(key);
+            }
+        } catch (e) {
+            console.error('Clipboard: alarm cleanup error', e);
+        }
     }
 
     private async deliverPendingSync(ws: WebSocket, userId: number) {
@@ -83,7 +102,6 @@ export class ClipboardRoom {
             const raw = await this.storage.get<string>(`sync:${userId}`);
             if (raw && ws.readyState === WebSocket.OPEN) {
                 ws.send(raw);
-                console.log(`Clipboard: delivered pending sync to user ${userId}`);
             }
         } catch (e) {
             console.error('Clipboard: deliverPendingSync error', e);
