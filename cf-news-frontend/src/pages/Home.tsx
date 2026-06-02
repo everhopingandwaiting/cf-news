@@ -4,11 +4,12 @@ import { getNews, getSources, triggerFetch, getMe, triggerSummarizeOne, getNewsI
 import Header from '../components/Header';
 import CategoryNav from '../components/CategoryNav';
 import NewsCard from '../components/NewsCard';
+import TrendingPanel from '../components/TrendingPanel';
 import AuthModal from '../components/AuthModal';
 import NewsDetailModal from '../components/NewsDetailModal';
 import SourceManager from '../components/SourceManager';
 import Footer from '../components/Footer';
-import TrendingPanel from '../components/TrendingPanel';
+
 import { useClipboardWS, jwtUserId } from '../hooks/useClipboardWS';
 import { getDailyDigest, getDigestDates } from '../api/client';
 
