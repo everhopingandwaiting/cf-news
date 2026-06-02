@@ -7,10 +7,11 @@ compatibility_date = "2026-05-28"
 directory = "./public"
 not_found_handling = "single-page-application"
 
-# D1 Database（通过 database_name 自动绑定，无需 database_id）
+# D1 Database（database_id 从 .env 的 D1_DATABASE_ID 注入）
 [[d1_databases]]
 binding = "DB"
 database_name = "news-db"
+database_id = "${D1_DATABASE_ID}"
 
 # Workers AI
 [ai]

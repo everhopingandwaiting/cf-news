@@ -15,11 +15,15 @@
 - 📰 多源 RSS 新闻聚合
 - 🔍 按分类过滤（科技、新闻、财经、娱乐）
 - 🔎 关键词搜索
-- 👤 用户注册/登录
+- 📊 趋势热词 & 热点追踪（基于 SMART IR + 中文停用词表）
+- 🤖 AI 摘要、问答、今日要闻
+- 👤 用户注册/登录、收藏、阅读历史
+- 💬 WebSocket 实时评论
 - ⭐ 收藏新闻
 - 📖 阅读历史
+- 🔔 推送通知
+- 📱 响应式前端界面（React + Tailwind）
 - ⏰ 每小时自动更新
-- 📱 响应式前端界面
 
 ## 快速开始
 
@@ -32,58 +36,35 @@
 ### 1. 克隆项目
 
 ```bash
-cd /root/cf_ddns/cf-news-worker
+cd cf-news-worker
 ```
 
 ### 2. 配置环境变量
 
 ```bash
 cp .env.example .env
-# 编辑 .env 文件，填入你的 Cloudflare API Token
+# 编辑 .env 文件，填入你的 Cloudflare API Token 和其他密钥
 ```
 
-### 3. 创建 D1 数据库
+### 3. 生成配置并部署
 
 ```bash
-# 使用 Docker 运行 wrangler
-docker compose run --rm db-init
-
-# 或者远程创建
-docker compose run --rm deploy wrangler d1 create news-db
+cd ..
+./deploy.sh
 ```
 
-创建后会返回 database_id，更新 `wrangler.toml` 中的 `database_id`。
-
-### 4. 创建 KV 命名空间
+### 4. 初始化数据库
 
 ```bash
-docker compose run --rm deploy wrangler kv namespace create KV
-```
+# schema.sql 建表（含 stop_words 等）
+docker run --rm --env-file cf-news-worker/.env cf-news-worker \
+  npx wrangler d1 execute news-db --remote --file=./src/db/schema.sql
 
-创建后会返回 namespace id，更新 `wrangler.toml` 中的 `id`。
-
-### 5. 初始化数据库
-
-```bash
-# 本地开发数据库
-docker compose run --rm db-init
-
-# 远程生产数据库
-docker compose run --rm deploy wrangler d1 execute news-db --remote --file=./src/db/schema.sql
-```
-
-### 6. 本地开发
-
-```bash
-docker compose up worker-dev
-```
-
-访问 http://localhost:8787 查看应用。
-
-### 7. 部署到生产环境
-
-```bash
-docker compose --profile deploy run --rm deploy
+# 导入停用词数据（2489 词：SMART IR + 哈工大+川大+百度中文 + HTML残留）
+cd cf-news-worker
+./scripts/import-stopwords.sh              # 生成 stopwords-import.sql
+docker run --rm --env-file .env -v $(pwd)/src/db/stopwords-import.sql:/app/import.sql \
+  cf-news-worker npx wrangler d1 execute news-db --remote --file=./import.sql
 ```
 
 ## 项目结构
