@@ -131,37 +131,18 @@ news.get('/', async (c) => {
     }
 });
 
-// GET /trending/topics — Time series of trending topics
+// GET /trending/topics — Time series of trending topics (from AI-populated table)
 news.get('/trending/topics', async (c) => {
-    const days = parseInt(c.req.query('days') || '7');
-    const stopRows = await c.env.DB.prepare('SELECT word FROM stop_words').all<{ word: string }>();
-    const stopWords = new Set(stopRows.results.map(r => r.word));
+    const days = parseInt(c.req.query('days') || '2');
     try {
         const rows = await c.env.DB.prepare(`
             SELECT keyword, date_hour, count FROM trending_topics
             WHERE date_hour > datetime('now', '-' || ? || ' days')
             ORDER BY date_hour DESC, count DESC LIMIT 500
         `).bind(days).all<{ keyword: string; date_hour: string; count: number }>();
-        if (rows.results.length === 0) {
-            const newsRows = await c.env.DB.prepare(`
-                SELECT title, description FROM news_items
-                WHERE is_deleted = 0 AND created_at > datetime('now', '-1 day')
-                ORDER BY created_at DESC LIMIT 100
-            `).all<{ title: string; description: string }>();
-            const words: Record<string, number> = {};
-            for (const row of newsRows.results) {
-                const text = (row.title + ' ' + (row.description || '')).toLowerCase();
-                const eng = text.match(/\b[a-z]{2,}\b/g) || [];
-                const chn = text.match(/[\u4e00-\u9fff]{2,}/g) || [];
-                for (const w of [...eng, ...chn]) {
-                    if (w.length > 1 && !['the','and','for','that','this','with'].includes(w))
-                        words[w] = (words[w] || 0) + 1;
-                }
-            }
-            const sorted = Object.entries(words).filter(([w, c]) => c >= 3 && !stopWords.has(w)).sort((a, b) => b[1] - a[1]).slice(0, 20);
-            const now = new Date().toISOString().substring(0, 13) + ':00:00';
-            return c.json({ topics: sorted.map(([keyword, total]) => ({ keyword, total, points: [{ date_hour: now, count: total }] })) });
-        }
+
+        if (rows.results.length === 0) return c.json({ topics: [] });
+
         const series: Record<string, { date_hour: string; count: number }[]> = {};
         for (const row of rows.results) {
             if (!series[row.keyword]) series[row.keyword] = [];
@@ -172,37 +153,53 @@ news.get('/trending/topics', async (c) => {
             .sort((a, b) => b.total - a.total).slice(0, 20);
         return c.json({ topics: sorted });
     } catch (error) {
+        console.error('trending/topics error:', error);
         return c.json({ topics: [] });
     }
 });
 
-// GET /trending — Trending keywords from last 24h
+// Asia/Shanghai time helpers (UTC+8). trending_topics.date_hour is stored in
+// Shanghai time so the 24h window matches the user's local day.
+function shanghaiToMs(dateHour: string): number {
+    return new Date(dateHour.replace(' ', 'T') + '+08:00').getTime();
+}
+
+function shanghaiCutoff(hoursAgo: number, now: Date = new Date()): string {
+    const shanghaiMs = now.getTime() + 8 * 3600 * 1000 - hoursAgo * 3600 * 1000;
+    const hourMs = Math.floor(shanghaiMs / 3600000) * 3600000;
+    return new Date(hourMs).toISOString().substring(0, 19).replace('T', ' ');
+}
+
+// GET /trending — Aggregate trending_topics with exponential time decay.
+// 4h half-life so recent hours dominate over yesterday's leftovers.
 news.get('/trending', async (c) => {
     try {
-        const stopRows = await c.env.DB.prepare('SELECT word FROM stop_words').all<{ word: string }>();
-        const stopWords = new Set(stopRows.results.map(r => r.word));
+        const cutoff = shanghaiCutoff(24);
         const rows = await c.env.DB.prepare(`
-            SELECT title, description FROM news_items
-            WHERE is_deleted = 0 AND created_at > datetime('now', '-1 day')
-            ORDER BY created_at DESC LIMIT 100
-        `).all<{ title: string; description: string }>();
-        const words: Record<string, number> = {};
+            SELECT keyword, date_hour, count FROM trending_topics
+            WHERE date_hour >= ?
+            ORDER BY date_hour DESC LIMIT 500
+        `).bind(cutoff).all<{ keyword: string; date_hour: string; count: number }>();
+
+        if (rows.results.length === 0) return c.json({ trending: [] });
+
+        const HALF_LIFE_HOURS = 4;
+        const now = Date.now();
+        const weighted = new Map<string, number>();
         for (const row of rows.results) {
-            const clean = (row.title + ' ' + (row.description || ''))
-                .replace(/<[^>]+>/g, ' ')  // strip HTML
-                .replace(/https?:\/\/\S+/g, ' ')  // strip URLs
-                .replace(/[^\w\u4e00-\u9fff\s]/g, ' ')  // strip punctuation
-                .toLowerCase();
-            const eng = clean.match(/\b[a-z]{3,}\b/g) || [];
-            const chn = clean.match(/[\u4e00-\u9fff]{2,}/g) || [];
-            for (const w of [...eng, ...chn]) words[w] = (words[w] || 0) + 1;
+            const ageHours = (now - shanghaiToMs(row.date_hour)) / 3600000;
+            const w = Math.exp(-ageHours * Math.LN2 / HALF_LIFE_HOURS);
+            weighted.set(row.keyword, (weighted.get(row.keyword) || 0) + row.count * w);
         }
-        const filtered = Object.entries(words)
-            .filter(([w, c]) => c >= 3 && !stopWords.has(w) && w.length > 1)
-            .sort((a, b) => b[1] - a[1]).slice(0, 30)
-            .map(([word, count]) => ({ word, count }));
-        return c.json({ trending: filtered });
+
+        const trending = Array.from(weighted.entries())
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 30)
+            .map(([word, score]) => ({ word, count: Math.round(score) }));
+
+        return c.json({ trending });
     } catch (error) {
+        console.error('trending error:', error);
         return c.json({ trending: [] });
     }
 });
