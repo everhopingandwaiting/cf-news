@@ -154,7 +154,7 @@ auth.post('/login', async (c) => {
     }
 
     // Check brute-force lock
-    const lockKey = 'login_fail:' + email.toLowerCase().trim();
+    const lockKey = LOGIN_LOCK_PREFIX + email.toLowerCase().trim();
     const lockRow = await c.env.DB.prepare("SELECT value FROM app_config WHERE key = ?").bind(lockKey).first<{ value: string }>();
     const failCount = parseInt(lockRow?.value || '0');
     if (failCount >= LOGIN_MAX_ATTEMPTS) {

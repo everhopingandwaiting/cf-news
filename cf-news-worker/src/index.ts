@@ -486,11 +486,9 @@ ${imgUrl ? `<meta property="og:image" content="${imgUrl}"><meta name="twitter:im
         if (event.cron === '0 * * * *') {
             console.log('Fetch cron fired, fetching news...');
             ctx.waitUntil(fetchNews(env, true));
-            // AI-powered trending keyword extraction.
-            // LLM only picks keywords; we count article matches in D1 so the
-            // count is real data, not the model's guess.
+        } else if (event.cron === '*/15 * * * *') {
+            console.log('Trending cron fired, refreshing topics...');
             ctx.waitUntil(refreshTrendingTopics(env));
-        } else if (event.cron === '0 8 * * *') {
         } else if (event.cron === '0 8 * * *') {
             console.log('Daily digest cron fired, generating digest...');
             ctx.waitUntil(generateDailyDigest(env).then(r => console.log(`Digest: ${r ? 'generated' : 'skipped'}`)));

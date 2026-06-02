@@ -47,6 +47,9 @@ CREATE TABLE IF NOT EXISTS news_items (
 -- AI Search 上传标记
 ALTER TABLE news_items ADD COLUMN ai_search_uploaded INTEGER DEFAULT 0;
 
+-- 去重哈希列
+ALTER TABLE news_items ADD COLUMN dedup_hash TEXT;
+
 -- 用户收藏表
 CREATE TABLE IF NOT EXISTS user_favorites (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,6 +94,23 @@ CREATE TABLE IF NOT EXISTS news_summaries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     news_id INTEGER UNIQUE NOT NULL,
     summary TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (news_id) REFERENCES news_items(id) ON DELETE CASCADE
+);
+
+-- AI 小编吐槽表
+CREATE TABLE IF NOT EXISTS news_ai_take (
+    news_id INTEGER PRIMARY KEY,
+    take TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (news_id) REFERENCES news_items(id) ON DELETE CASCADE
+);
+
+-- 多视角对比表
+CREATE TABLE IF NOT EXISTS news_perspectives (
+    news_id INTEGER PRIMARY KEY,
+    related_ids TEXT NOT NULL,
+    perspective TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (news_id) REFERENCES news_items(id) ON DELETE CASCADE
 );
