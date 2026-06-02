@@ -233,25 +233,8 @@ CREATE TABLE IF NOT EXISTS trending_topics (
 CREATE INDEX IF NOT EXISTS idx_trending_topics_hour ON trending_topics(date_hour DESC);
 CREATE INDEX IF NOT EXISTS idx_trending_topics_keyword ON trending_topics(keyword);
 
--- 停用词表（用于趋势热词过滤，可通过 INSERT/ DELETE 维护）
+-- 停用词表（来源：SMART IR + 哈工大+川大+百度中文停用词 + HTML残留词）
 CREATE TABLE IF NOT EXISTS stop_words (
-    word TEXT PRIMARY KEY
+    word TEXT PRIMARY KEY,
+    source TEXT NOT NULL DEFAULT 'unknown'
 );
-INSERT OR IGNORE INTO stop_words (word) VALUES
-('the'),('and'),('for'),('that'),('this'),('with'),('from'),('have'),('will'),('what'),
-('about'),('when'),('their'),('they'),('been'),('after'),('also'),('than'),('into'),('more'),
-('some'),('them'),('very'),('just'),('like'),('which'),('these'),('those'),('were'),('over'),
-('such'),('only'),('other'),('your'),('its'),('has'),('can'),('new'),('all'),('are'),
-('not'),('but'),('was'),('out'),('one'),('how'),('get'),('our'),('said'),('each'),
-('than'),('most'),('much'),('were'),('does'),('down'),('way'),('make'),('even'),('back'),
-('still'),('here'),('well'),('too'),('many'),('now'),('then'),('who'),('why'),('where'),
-('made'),('may'),('could'),('should'),('while'),('first'),('last'),('next'),('every'),('both'),
-('same'),('another'),('being'),('done'),('know'),('see'),('think'),('take'),('come'),('got'),
-('say'),('going'),('really'),('actually'),('little'),('old'),('good'),('great'),('big'),('high'),
-('long'),('right'),('says'),('us'),('two'),('three'),('year'),('time'),('people'),('world'),
-('years'),('week'),('day'),('days'),('way'),('life'),('part'),('work'),('thing'),('things'),
-('company'),('companies'),('million'),('billion'),('percent'),('according'),('including'),
-('without'),('within'),('across'),('around'),('already'),('always'),('never'),('ever'),('yet'),
-('still'),('https'),('http'),('www'),('com'),('img'),('src'),('alt'),('data'),('class'),
-('span'),('div'),('href'),('nbsp'),('amp'),('lt'),('gt'),('quot'),('style'),('width'),
-('height'),('srcset'),('content'),('type'),('none');
