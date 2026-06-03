@@ -135,6 +135,8 @@ INSERT OR IGNORE INTO news_sources (name, url, feed_url, category, language) VAL
     ('少数派', 'https://sspai.com', 'https://sspai.com/feed', 'tech', 'zh'),
     ('IT之家', 'https://ithome.com', 'https://www.ithome.com/rss/', 'tech', 'zh'),
     ('澎湃新闻', 'https://www.thepaper.cn', 'https://www.thepaper.cn/rss_newsDetail_wap.jsp', 'news', 'zh'),
+    ('人民网国际', 'https://www.people.com.cn', 'http://www.people.com.cn/rss/world.xml', 'news', 'zh'),
+    ('环球网', 'https://www.huanqiu.com', 'https://china.huanqiu.com/rss.xml', 'news', 'zh'),
     ('Hacker News', 'https://news.ycombinator.com', 'https://hnrss.org/frontpage', 'tech', 'en'),
     ('TechCrunch', 'https://techcrunch.com', 'https://techcrunch.com/feed/', 'tech', 'en'),
     ('The Verge', 'https://theverge.com', 'https://www.theverge.com/rss/index.xml', 'tech', 'en'),
