@@ -268,16 +268,29 @@ export async function generateAITake(env: Bindings, newsId: number, item: { titl
     if (existing) return;
 
     const prompt = TAKE_PROMPT.replace('{{TITLE}}', item.title || '');
-    const info = await getProviderInfo(env, 'mango');
-    if (!info) return;
-    const models = await getModels(env, 'mango');
-    if (models.length === 0) return;
+    const order = await getProviderOrder(env);
 
-    for (const model of models) {
-        const text = await doOpenAICompat(env, 'mango', info.base_url, info.api_key, model, prompt);
-        if (text && text.length > 3 && text.length < 200) {
-            await env.DB.prepare('INSERT OR REPLACE INTO news_ai_take (news_id, take) VALUES (?, ?)').bind(newsId, text).run();
-            return;
+    for (const provider of order) {
+        if (provider !== 'cloudflare') {
+            const info = await getProviderInfo(env, provider);
+            if (!info) continue;
+        }
+        const models = await getModels(env, provider);
+        if (models.length === 0) continue;
+
+        for (const model of models) {
+            let text: string | null = null;
+            if (provider === 'cloudflare') {
+                text = await doCF(env, model, prompt);
+            } else {
+                const info = await getProviderInfo(env, provider);
+                if (!info) continue;
+                text = await doOpenAICompat(env, provider, info.base_url, info.api_key, model, prompt);
+            }
+            if (text && text.length > 3 && text.length < 200) {
+                await env.DB.prepare('INSERT OR REPLACE INTO news_ai_take (news_id, take) VALUES (?, ?)').bind(newsId, text).run();
+                return;
+            }
         }
     }
 }
