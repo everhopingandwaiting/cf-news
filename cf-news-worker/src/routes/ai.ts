@@ -147,4 +147,53 @@ router.get('/related/:id', async (c) => {
     }
 });
 
+// POST /trending/insight — AI-generated explanation for why a keyword is trending.
+router.post('/trending/insight', async (c) => {
+    try {
+        const { keyword, hours } = await c.req.json<{ keyword: string; hours?: number }>();
+        if (!keyword || typeof keyword !== 'string') {
+            return c.json({ error: '请输入关键词' }, 400);
+        }
+        const period = hours || 24;
+
+        // Fetch recent news items matching this keyword
+        const escaped = keyword.replace(/[%_]/g, '=$&');
+        const newsRows = await c.env.DB.prepare(`
+            SELECT n.title, n.description, ns.name as source_name, n.published_at
+            FROM news_items n
+            LEFT JOIN news_sources ns ON n.source_id = ns.id
+            WHERE n.created_at >= datetime('now', '-' || ? || ' hours')
+              AND n.is_deleted = 0
+              AND (n.title LIKE ? ESCAPE '=' OR n.description LIKE ? ESCAPE '=')
+            ORDER BY n.published_at DESC
+            LIMIT 8
+        `).bind(period, `%${escaped}%`, `%${escaped}%`).all<{
+            title: string; description: string; source_name: string; published_at: string;
+        }>();
+
+        if (newsRows.results.length === 0) {
+            return c.json({ insight: `近期没有找到与"${keyword}"相关的新闻报道。` });
+        }
+
+        const articles = newsRows.results.map((r, i) =>
+            `标题: ${r.title}\n来源: ${r.source_name || '未知'}\n摘要: ${(r.description || '').substring(0, 200)}`
+        ).join('\n---\n');
+
+        const prompt = `以下是关于"${keyword}"的近期新闻报道。请用中文给出1-2句话的分析，解释为什么这个词最近很热门，指出主要原因或事件。语气简洁客观。\n\n${articles}\n\n分析:`;
+
+        const resp = await c.env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', {
+            messages: [
+                { role: 'system', content: '你是一个新闻趋势分析师。用简洁的中文分析关键词走红原因，不超过100字。' },
+                { role: 'user', content: prompt },
+            ],
+            max_tokens: 300,
+        });
+        const insight = (resp as any).response || (resp as any).choices?.[0]?.message?.content || '';
+
+        return c.json({ insight: insight.trim() || `未找到关于"${keyword}"的充分分析数据。` });
+    } catch (error) {
+        return c.json({ error: '生成分析失败', detail: String(error) }, 500);
+    }
+});
+
 export default router;

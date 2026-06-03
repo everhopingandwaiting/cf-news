@@ -33,3 +33,8 @@ body {
 
 @keyframes slideUp { from { transform: translateY(16px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
 @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+@utility animate-slideIn { animation: slideIn 0.25s ease-out; }
+@utility animate-slideUp { animation: slideUp 0.25s ease-out; }
+@utility animate-fadeIn { animation: fadeIn 0.2s ease-out; }

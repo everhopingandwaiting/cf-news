@@ -270,8 +270,10 @@ cf-news/
 | GET | `/api/news` | List news (paginated, filterable) |
 | GET | `/api/news/:id` | Get news detail |
 | GET | `/api/news/sources/list` | List RSS sources |
-| GET | `/api/news/trending` | Trending keywords from last 24h |
-| GET | `/api/news/trending/topics?days=3` | Trending topics time series |
+| GET | `/api/news/trending?hours=24` | Trending keywords (sources, burst, change) |
+| GET | `/api/news/trending/topics?hours=24` | Trending topics time series |
+| GET | `/api/news/trending/categories?hours=24` | Category distribution of trending content |
+| GET | `/api/news/trending/compare?keywords=a,b,c&hours=48` | Multi-keyword time series comparison |
 | GET | `/api/news/:id/content` | Fetch full article content |
 | GET | `/api/comments/:newsId` | Get comments for a news item |
 | POST | `/api/auth/register` | Register |
@@ -299,6 +301,7 @@ cf-news/
 | POST | `/api/user/history/:id` | Mark as read |
 | POST | `/api/ai/ask` | Ask a question about news (supports streaming) |
 | POST | `/api/ai/digest/generate` | Force regenerate digest (admin only) |
+| POST | `/api/ai/trending/insight` | AI-generated insight for trending keyword |
 | POST | `/api/user/push/subscribe` | Subscribe to push notifications |
 | DELETE | `/api/user/push/unsubscribe` | Unsubscribe from push notifications |
 

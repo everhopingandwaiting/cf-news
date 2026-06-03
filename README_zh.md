@@ -261,8 +261,10 @@ cf-news/
 | GET | `/api/news` | 获取新闻列表（分页、可筛选） |
 | GET | `/api/news/:id` | 获取新闻详情 |
 | GET | `/api/news/sources/list` | 获取 RSS 源列表 |
-| GET | `/api/news/trending` | 24h 趋势热词 |
-| GET | `/api/news/trending/topics?days=3` | 热点追踪时间序列 |
+| GET | `/api/news/trending?hours=24` | 趋势热词（含来源/突发/变化） |
+| GET | `/api/news/trending/topics?hours=24` | 热点追踪时间序列 |
+| GET | `/api/news/trending/categories?hours=24` | 分类分布 |
+| GET | `/api/news/trending/compare?keywords=a,b,c&hours=48` | 多关键词时间序列对比 |
 | GET | `/api/news/:id/content` | 获取文章全文 |
 | GET | `/api/comments/:newsId` | 获取新闻评论 |
 | POST | `/api/auth/register` | 用户注册 |
@@ -290,6 +292,7 @@ cf-news/
 | POST | `/api/user/history/:id` | 标记已读 |
 | POST | `/api/ai/ask` | AI 问答（支持流式响应） |
 | POST | `/api/ai/digest/generate` | 强制重新生成要闻（管理） |
+| POST | `/api/ai/trending/insight` | AI 趋势解读 |
 | POST | `/api/user/push/subscribe` | 订阅推送通知 |
 | DELETE | `/api/user/push/unsubscribe` | 取消订阅推送通知 |
 
