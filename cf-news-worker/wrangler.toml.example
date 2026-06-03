@@ -2,6 +2,10 @@ name = "cf-news-worker"
 main = "src/index.ts"
 compatibility_date = "2026-05-28"
 
+# CPU time limit 5min（cron >=1h 间隔自动升到 15min）
+[limits]
+cpu_ms = 300_000
+
 # Static assets (React frontend)
 [assets]
 directory = "./public"
