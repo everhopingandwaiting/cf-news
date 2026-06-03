@@ -102,7 +102,7 @@ news.get('/', async (c) => {
         countQuery += whereClause;
     }
 
-    query += ' ORDER BY n.created_at DESC, n.published_at DESC LIMIT ? OFFSET ?';
+    query += ' ORDER BY COALESCE(n.published_at, n.created_at) DESC LIMIT ? OFFSET ?';
     params.push(limit, offset);
 
     try {
