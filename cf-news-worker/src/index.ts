@@ -10,7 +10,7 @@ import adminRoutes from './routes/admin';
 import aiRoutes from './routes/ai';
 import { fetchNews } from './services/newsFetcher';
 import { fetchRichArticleContent } from './services/contentFetcher';
-import { generateSummaryForNews, generateAITake } from './services/summarizer';
+import { generateSummaryForNews, generateBatchSummariesForNews, generateAITake } from './services/summarizer';
 import { sendDailyDigest } from './services/emailDigest';
 import { generateDailyDigest } from './services/aiSearch';
 import { translateText } from './services/translator';
@@ -67,14 +67,7 @@ async function generatePendingSummaries(env: Bindings): Promise<void> {
     }
 
     console.log(`Found ${items.results.length} items without summaries`);
-    let done = 0;
-    for (let i = 0; i < items.results.length; i += 2) {
-        const batch = items.results.slice(i, i + 2);
-        const results = await Promise.allSettled(
-            batch.map(item => generateSummaryForNews(env, item.id, item))
-        );
-        done += results.filter(r => r.status === 'fulfilled' && r.value).length;
-    }
+    const done = await generateBatchSummariesForNews(env, items.results);
     console.log(`Summary generation complete: ${done}/${items.results.length}`);
 }
 
@@ -162,15 +155,7 @@ app.post('/api/summarize', async (c) => {
             ).all<{ id: number; title: string; description: string; content: string }>();
         }
 
-        // Process in batches of 2 to avoid overwhelming API limits
-        let done = 0;
-        for (let i = 0; i < items.results.length; i += 2) {
-            const batch = items.results.slice(i, i + 2);
-            const results = await Promise.allSettled(
-                batch.map((item: { id: number; title: string; description: string; content: string }) => generateSummaryForNews(c.env, item.id, item))
-            );
-            done += results.filter(r => r.status === 'fulfilled' && r.value).length;
-        }
+        const done = await generateBatchSummariesForNews(c.env, items.results);
         return c.json({ success: true, generated: done, total: items.results.length });
     } catch (error) {
         return c.json({ success: false, error: String(error) }, 500);

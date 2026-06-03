@@ -1,5 +1,5 @@
 import { Bindings } from '../types';
-import { getConfig, getConfigInt, getModels, getProviderInfo, getProviderOrder, getFailed, logAICall } from './aiProvider';
+import { getConfig, getConfigInt, getModels, getProviderInfo, getProviderOrder, getFailed, logAICall, callAI } from './aiProvider';
 
 // ========== 通用工具 ==========
 
@@ -142,6 +142,115 @@ export async function generateSummaryForNews(env: Bindings, newsId: number, item
     generateAITake(env, newsId, item).catch(() => {}); // no waitUntil here, run in same context
 
     return true;
+}
+
+// ========== Batch summarization ==========
+
+const SUMMARY_BATCH_SIZE = 10;
+
+/**
+ * Generate summaries for multiple articles, trying batch mode first.
+ * Batch: N articles in one AI call -> JSON array of summaries.
+ * Fallback: if JSON parse fails, retries per-article via generateSummaryForNews.
+ */
+export async function generateBatchSummariesForNews(
+    env: Bindings,
+    items: { id: number; title: string; description?: string; content?: string }[]
+): Promise<number> {
+    if (items.length === 0) return 0;
+    let successCount = 0;
+    for (let i = 0; i < items.length; i += SUMMARY_BATCH_SIZE) {
+        const batch = items.slice(i, i + SUMMARY_BATCH_SIZE);
+        successCount += await generateOneBatch(env, batch);
+    }
+    return successCount;
+}
+
+/** Try one batch: multi-article prompt -> JSON parse -> fallback per-article. */
+async function generateOneBatch(
+    env: Bindings,
+    items: { id: number; title: string; description?: string; content?: string }[]
+): Promise<number> {
+    // Build article content blocks; if anything is too short, skip batch for those
+    const articles: { text: string; tooShort: boolean }[] = items.map(item => {
+        const text = cleanText(item.content || item.description || '');
+        const input = text.length > 1500 ? text.substring(0, 1500) : text;
+        return { text: `${item.title}. ${input}`, tooShort: (`${item.title}. ${input}`).length < 60 };
+    });
+
+    // Articles under 60 chars can't be summarized meaningfully — handle one by one
+    if (articles.some(a => a.tooShort)) {
+        let count = 0;
+        for (let i = 0; i < items.length; i++) {
+            if (!articles[i].tooShort) {
+                if (await generateSummaryForNews(env, items[i].id, items[i])) count++;
+            }
+        }
+        return count;
+    }
+
+    // Build multi-article prompt
+    const blocks = articles.map((a, i) =>
+        `Article ${i + 1}:\nTitle: ${items[i].title}\nContent: ${a.text}`
+    ).join('\n\n');
+
+    const batchPrompt = `Please summarize each of the following news articles in 2 concise Chinese sentences. ONLY output Chinese, no English. Focus on key information.
+
+${blocks}
+
+Return a JSON array where each element has a "summary" field for the corresponding article.
+Example: [{"summary": "summary of article 1"}, {"summary": "summary of article 2"}]
+
+JSON array:`;
+
+    // Try batch via shared callAI (handles full provider chain with fallbacks)
+    const result = await callAI(env, batchPrompt, {
+        max_tokens: items.length * 120,
+        temperature: 0.3,
+    });
+
+    if (result) {
+        const summaries = parseBatchResult(result, items.length);
+        if (summaries) {
+            // Batch succeeded — save all, fire AITake for each
+            let count = 0;
+            for (let i = 0; i < items.length; i++) {
+                if (summaries[i]) {
+                    await env.DB.prepare(
+                        'INSERT OR REPLACE INTO news_summaries (news_id, summary) VALUES (?, ?)'
+                    ).bind(items[i].id, summaries[i]!.substring(0, 500)).run();
+                    generateAITake(env, items[i].id, items[i]).catch(() => {});
+                    count++;
+                }
+            }
+            return count;
+        }
+        // JSON parse failed — fall through to per-article retry
+    }
+
+    // Batch failed (API error or bad JSON) — fall back per-article
+    let count = 0;
+    for (const item of items) {
+        if (await generateSummaryForNews(env, item.id, item)) count++;
+    }
+    return count;
+}
+
+/** Parse batch JSON response. Returns null if unparseable. */
+function parseBatchResult(text: string, expectedCount: number): (string | null)[] | null {
+    try {
+        const jsonMatch = text.match(/\[[\s\S]*\]/);
+        if (!jsonMatch) return null;
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (!Array.isArray(parsed)) return null;
+        if (parsed.length < expectedCount) return null;
+        return parsed.slice(0, expectedCount).map((item: any) => {
+            const s = item?.summary;
+            return (s && typeof s === 'string' && s.length >= 10) ? s.trim() : null;
+        });
+    } catch {
+        return null;
+    }
 }
 
 // ========== AI 小编吐槽 ==========

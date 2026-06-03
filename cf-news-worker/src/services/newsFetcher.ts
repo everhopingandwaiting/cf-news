@@ -1,5 +1,5 @@
 import { Bindings, NewsSource } from '../types';
-import { generateSummaryForNews } from './summarizer';
+import { generateBatchSummariesForNews } from './summarizer';
 import { indexNewsItem } from './tokenizer';
 import { checkDuplicate, storeDedupHash } from './dedup';
 import { uploadNewsItem } from './aiSearch';
@@ -334,16 +334,10 @@ async function saveNewsItems(
         }
     }
 
-    // Generate AI summaries for new items (only for summary cron)
+    // Generate AI summaries for new items (only for manual fetch, not cron)
     if (newItems.length > 0 && !skipSummary) {
         console.log(`Generating AI summaries for ${newItems.length} new items...`);
-        for (const item of newItems.slice(0, 10)) {
-            try {
-                await generateSummaryForNews(env, item.id, item);
-            } catch (e) {
-                console.error(`Summary failed for "${item.title}":`, e);
-            }
-        }
+        await generateBatchSummariesForNews(env, newItems.slice(0, 10));
     }
 
     return savedCount;
