@@ -78,7 +78,7 @@ async function getProviderInfo(env: Bindings, name: string): Promise<{ base_url:
 
 async function getProviderOrder(env: Bindings): Promise<string[]> {
     const order = await getConfig(env, 'provider_order');
-    return order ? order.split(',').map(s => s.trim()) : ['cloudflare', 'openrouter', 'nvidia', 'mango'];
+    return order ? order.split(',').map(s => s.trim()) : ['groq', 'cloudflare', 'openrouter', 'nvidia', 'mango'];
 }
 
 // ========== 失败模型追踪 ==========
