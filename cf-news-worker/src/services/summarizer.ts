@@ -78,25 +78,48 @@ async function getProviderInfo(env: Bindings, name: string): Promise<{ base_url:
 
 async function getProviderOrder(env: Bindings): Promise<string[]> {
     const order = await getConfig(env, 'provider_order');
-    return order ? order.split(',').map(s => s.trim()) : ['mango', 'nvidia', 'openrouter', 'cloudflare'];
+    return order ? order.split(',').map(s => s.trim()) : ['cloudflare', 'openrouter', 'nvidia', 'mango'];
 }
 
 // ========== 失败模型追踪 ==========
+// 格式: { "models": { "模型名": unix_timestamp_s, ... } }
 
 async function getFailed(env: Bindings): Promise<string[]> {
     try {
         const row = await env.DB.prepare("SELECT value FROM app_config WHERE key = 'ai_failed_models'").first<{ value: string }>();
-        return row ? JSON.parse(row.value) : [];
+        if (!row) return [];
+        const data = JSON.parse(row.value);
+        // 旧格式（数组）— 忽略，已过期
+        if (Array.isArray(data)) return [];
+        if (!data.models || typeof data.models !== 'object') return [];
+        const now = Math.floor(Date.now() / 1000);
+        const ttl = await getConfigInt(env, '', 900); // 全局 TTL 默认 15 分钟
+        return Object.entries(data.models)
+            .filter(([, ts]) => now - (ts as number) < ttl)
+            .map(([model]) => model);
     } catch { return []; }
 }
 
 async function markFailed(env: Bindings, model: string, provider: string): Promise<void> {
-    const ttlKey = provider + '_failed_ttl';
-    const ttl = await getConfigInt(env, ttlKey, 300);
+    const now = Math.floor(Date.now() / 1000);
     const failed = await getFailed(env);
-    if (!failed.includes(model)) {
-        failed.push(model);
-        await env.DB.prepare("INSERT OR REPLACE INTO app_config (key, value) VALUES ('ai_failed_models', ?)").bind(JSON.stringify(failed)).run();
+    const row = await env.DB.prepare("SELECT value FROM app_config WHERE key = 'ai_failed_models'").first<{ value: string }>();
+    const models: Record<string, number> = {};
+    if (row) {
+        const data = JSON.parse(row.value);
+        if (data.models && typeof data.models === 'object') {
+            Object.assign(models, data.models);
+        }
+    }
+    // 清理过期条目
+    const ttl = await getConfigInt(env, '', 900);
+    for (const [m, ts] of Object.entries(models)) {
+        if (now - ts >= ttl) delete models[m];
+    }
+    if (!models[model]) {
+        models[model] = now;
+        await env.DB.prepare("INSERT OR REPLACE INTO app_config (key, value) VALUES ('ai_failed_models', ?)")
+            .bind(JSON.stringify({ models })).run();
     }
 }
 
@@ -129,7 +152,7 @@ async function doOpenAICompat(
             method: 'POST',
             headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], max_tokens: maxTokens, temperature: temp }),
-            signal: AbortSignal.timeout(120000),
+            signal: AbortSignal.timeout(30000),
         });
         if (!res.ok) {
             const errText = await res.text().catch(() => '');
