@@ -1,5 +1,5 @@
 import { Bindings } from '../types';
-import { getConfig, getConfigInt, getModels, getProviderInfo, getProviderOrder, getFailed, logAICall, callAI } from './aiProvider';
+import { getConfig, getConfigInt, getModels, getProviderInfo, getProviderOrder, getFailed, markFailed, logAICall, callAI } from './aiProvider';
 
 // ========== 通用工具 ==========
 

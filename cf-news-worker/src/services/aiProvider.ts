@@ -73,7 +73,7 @@ export async function getFailed(env: Bindings): Promise<string[]> {
     } catch { return []; }
 }
 
-async function markFailed(env: Bindings, model: string, _provider: string): Promise<void> {
+export async function markFailed(env: Bindings, model: string, _provider: string): Promise<void> {
     const now = Math.floor(Date.now() / 1000);
     const row = await env.DB.prepare("SELECT value FROM app_config WHERE key = 'ai_failed_models'").first<{ value: string }>();
     const models: Record<string, number> = {};
