@@ -173,8 +173,8 @@ export default function SourceManager({ token: _token, onClose }: Props) {
                                     <span className="px-1.5 py-0.5 rounded text-[11px] bg-emerald-100 text-emerald-600">{s.category}</span>
                                     <span className="text-gray-400 text-[12px] truncate max-w-[160px]">{s.feed_url}</span>
                                     {s.last_fetched_at && <span className="text-gray-400 text-[11px]">上次: {s.last_fetched_at.substring(0, 16)}</span>}
-                                    {s.last_fetched_at && <span className="text-gray-400 text-[11px]">新增: <span className={s.last_fetched_count > 0 ? 'text-emerald-500 font-medium' : 'text-gray-400'}>{s.last_fetched_count ?? 0}条</span></span>}
-                                    <span className="text-gray-400 text-[11px]">当日: <span className={s.today_count > 0 ? 'text-indigo-500 font-medium' : 'text-gray-400'}>{s.today_count ?? 0}条</span></span>
+                                    {s.last_fetched_at && <span className="text-gray-400 text-[11px]">新增: <span className={(s.last_fetched_count ?? 0) > 0 ? 'text-emerald-500 font-medium' : 'text-gray-400'}>{(s.last_fetched_count ?? 0)}条</span></span>}
+                                    <span className="text-gray-400 text-[11px]">当日: <span className={(s.today_count ?? 0) > 0 ? 'text-indigo-500 font-medium' : 'text-gray-400'}>{(s.today_count ?? 0)}条</span></span>
                                 </div>
                                 <div className="flex gap-1 shrink-0">
                                     <button className="px-2.5 py-1.5 rounded-lg text-[12px] text-emerald-600 hover:bg-emerald-50 transition disabled:opacity-40" onClick={() => handleFetch(s.id)} disabled={fetching === s.id}>{fetching === s.id ? '⟳' : '⟳刷新'}</button>

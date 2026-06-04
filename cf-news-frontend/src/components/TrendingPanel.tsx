@@ -1,4 +1,19 @@
 import { useState, useEffect } from 'react';
+import type { NewsItem } from '../types';
+
+// --- Constants ---
+const KEYWORD_ARTICLES_LIMIT = 6;
+const MAX_RISING_TOPICS = 20;
+const MAX_KEYWORD_SELECTOR = 15;
+const MAX_DROPPED_DISPLAY = 10;
+const MAX_KEYWORD_SOURCES = 2;
+const MAX_COMPARE_KWS = 4;
+const SKELETON_CLASSES = [
+    'h-4 w-24', 'h-6 w-20', 'h-8 w-32', 'h-10 w-28',
+    'h-6 w-16', 'h-4 w-36', 'h-8 w-24', 'h-10 w-20',
+    'h-4 w-28', 'h-6 w-32', 'h-8 w-18', 'h-10 w-26',
+];
+const SKELETON_RISE_COUNT = 8;
 
 interface SourceInfo {
     name: string;
@@ -12,6 +27,7 @@ interface TrendingWord {
     burst?: boolean;
     burst_score?: number;
     change_pct?: number;
+    is_new?: boolean;
 }
 
 interface TopicPoint {
@@ -35,6 +51,14 @@ interface CompareSeries {
     keyword: string;
     points: TopicPoint[];
 }
+
+interface HourlySource {
+    hour: string; source_id: number; source_name: string; count: number;
+}
+interface HourlyCat {
+    hour: string; category: string; count: number;
+}
+type HourlyRow = HourlySource | HourlyCat;
 
 const PERIODS = [
     { key: 6, label: '6h' },
@@ -64,16 +88,18 @@ function Skeleton({ className }: { className?: string }) {
     return <div className={`animate-pulse bg-gray-200 rounded ${className || ''}`} />;
 }
 
-export default function TrendingPanel({ visible, onClose, onSearch }: { visible: boolean; onClose: () => void; onSearch: (keyword: string) => void }) {
-    const [tab, setTab] = useState<'hot' | 'rise' | 'chart'>('hot');
+export default function TrendingPanel({ visible, onClose, onSearch, onSelectArticle }: { visible: boolean; onClose: () => void; onSearch: (keyword: string) => void; onSelectArticle?: (item: NewsItem) => void }) {
+    const [tab, setTab] = useState<'hot' | 'rise' | 'chart' | 'sources' | 'cats'>('hot');
     const [period, setPeriod] = useState(24);
     const [keywords, setKeywords] = useState<TrendingWord[]>([]);
     const [topics, setTopics] = useState<Topic[]>([]);
     const [activeTopic, setActiveTopic] = useState<string | null>(null);
     const [kwLoading, setKwLoading] = useState(true);
     const [tpLoading, setTpLoading] = useState(true);
+    const [dropped, setDropped] = useState<string[]>([]);
     const [activity, setActivity] = useState<{ hour: string; count: number }[]>([]);
     const [error, setError] = useState<string | null>(null);
+    const [kwArticles, setKwArticles] = useState<{ keyword: string; items: NewsItem[]; loading: boolean } | null>(null);
 
     // Category trends
     const [categories, setCategories] = useState<CategoryInfo[]>([]);
@@ -87,16 +113,22 @@ export default function TrendingPanel({ visible, onClose, onSearch }: { visible:
     // AI insight
     const [insight, setInsight] = useState<{ keyword: string; text: string; loading: boolean } | null>(null);
 
+    const [hourlySrc, setHourlySrc] = useState<HourlySource[]>([]);
+    const [hourlyCat, setHourlyCat] = useState<HourlyCat[]>([]);
+    const [hourlyLoading, setHourlyLoading] = useState(false);
+    const [kwFetchController, setKwFetchController] = useState<AbortController | null>(null);
+
     useEffect(() => {
         if (!visible) return;
         setError(null);
         setKwLoading(true);
         setTpLoading(true);
         setCatLoading(true);
+        setKwArticles(null);
 
         fetch(`/api/news/trending?hours=${period}`)
             .then(r => r.json())
-            .then(data => { if (data.trending) setKeywords(data.trending); })
+            .then(data => { if (data.trending) setKeywords(data.trending); if (data.dropped) setDropped(data.dropped); })
             .catch(() => setError('加载趋势数据失败'))
             .finally(() => setKwLoading(false));
 
@@ -111,6 +143,16 @@ export default function TrendingPanel({ visible, onClose, onSearch }: { visible:
             .then(data => { if (data.categories) setCategories(data.categories); })
             .catch(() => {})
             .finally(() => setCatLoading(false));
+
+        setHourlyLoading(true);
+        fetch(`/api/news/trending/hourly?hours=${period}`)
+            .then(r => r.json())
+            .then(data => {
+                if (data.sources) setHourlySrc(data.sources);
+                if (data.categories) setHourlyCat(data.categories);
+            })
+            .catch(() => {})
+            .finally(() => setHourlyLoading(false));
     }, [visible, period]);
 
     // Activity timeline from topics data
@@ -166,12 +208,24 @@ export default function TrendingPanel({ visible, onClose, onSearch }: { visible:
         })
         .filter((r): r is NonNullable<typeof r> => r !== null)
         .sort((a, b) => b.pct - a.pct)
-        .slice(0, 20);
+        .slice(0, MAX_RISING_TOPICS);
 
     function toggleCompareKw(kw: string) {
         setCompareKws(prev =>
             prev.includes(kw) ? prev.filter(k => k !== kw) : [...prev, kw]
         );
+    }
+
+    function fetchKeywordArticles(keyword: string) {
+        if (kwArticles?.keyword === keyword && !kwArticles.loading) return;
+        if (kwFetchController) kwFetchController.abort();
+        const controller = new AbortController();
+        setKwFetchController(controller);
+        setKwArticles({ keyword, items: [], loading: true });
+        fetch(`/api/news?search=${encodeURIComponent(keyword)}&limit=${KEYWORD_ARTICLES_LIMIT}`, { signal: controller.signal })
+            .then(r => r.json())
+            .then(data => { if (!controller.signal.aborted) setKwArticles({ keyword, items: data.news || [], loading: false }); })
+            .catch(() => { if (!controller.signal.aborted) setKwArticles({ keyword, items: [], loading: false }); });
     }
 
     function fetchInsight(keyword: string) {
@@ -234,17 +288,112 @@ export default function TrendingPanel({ visible, onClose, onSearch }: { visible:
         );
     }
 
+    function renderHourlyChart(mode: 'sources' | 'cats') {
+        const raw = mode === 'sources' ? hourlySrc : hourlyCat;
+        if (hourlyLoading) {
+            return (
+                <div className="mt-4 bg-gray-50 rounded-xl p-4 border border-gray-100">
+                    <div className="flex items-center justify-center gap-2 py-6">
+                        <span className="w-4 h-4 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin" />
+                        <span className="text-[12px] text-gray-400">加载数据...</span>
+                    </div>
+                </div>
+            );
+        }
+        if (raw.length === 0) {
+            return <div className="text-center py-8 text-gray-400 text-sm">暂无数据</div>;
+        }
+
+        const hours = [...new Set(raw.map(r => r.hour))].sort();
+        const getName = (r: HourlyRow): string => mode === 'sources' ? (r as HourlySource).source_name : (r as HourlyCat).category;
+        const groups = [...new Set(raw.map(getName))] as string[];
+        let topGroups: string[];
+        let otherLabel = '';
+        if (mode === 'sources') {
+            const totals: Record<string, number> = {};
+            for (const r of raw) totals[getName(r)] = (totals[getName(r)] || 0) + r.count;
+            topGroups = groups.sort((a, b) => (totals[b] || 0) - (totals[a] || 0)).slice(0, 6);
+            otherLabel = '其他';
+        } else {
+            topGroups = groups;
+        }
+
+        const series: Record<string, number[]> = {};
+        for (const g of topGroups) series[g] = hours.map(() => 0);
+        if (otherLabel) series[otherLabel] = hours.map(() => 0);
+        for (const r of raw) {
+            const hi = hours.indexOf(r.hour);
+            const name = getName(r);
+            if (topGroups.includes(name)) {
+                series[name][hi] += r.count;
+            } else if (otherLabel) {
+                series[otherLabel][hi] += r.count;
+            }
+        }
+
+        const maxTotal = Math.max(...hours.map((_, i) => Object.values(series).reduce((s, arr) => s + arr[i], 0)), 1);
+        const H = 140, W = 600, PAD = 4;
+
+        return (
+            <div className="mt-4 bg-gray-50 rounded-xl p-4 border border-gray-100">
+                <div className="text-[12px] text-gray-500 mb-2 text-center font-medium">{mode === 'sources' ? '每小时源分布' : '每小时类分布'}</div>
+                {hours.length <= 1 ? (
+                    <div className="text-center py-8 text-gray-400 text-sm">需要更多小时的数据</div>
+                ) : (
+                    <>
+                        <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-36" preserveAspectRatio="xMidYMid meet">
+                            {hours.map((h, hi) => {
+                                let yOff = 0;
+                                const barW = (W - PAD * 2) / hours.length * 0.7;
+                                const x = hi * (W - PAD * 2) / hours.length + PAD + ((W - PAD * 2) / hours.length - barW) / 2;
+                                return Object.keys(series).map((g, gi) => {
+                                    const val = series[g][hi];
+                                    if (val === 0) return null;
+                                    const barH = (val / maxTotal) * (H - PAD * 2);
+                                    const y = H - PAD - yOff - barH;
+                                    yOff += barH;
+                                    return <g key={`${h}-${gi}`}><rect x={x} y={y} width={barW} height={barH}
+                                        fill={CHART_COLORS[gi % CHART_COLORS.length]} rx={1} opacity={0.9} /><title>{g}: {val}</title></g>;
+                                });
+                            })}
+                        </svg>
+                        <div className="flex mt-1" style={{ paddingLeft: `${PAD}px` }}>
+                            {hours.map((h, i) => (
+                                <div key={h} className="flex-1 text-[9px] text-gray-400 text-center truncate"
+                                    style={{ display: hours.length > 12 && i % Math.ceil(hours.length / 8) !== 0 ? 'none' : 'block' }}>
+                                    {h.substring(11, 16)}
+                                </div>
+                            ))}
+                        </div>
+                        <div className="flex flex-wrap gap-2 justify-center mt-2">
+                            {Object.keys(series).map((g, gi) => (
+                                <span key={g} className="text-[10px] text-gray-600 flex items-center gap-1">
+                                    <span className="w-2 h-2 rounded-sm inline-block" style={{ backgroundColor: CHART_COLORS[gi % CHART_COLORS.length] }} />
+                                    {g}
+                                </span>
+                            ))}
+                        </div>
+                    </>
+                )}
+            </div>
+        );
+    }
+
     return (
         <div className="fixed inset-0 z-50 flex justify-end">
             <div className="absolute inset-0 bg-black/30 animate-fadeIn" onClick={onClose} />
             <div className="relative w-full max-w-md bg-white shadow-2xl h-full overflow-y-auto animate-slideIn">
-                <div className="sticky top-0 bg-white/95 backdrop-blur-sm z-10 flex items-center justify-between px-5 py-3 border-b border-gray-200">
-                    <div className="flex gap-1.5">
-                        <button className={`px-3 py-1.5 rounded-lg text-[13px] font-medium transition cursor-pointer ${tab === 'hot' ? 'bg-indigo-500 text-white shadow-sm' : 'text-gray-700 hover:bg-gray-100'}`} onClick={() => setTab('hot')}>热词</button>
-                        <button className={`px-3 py-1.5 rounded-lg text-[13px] font-medium transition cursor-pointer ${tab === 'rise' ? 'bg-indigo-500 text-white shadow-sm' : 'text-gray-700 hover:bg-gray-100'}`} onClick={() => setTab('rise')}>上升</button>
-                        <button className={`px-3 py-1.5 rounded-lg text-[13px] font-medium transition cursor-pointer ${tab === 'chart' ? 'bg-indigo-500 text-white shadow-sm' : 'text-gray-700 hover:bg-gray-100'}`} onClick={() => setTab('chart')}>趋势</button>
+                <div className="sticky top-0 bg-white/95 backdrop-blur-sm z-10 border-b border-gray-200">
+                    <div className="flex items-center justify-between px-5 py-3">
+                        <div className="flex gap-1.5 overflow-x-auto scrollbar-none flex-nowrap">
+                            <button className={`shrink-0 px-3 py-1.5 rounded-lg text-[13px] font-medium transition cursor-pointer ${tab === 'hot' ? 'bg-indigo-500 text-white shadow-sm' : 'text-gray-700 hover:bg-gray-100'}`} onClick={() => setTab('hot')} aria-label="热门关键词">热词</button>
+                            <button className={`shrink-0 px-3 py-1.5 rounded-lg text-[13px] font-medium transition cursor-pointer ${tab === 'rise' ? 'bg-indigo-500 text-white shadow-sm' : 'text-gray-700 hover:bg-gray-100'}`} onClick={() => setTab('rise')} aria-label="上升趋势">上升</button>
+                            <button className={`shrink-0 px-3 py-1.5 rounded-lg text-[13px] font-medium transition cursor-pointer ${tab === 'chart' ? 'bg-indigo-500 text-white shadow-sm' : 'text-gray-700 hover:bg-gray-100'}`} onClick={() => setTab('chart')} aria-label="关键词对比">对比</button>
+                            <button className={`shrink-0 px-3 py-1.5 rounded-lg text-[13px] font-medium transition cursor-pointer ${tab === 'sources' ? 'bg-indigo-500 text-white shadow-sm' : 'text-gray-700 hover:bg-gray-100'}`} onClick={() => setTab('sources')} aria-label="来源分布">来源</button>
+                            <button className={`shrink-0 px-3 py-1.5 rounded-lg text-[13px] font-medium transition cursor-pointer ${tab === 'cats' ? 'bg-indigo-500 text-white shadow-sm' : 'text-gray-700 hover:bg-gray-100'}`} onClick={() => setTab('cats')} aria-label="分类分布">分类</button>
+                        </div>
+                        <button className="shrink-0 ml-2 text-gray-400 hover:text-gray-700 text-xl leading-none cursor-pointer" onClick={onClose} aria-label="关闭面板">&times;</button>
                     </div>
-                    <button className="text-gray-400 hover:text-gray-700 text-xl leading-none cursor-pointer" onClick={onClose}>&times;</button>
                 </div>
 
                 {/* Period selector — shows on all tabs */}
@@ -258,6 +407,8 @@ export default function TrendingPanel({ visible, onClose, onSearch }: { visible:
                     ))}
                 </div>
 
+                <div className="p-4 pt-2">
+
                 {/* Error banner */}
                 {error && (
                     <div className="mx-4 mb-2 px-3 py-2 bg-red-50 border border-red-200 rounded-lg flex items-center justify-between">
@@ -266,70 +417,133 @@ export default function TrendingPanel({ visible, onClose, onSearch }: { visible:
                     </div>
                 )}
 
-                <div className="p-4 pt-2">
-                    {tab === 'hot' && (
-                        kwLoading ? (
-                            <div className="flex flex-wrap gap-2.5 justify-center py-4">
-                                {Array.from({ length: 12 }).map((_, i) => (
-                                    <Skeleton key={i} className={`h-${(i % 4 + 1) * 2} w-${(i % 3 + 1) * 6 + 8} rounded-xl`} />
-                                ))}
-                            </div>
-                        ) : keywords.length === 0 ? (
-                            <div className="text-center py-12 text-gray-400 text-sm">{error || '暂无数据'}</div>
-                        ) : (
-                            <div className="flex flex-wrap gap-2.5 justify-center py-2">
-                                {keywords.map((kw, i) => {
-                                    const ratio = kw.count / maxWordCount;
-                                    const color = PALETTE[i % PALETTE.length];
-                                    const size = ratio > 0.8 ? 'text-base font-bold' : ratio > 0.6 ? 'text-sm font-semibold' : ratio > 0.4 ? 'text-xs font-medium' : 'text-[11px]';
-                                    const rotate = i % 5 === 0 ? 'rotate-[-1.5deg]' : i % 7 === 0 ? 'rotate-[1.5deg]' : '';
-                                    const pad = ratio > 0.6 ? 'px-3.5 py-2' : 'px-3 py-1.5';
-                                    return (
-                                        <div key={kw.word} className="flex flex-col items-center">
+                {tab === 'hot' && (
+                    kwLoading ? (
+                        <div className="flex flex-wrap gap-2.5 justify-center py-4">
+                            {SKELETON_CLASSES.map((cls, i) => (
+                                <Skeleton key={i} className={`${cls} rounded-xl`} />
+                            ))}
+                        </div>
+                    ) : keywords.length === 0 ? (
+                        <div className="text-center py-12 text-gray-400 text-sm">{error || '暂无数据'}</div>
+                    ) : (
+                        <div className="flex flex-wrap gap-2.5 justify-center py-2">
+                            {keywords.map((kw, i) => {
+                                const ratio = kw.count / maxWordCount;
+                                const color = PALETTE[i % PALETTE.length];
+                                const size = ratio > 0.8 ? 'text-base font-bold' : ratio > 0.6 ? 'text-sm font-semibold' : ratio > 0.4 ? 'text-xs font-medium' : 'text-[11px]';
+                                const rotate = i % 5 === 0 ? 'rotate-[-1.5deg]' : i % 7 === 0 ? 'rotate-[1.5deg]' : '';
+                                const pad = ratio > 0.6 ? 'px-3.5 py-2' : 'px-3 py-1.5';
+                                return (
+                                    <div key={kw.word} className="flex flex-col items-center">
+                                        <button
+                                            className={`${color} ${size} ${pad} ${rotate} rounded-xl border transition-all duration-200 cursor-pointer hover:scale-105 hover:shadow-sm active:scale-95 relative`}
+                                            onClick={() => fetchKeywordArticles(kw.word)}
+                                            title={`${displayWord(kw.word)} (${kw.count}) - 点击查看相关文章`}>
+                                            {isBigram(kw.word) && <span className="text-[9px] opacity-50 font-normal mr-0.5">词组</span>}
+                                            {displayWord(kw.word)}
+                                            {kw.is_new && <span className="absolute -top-2 -left-2 text-[10px] bg-emerald-500 text-white px-1 rounded-full font-bold animate-bounce">新</span>}
+                                            {kw.burst && <span className="absolute -top-2 -right-2 text-[14px] animate-pulse">🔥</span>}
+                                            {kw.change_pct !== undefined && kw.change_pct !== 0 && (
+                                                <span className={`text-[10px] ml-1 font-semibold ${kw.change_pct > 0 ? 'text-red-500' : 'text-green-500'}`}>
+                                                    {kw.change_pct > 0 ? '↑' : '↓'}{Math.abs(kw.change_pct)}%
+                                                </span>
+                                            )}
+                                        </button>
+                                        {/* Source tags + action buttons */}
+                                        <div className="flex items-center gap-1 mt-0.5">
+                                            {kw.sources && kw.sources.length > 0 && (
+                                                <span className="text-[9px] text-gray-400 truncate max-w-[80px]">
+                                                    {kw.sources.slice(0, MAX_KEYWORD_SOURCES).map(s => s.name).join('/')}
+                                                </span>
+                                            )}
                                             <button
-                                                className={`${color} ${size} ${pad} ${rotate} rounded-xl border transition-all duration-200 cursor-pointer hover:scale-105 hover:shadow-sm active:scale-95 relative`}
-                                                onClick={() => { onSearch(kw.word); onClose(); }}
-                                                title={`${displayWord(kw.word)} (${kw.count})`}>
-                                                {isBigram(kw.word) && <span className="text-[9px] opacity-50 font-normal mr-0.5">词组</span>}
-                                                {displayWord(kw.word)}
-                                                {kw.burst && <span className="absolute -top-2 -right-2 text-[14px] animate-pulse">🔥</span>}
-                                                {kw.change_pct !== undefined && kw.change_pct !== 0 && (
-                                                    <span className={`text-[10px] ml-1 font-semibold ${kw.change_pct > 0 ? 'text-red-500' : 'text-green-500'}`}>
-                                                        {kw.change_pct > 0 ? '↑' : '↓'}{Math.abs(kw.change_pct)}%
-                                                    </span>
-                                                )}
+                                                className="text-[10px] text-gray-400 hover:text-gray-600 cursor-pointer leading-none"
+                                                onClick={(e) => { e.stopPropagation(); onSearch(kw.word); onClose(); }}
+                                                title="搜索此关键词">
+                                                🔍
                                             </button>
-                                            {/* Source tags + insight button */}
-                                            <div className="flex items-center gap-1 mt-0.5">
-                                                {kw.sources && kw.sources.length > 0 && (
-                                                    <span className="text-[9px] text-gray-400 truncate max-w-[80px]">
-                                                        {kw.sources.slice(0, 2).map(s => s.name).join('/')}
-                                                    </span>
+                                            <button
+                                                className="text-[10px] text-indigo-400 hover:text-indigo-600 cursor-pointer leading-none"
+                                                onClick={(e) => { e.stopPropagation(); fetchInsight(kw.word); }}
+                                                title="AI 解读">
+                                                💡
+                                            </button>
+                                            <button
+                                                className={`text-[10px] cursor-pointer leading-none ${compareKws.includes(kw.word) ? 'text-indigo-500 font-bold' : 'text-gray-300 hover:text-gray-500'}`}
+                                                onClick={(e) => { e.stopPropagation(); toggleCompareKw(kw.word); }}
+                                                title={compareKws.includes(kw.word) ? '取消对比' : '加入对比'}>
+                                                {compareKws.includes(kw.word) ? '📊✓' : '📊'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )
+                )}
+                {compareSeries.length >= 2 && (
+                    <div className="mt-4">{renderCompareChart()}</div>
+                )}
+
+                {/* Keyword articles inline */}
+                {tab === 'hot' && kwArticles && (
+                    <div className="mt-4 pt-3 border-t border-gray-100">
+                        <div className="flex items-center justify-between mb-2">
+                            <div className="text-[12px] text-gray-500 font-medium">📰 "{displayWord(kwArticles.keyword)}" 相关文章</div>
+                            <button className="text-[11px] text-gray-400 hover:text-gray-600 cursor-pointer"
+                                onClick={() => setKwArticles(null)}>关闭</button>
+                        </div>
+                        {kwArticles.loading ? (
+                            <div className="flex items-center justify-center gap-2 py-4">
+                                <span className="w-3 h-3 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin" />
+                                <span className="text-[12px] text-gray-400">搜索中...</span>
+                            </div>
+                        ) : kwArticles.items.length === 0 ? (
+                            <div className="text-center py-4 text-gray-400 text-[12px]">没有找到相关文章</div>
+                        ) : (
+                            <div className="space-y-1.5 max-h-64 overflow-y-auto">
+                                {kwArticles.items.map((item) => (
+                                    <div key={item.id}
+                                        className="flex items-start gap-2 px-2 py-1.5 rounded-lg hover:bg-gray-50 cursor-pointer transition"
+                                        onClick={() => { if (onSelectArticle) { onSelectArticle(item); onClose(); } }}>
+                                        {item.image_url && (
+                                            <img src={item.image_url} alt="" className="w-8 h-8 rounded object-cover mt-0.5 shrink-0"
+                                                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                                        )}
+                                        <div className="min-w-0 flex-1">
+                                            <div className="text-[12px] text-gray-800 font-medium leading-tight line-clamp-2">{item.title}</div>
+                                            <div className="flex items-center gap-2 mt-0.5">
+                                                <span className="text-[10px] text-gray-400">{item.source_name}</span>
+                                                {item.published_at && (
+                                                    <span className="text-[10px] text-gray-400">{item.published_at.substring(11, 16)}</span>
                                                 )}
-                                                <button
-                                                    className="text-[10px] text-indigo-400 hover:text-indigo-600 cursor-pointer leading-none"
-                                                    onClick={(e) => { e.stopPropagation(); fetchInsight(kw.word); }}
-                                                    title="AI 解读">
-                                                    💡
-                                                </button>
-                                                <button
-                                                    className={`text-[10px] cursor-pointer leading-none ${compareKws.includes(kw.word) ? 'text-indigo-500' : 'text-gray-300 hover:text-gray-500'}`}
-                                                    onClick={(e) => { e.stopPropagation(); toggleCompareKw(kw.word); }}
-                                                    title={compareKws.includes(kw.word) ? '取消对比' : '加入对比'}>
-                                                    📊
-                                                </button>
                                             </div>
                                         </div>
-                                    );
-                                })}
+                                    </div>
+                                ))}
                             </div>
-                        )
-                    )}
+                        )}
+                    </div>
+                )}
+
+                {tab === 'hot' && dropped.length > 0 && (
+                    <div className="mt-4 pt-3 border-t border-gray-100">
+                        <div className="text-[11px] text-gray-400 mb-2 font-medium">📉 已掉出热词榜</div>
+                        <div className="flex flex-wrap gap-1.5">
+                            {dropped.slice(0, MAX_DROPPED_DISPLAY).map((w, i) => (
+                                <span key={w} className={`text-[11px] px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full ${i < 3 ? 'line-through decoration-gray-300' : ''}`}>
+                                    {displayWord(w)}
+                                </span>
+                            ))}
+                        </div>
+                    </div>
+                )}
 
                     {tab === 'rise' && (
                         tpLoading ? (
                             <div className="space-y-2 py-4">
-                                {Array.from({ length: 8 }).map((_, i) => (
+                                {Array.from({ length: SKELETON_RISE_COUNT }).map((_, i) => (
                                     <div key={i} className="flex items-center justify-between px-3 py-2">
                                         <Skeleton className="h-4 w-32" />
                                         <Skeleton className="h-4 w-20" />
@@ -347,7 +561,10 @@ export default function TrendingPanel({ visible, onClose, onSearch }: { visible:
                                         <div className="flex items-center gap-2 min-w-0">
                                             <span className="text-[11px] text-gray-400 w-5 shrink-0">{i + 1}</span>
                                             <span className="text-sm text-gray-800 font-medium truncate">{r.keyword}</span>
-                                            {r.burst && <span className="text-[12px]">🔥</span>}
+                                            <span className="flex items-center gap-0.5 shrink-0">
+                                                {keywords.find(k => k.word === r.keyword)?.is_new && <span className="text-[9px] bg-emerald-500 text-white px-1 rounded-full font-bold">新</span>}
+                                                {r.burst && <span className="text-[12px]">🔥</span>}
+                                            </span>
                                         </div>
                                         <div className="flex items-center gap-2 shrink-0">
                                             <span className="text-xs text-gray-500">{r.previous} → {r.current}</span>
@@ -393,14 +610,14 @@ export default function TrendingPanel({ visible, onClose, onSearch }: { visible:
 
                                 {/* Keyword selector for comparison */}
                                 <div className="flex flex-wrap gap-1.5 mb-4">
-                                    {keywords.slice(0, 15).map(kw => (
+                                    {keywords.slice(0, MAX_KEYWORD_SELECTOR).map(kw => (
                                         <button key={kw.word}
                                             className={`px-2.5 py-1 rounded text-[12px] font-medium transition cursor-pointer ${compareKws.includes(kw.word) ? 'bg-indigo-500 text-white' : activeTopic === kw.word ? 'bg-indigo-100 text-indigo-700' : chartTopic?.keyword === kw.word ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
                                             onClick={() => {
                                                 if (compareKws.includes(kw.word)) {
                                                     setCompareKws(compareKws.filter(k => k !== kw.word));
                                                 } else {
-                                                    if (compareKws.length < 4) setCompareKws([...compareKws, kw.word]);
+                                                    if (compareKws.length < MAX_COMPARE_KWS) setCompareKws([...compareKws, kw.word]);
                                                     setActiveTopic(kw.word);
                                                 }
                                             }}>
@@ -460,6 +677,9 @@ export default function TrendingPanel({ visible, onClose, onSearch }: { visible:
                             </>
                         )
                     )}
+
+                    {tab === 'sources' && renderHourlyChart('sources')}
+                    {tab === 'cats' && renderHourlyChart('cats')}
                 </div>
 
                 {/* AI Insight tooltip */}

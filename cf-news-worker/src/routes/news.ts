@@ -259,6 +259,13 @@ news.get('/trending', async (c) => {
                 change_pct = firstHalf > 0 ? Math.round(((secondHalf - firstHalf) / firstHalf) * 100) : 0;
             }
 
+            // is_new: all data points are in the most recent half of the time range
+            const is_new = entries.length > 0 && entries.every(e => {
+                const entryTime = new Date(e.date_hour.replace(' ', 'T') + '+08:00').getTime();
+                const midTime = shanghaiNow.getTime() - (hours * 3600000) / 2;
+                return entryTime >= midTime;
+            });
+
             return {
                 word,
                 count: Math.round(score),
@@ -266,10 +273,28 @@ news.get('/trending', async (c) => {
                 burst,
                 burst_score,
                 change_pct,
+                is_new,
             };
         });
 
-        return c.json({ trending });
+        // Dropped keywords: present in previous period but not in current
+        const prevCutoff = shanghaiCutoff(hours * 2);
+        const currentSet = new Set(sorted.map(([w]) => w));
+        let dropped: string[] = [];
+        try {
+            const prevRows = await c.env.DB.prepare(`
+                SELECT keyword, SUM(count) as total FROM trending_topics
+                WHERE date_hour >= ? AND date_hour < ?
+                GROUP BY keyword ORDER BY total DESC LIMIT 15
+            `).bind(prevCutoff, cutoff).all<{ keyword: string; total: number }>();
+            dropped = prevRows.results
+                .map(r => r.keyword)
+                .filter(k => !currentSet.has(k));
+        } catch (e) {
+            console.error('dropped keywords query error:', e);
+        }
+
+        return c.json({ trending, dropped });
     } catch (error) {
         console.error('trending error:', error);
         return c.json({ trending: [] });
@@ -452,6 +477,35 @@ news.get('/:id/content', async (c) => {
     } catch (error) {
         console.error('Error fetching article content:', error);
         return c.json({ error: '获取文章内容失败' }, 500);
+    }
+});
+
+// GET /trending/hourly — 每小时来源和分类分布
+news.get('/trending/hourly', async (c) => {
+    const hours = parseInt(c.req.query('hours') || '24');
+    try {
+        const cutoff = `datetime('now', '-${hours} hours')`;
+        const [sourceRows, catRows] = await Promise.all([
+            c.env.DB.prepare(`
+                SELECT substr(ni.created_at,1,13) as hour, ni.source_id, s.name as source_name, COUNT(*) as count
+                FROM news_items ni
+                LEFT JOIN news_sources s ON ni.source_id = s.id
+                WHERE ni.is_deleted = 0 AND ni.created_at > ${cutoff}
+                GROUP BY hour, ni.source_id
+                ORDER BY hour, count DESC
+            `).all<{ hour: string; source_id: number; source_name: string; count: number }>(),
+            c.env.DB.prepare(`
+                SELECT substr(created_at,1,13) as hour, category, COUNT(*) as count
+                FROM news_items
+                WHERE is_deleted = 0 AND created_at > ${cutoff}
+                GROUP BY hour, category
+                ORDER BY hour, category
+            `).all<{ hour: string; category: string; count: number }>(),
+        ]);
+        return c.json({ sources: sourceRows.results, categories: catRows.results });
+    } catch (e: any) {
+        console.error('Hourly stats error:', e);
+        return c.json({ error: String(e) }, 500);
     }
 });
 

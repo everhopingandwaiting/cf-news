@@ -463,6 +463,13 @@ ${imgUrl ? `<meta property="og:image" content="${imgUrl}"><meta name="twitter:im
         if (reqUrl.pathname.startsWith('/api/')) {
             return app.fetch(request, env, ctx);
         }
+        // SPA: serve index.html with no-cache so browsers always get latest JS hashes
+        if (reqUrl.pathname === '/' || reqUrl.pathname === '/index.html') {
+            const res = await app.fetch(request, env, ctx);
+            const headers = new Headers(res.headers);
+            headers.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+            return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+        }
         // Non-API routes are handled by [assets] with SPA fallback
         return app.fetch(request, env, ctx);
     },
