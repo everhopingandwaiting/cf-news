@@ -4,10 +4,9 @@ WORKDIR /app
 
 RUN npm config set registry https://registry.npmmirror.com
 
+# Install dependencies only — source code is mounted at runtime
 COPY package.json package-lock.json* ./
 RUN npm install
-
-COPY . .
 
 EXPOSE 8787
 

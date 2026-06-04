@@ -219,23 +219,26 @@ cd ..
 
 The deploy script automatically:
 - Generates `wrangler.toml` from `.env`
-- Builds the frontend
+- Builds the frontend (Docker)
 - Copies assets to worker
-- Builds Docker image
 - Deploys to Cloudflare
 
 ### 3. Initialize database & import stop words
 
 ```bash
 # Create tables
-docker run --rm --env-file cf-news-worker/.env cf-news-worker \
-  npx wrangler d1 execute news-db --remote --file=./src/db/schema.sql
+docker run --rm --env-file cf-news-worker/.env \
+  -v $(pwd)/cf-news-worker:/app \
+  -v /app/node_modules \
+  cf-news-worker npx wrangler d1 execute news-db --remote --file=./src/db/schema.sql
 
 # Import stop words (SMART IR English + 哈工大/川大/百度 Chinese + HTML)
 cd cf-news-worker
-./scripts/import-stopwords.sh
-docker run --rm --env-file .env cf-news-worker \
-  npx wrangler d1 execute news-db --remote --file=./src/db/stopwords-import.sql
+./scripts/import-stopwords.sh              # generate stopwords-import.sql
+docker run --rm --env-file .env \
+  -v $(pwd):/app \
+  -v /app/node_modules \
+  cf-news-worker npx wrangler d1 execute news-db --remote --file=./src/db/stopwords-import.sql
 cd ..
 ```
 

@@ -210,23 +210,26 @@ cd ..
 
 部署脚本自动完成：
 - 从 `.env` 生成 `wrangler.toml`
-- 构建前端
+- 构建前端（Docker 内）
 - 复制静态资源到 worker
-- 构建 Docker 镜像
 - 部署到 Cloudflare
 
 ### 3. 初始化数据库与停用词
 
 ```bash
-# 建表
-docker run --rm --env-file cf-news-worker/.env cf-news-worker \
-  npx wrangler d1 execute news-db --remote --file=./src/db/schema.sql
+# 建表（源码通过 volume mount，镜像不打包代码）
+docker run --rm --env-file cf-news-worker/.env \
+  -v $(pwd)/cf-news-worker:/app \
+  -v /app/node_modules \
+  cf-news-worker npx wrangler d1 execute news-db --remote --file=./src/db/schema.sql
 
 # 导入停用词（SMART IR 英文 + 哈工大/川大/百度中文 + HTML 残留词）
 cd cf-news-worker
-./scripts/import-stopwords.sh
-docker run --rm --env-file .env cf-news-worker \
-  npx wrangler d1 execute news-db --remote --file=./src/db/stopwords-import.sql
+./scripts/import-stopwords.sh              # 生成 stopwords-import.sql
+docker run --rm --env-file .env \
+  -v $(pwd):/app \
+  -v /app/node_modules \
+  cf-news-worker npx wrangler d1 execute news-db --remote --file=./src/db/stopwords-import.sql
 cd ..
 ```
 
