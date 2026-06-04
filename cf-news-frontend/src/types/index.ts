@@ -28,6 +28,8 @@ export interface NewsSource {
   enabled: number;
   sort_order?: number;
   last_fetched_at?: string;
+  last_fetched_count?: number;
+  today_count?: number;
 }
 
 export interface NewsComment {
