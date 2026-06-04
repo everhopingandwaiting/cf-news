@@ -363,8 +363,8 @@ async function processSource(
         console.log(`Saved ${saved} new items from ${source.name}`);
 
         await env.DB.prepare(
-            'UPDATE news_sources SET last_fetched_at = datetime("now", "+8 hours") WHERE id = ?',
-        ).bind(source.id).run();
+            'UPDATE news_sources SET last_fetched_at = datetime("now", "+8 hours"), last_fetched_count = ? WHERE id = ?',
+        ).bind(saved, source.id).run();
 
         return saved;
     } catch (e) {

@@ -8,7 +8,12 @@ const admin = new Hono<{ Bindings: Bindings }>();
 
 admin.get('/sources', async (c) => {
     const sources = await c.env.DB.prepare(
-        'SELECT * FROM news_sources ORDER BY sort_order, language, name'
+        `SELECT ns.*,
+          (SELECT COUNT(*) FROM news_items ni
+           WHERE ni.source_id = ns.id
+             AND ni.created_at >= datetime('now', '+8 hours', 'start of day')
+          ) as today_count
+         FROM news_sources ns ORDER BY sort_order, language, name`
     ).all();
     return c.json({ sources: sources.results });
 });

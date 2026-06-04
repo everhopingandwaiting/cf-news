@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS news_sources (
     enabled INTEGER DEFAULT 1,
     sort_order INTEGER DEFAULT 99,
     last_fetched_at TEXT,
+    last_fetched_count INTEGER DEFAULT 0,
     error_count INTEGER DEFAULT 0
 );
 
