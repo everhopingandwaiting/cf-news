@@ -2,7 +2,7 @@
 
 [中文文档](README_zh.md)
 
-A daily news aggregation platform built on Cloudflare's edge infrastructure. Collects RSS feeds from 20+ sources, provides AI-powered summaries, and delivers a fast reading experience.
+A daily news aggregation platform built on Cloudflare's edge infrastructure. Collects RSS feeds from 30+ sources, provides AI-powered summaries, and delivers a fast reading experience.
 
 ## Highlights
 
@@ -30,8 +30,8 @@ AI-generated summary of today's top news, sorted by time with language markers (
 
 ## Features
 
-- **Multi-source RSS aggregation** — 20+ built-in sources (36氪, Hacker News, TechCrunch, The Verge, BBC, etc.)
-- **Category filtering** — Tech, AI, News, Finance, Entertainment
+- **Multi-source RSS aggregation** — 30+ built-in sources (36氪, Hacker News, TechCrunch, The Verge, BBC, 世纪新能源网, etc.)
+- **Category filtering** — Tech, AI, New Energy, News, Finance, Entertainment
 - **Full-text search** — D1 FTS5 powered search with KV hot cache
 - **AI summaries** — OpenRouter, NVIDIA, Mango APIs with automatic fallback
 - **AI Q&A** — Ask natural language questions about news

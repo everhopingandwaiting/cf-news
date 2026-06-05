@@ -22,8 +22,8 @@
 
 ## 功能特性
 
-- **多源 RSS 聚合** — 20+ 内置源（36氪、少数派、Hacker News、TechCrunch、The Verge、BBC 等）
-- **分类筛选** — 科技、AI、新闻、财经、娱乐
+- **多源 RSS 聚合** — 30+ 内置源（36氪、Hacker News、TechCrunch、世纪新能源网 等）
+- **分类筛选** — 科技、AI、新能源、新闻、财经、娱乐
 - **全文搜索** — D1 FTS5 驱动，KV 热缓存加速
 - **AI 摘要** — OpenRouter、NVIDIA、Mango 多 provider 自动降级
 - **AI 问答** — 自然语言提问，AI 基于当日新闻回答

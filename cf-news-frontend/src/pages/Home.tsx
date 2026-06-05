@@ -21,8 +21,14 @@ const CATEGORIES = [
   { key: 'all', label: '全部', emoji: '✦' },
   { key: 'ai', label: 'AI 动态', emoji: '⟡' },
   { key: 'tech', label: '科技', emoji: '⚙' },
+  { key: 'energy', label: '新能源', emoji: '⚡' },
+  { key: 'science', label: '科学', emoji: '🔬' },
+  { key: 'health', label: '健康', emoji: '🏥' },
   { key: 'news', label: '新闻', emoji: '◇' },
   { key: 'finance', label: '财经', emoji: '₿' },
+  { key: 'auto', label: '汽车', emoji: '🚗' },
+  { key: 'sports', label: '体育', emoji: '⚽' },
+  { key: 'military', label: '军事', emoji: '⚔' },
   { key: 'entertainment', label: '娱乐', emoji: '✦' },
 ];
 

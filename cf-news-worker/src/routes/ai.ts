@@ -190,4 +190,48 @@ router.post('/trending/insight', async (c) => {
     }
 });
 
+// Debug: test stream connection
+router.post('/debug/stream', async (c) => {
+    const results: any[] = [];
+    const { getProviderOrder, getModels, getProviderInfo } = await import('../services/aiProvider');
+
+    const order = await getProviderOrder(c.env);
+    for (const provider of order) {
+        if (provider === 'cloudflare') {
+            const models = await getModels(c.env, 'cloudflare');
+            for (const model of models) {
+                try {
+                    const stream = await c.env.AI.run(model, {
+                        messages: [{ role: 'user', content: 'hi' }],
+                        stream: true,
+                        max_tokens: 10,
+                    }) as any;
+                    results.push({ provider, model, status: 'ok', hasStream: !!stream, type: typeof stream });
+                } catch (e: any) {
+                    results.push({ provider, model, status: 'error', error: String(e) });
+                }
+            }
+        } else {
+            const info = await getProviderInfo(c.env, provider);
+            if (!info) { results.push({ provider, status: 'no_config' }); continue; }
+            const models = await getModels(c.env, provider);
+            for (const model of models) {
+                try {
+                    const url = info.base_url.endsWith('/') ? `${info.base_url}chat/completions` : `${info.base_url}/chat/completions`;
+                    const res = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Authorization': `Bearer ${info.api_key}`, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ model, messages: [{ role: 'user', content: 'hi' }], stream: true, max_tokens: 10 }),
+                        signal: AbortSignal.timeout(10000),
+                    });
+                    results.push({ provider, model, status: res.ok ? 'ok' : 'error', httpStatus: res.status, error: res.ok ? null : await res.text().catch(() => '') });
+                } catch (e: any) {
+                    results.push({ provider, model, status: 'error', error: String(e) });
+                }
+            }
+        }
+    }
+    return c.json(results);
+});
+
 export default router;

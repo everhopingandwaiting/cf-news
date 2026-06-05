@@ -54,9 +54,22 @@ docker run --rm --env-file "$WORKER_DIR/.env" \
   -v "$WORKER_DIR:/app" \
   -v /app/node_modules \
   --network=host \
-  cf-news-worker npx wrangler deploy 2>&1 | tail -8
+  cf-news-worker npx wrangler deploy 2>&1
 
-# 5. Push secrets to Cloudflare (idempotent, updates if changed)
+# 5. Purge Cloudflare cache so users see the new frontend immediately
+echo "==> Purging edge cache..."
+ZONE_ID="${ZONE_ID:-}"
+CF_API_TOKEN="${CF_API_TOKEN:-}"
+if [ -n "$ZONE_ID" ] && [ -n "$CF_API_TOKEN" ]; then
+  curl -sf -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/purge_cache" \
+    -H "Authorization: Bearer $CF_API_TOKEN" \
+    -H "Content-Type: application/json" \
+    --data '{"purge_everything":true}' > /dev/null && echo "  Cache purged" || echo "  Cache purge skipped"
+else
+  echo "  ZONE_ID or CF_API_TOKEN not set, skipping cache purge"
+fi
+
+# 6. Push secrets to Cloudflare (idempotent, updates if changed)
 echo "==> Updating secrets..."
 for key in JWT_SECRET OPENROUTER_API_KEY NVIDIA_API_KEY MANGO_API_KEY GROQ_API_KEY TURNSTILE_SECRET; do
   value=$(grep "^${key}=" "$WORKER_DIR/.env" | cut -d= -f2-)

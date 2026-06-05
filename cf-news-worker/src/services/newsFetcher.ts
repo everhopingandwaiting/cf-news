@@ -405,6 +405,10 @@ export async function fetchNews(env: Bindings, skipSummary = false): Promise<voi
     }
 
     console.log(`News fetch complete. Total saved: ${totalSaved}`);
+    if (totalSaved > 0) {
+        await env.KV.put('news_cache_ver', String(Date.now())).catch(e =>
+            console.error('Failed to bump cache version:', e));
+    }
 }
 
 // Manual fetch for a specific source

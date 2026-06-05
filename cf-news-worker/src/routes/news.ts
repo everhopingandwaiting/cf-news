@@ -33,7 +33,8 @@ async function searchNewsFTS(env: Bindings, query: string): Promise<number[] | n
 }
 
 news.get('/', async (c) => {
-    const cacheKey = new Request(c.req.url, { headers: { 'Accept': 'application/json' } });
+    const cacheVer = await c.env.KV.get('news_cache_ver').catch(() => null) || '0';
+    const cacheKey = new Request(c.req.url + '&_cv=' + cacheVer, { headers: { 'Accept': 'application/json' } });
     const cache = caches.default;
     const cached = await cache.match(cacheKey);
     if (cached) return cached;
@@ -121,7 +122,7 @@ news.get('/', async (c) => {
 
         const response = c.json(result);
         if (!search) {
-            response.headers.set('Cache-Control', 'public, s-maxage=60');
+            response.headers.set('Cache-Control', 'public, max-age=60, s-maxage=60');
             c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
         }
         return response;
