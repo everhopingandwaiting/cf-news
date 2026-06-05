@@ -67,76 +67,7 @@ export async function askQuestion(
     question: string,
     stream = false
 ): Promise<{ answer: string; chunks: any[] } | ReadableStream> {
-    const instance = getSearchInstance(env);
-
-    if (instance) {
-        const searchOptions: any = {
-            retrieval: { max_num_results: 5, retrieval_type: 'hybrid' },
-            reranking: { enabled: true, model: '@cf/baai/bge-reranker-base' },
-        };
-
-        if (stream) {
-            return instance.chatCompletions({
-                messages: [
-                    {
-                        role: 'system',
-                        content: '你是一个新闻助手。根据提供的新闻内容回答用户问题。回答简洁清晰，用中文。如果内容不足以回答问题，请如实说明。',
-                    },
-                    { role: 'user', content: question },
-                ],
-                model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
-                stream: true,
-                ai_search_options: searchOptions,
-            });
-        }
-
-        const response = await instance.chatCompletions({
-            messages: [
-                {
-                    role: 'system',
-                    content: '你是一个新闻助手。根据提供的新闻内容回答用户问题。回答简洁清晰，用中文。如果内容不足以回答问题，请如实说明。',
-                },
-                { role: 'user', content: question },
-            ],
-            model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
-            ai_search_options: searchOptions,
-        });
-
-        const answer = response.choices?.[0]?.message?.content || '';
-        const chunks = response.chunks || [];
-
-        if (!chunks || chunks.length === 0) {
-            // AI Search found no relevant content - fall back to D1 recent news
-            const recentNews = await env.DB.prepare(
-                `SELECT n.title, n.description, COALESCE(s.language, 'zh') as lang
-                 FROM news_items n
-                 LEFT JOIN news_sources s ON n.source_id = s.id
-                 WHERE n.is_deleted = 0 ORDER BY n.published_at DESC LIMIT 20`
-            ).all<{ title: string; description: string; lang: string }>();
-
-            if (recentNews.results.length > 0) {
-                const context = recentNews.results
-                    .map(n => `[${n.lang === 'zh' ? 'CN' : 'EN'}] ${n.title}\n${(n.description || '').substring(0, 200)}`)
-                    .join('\n---\n');
-
-                const fallbackResponse = await instance.chatCompletions({
-                    messages: [
-                        { role: 'system', content: '你是一个新闻助手。根据提供的新闻内容回答用户问题。回答简洁清晰，用中文。如果内容不足以回答问题，请如实说明。' },
-                        { role: 'user', content: `以下是最近的新闻:\n${context}\n\n用户问题: ${question}` },
-                    ],
-                    model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
-                });
-                return {
-                    answer: fallbackResponse.choices?.[0]?.message?.content || '无法生成回答',
-                    chunks: [],
-                };
-            }
-        }
-
-        return { answer, chunks };
-    }
-
-    // Fallback: use Workers AI directly with recent news as context
+    const { callAI, callAIStream } = await import('./aiProvider');
     const recentNews = await env.DB.prepare(
         `SELECT title, description FROM news_items WHERE is_deleted = 0 ORDER BY created_at DESC LIMIT 10`
     ).all<{ title: string; description: string }>();
@@ -147,16 +78,94 @@ export async function askQuestion(
 
     const prompt = `以下是最近的新闻:\n${context}\n\n用户问题: ${question}\n\n请基于以上新闻回答问题。如果新闻内容不足以回答，请说明。`;
 
-    const aiResponse = await env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', {
-        messages: [
-            { role: 'system', content: '你是一个新闻助手。回答简洁清晰，用中文。' },
-            { role: 'user', content: prompt },
-        ],
-        gateway: { id: 'default', cacheTtl: 86400, skipCache: false },
+    if (stream) {
+        try {
+            const { callAIStream } = await import('./aiProvider');
+            const s = await callAIStream(env, prompt, {
+                system_prompt: '你是一个新闻助手。回答简洁清晰，用中文。',
+                max_tokens: 1000,
+            });
+            if (s) return s;
+        } catch (e) {
+            console.error('callAIStream exception:', e);
+        }
+    }
+
+    const answer = await callAI(env, prompt, {
+        system_prompt: '你是一个新闻助手。回答简洁清晰，用中文。',
+        max_tokens: 1000,
+    });
+
+    return { answer: answer || '无法生成回答', chunks: [] };
+}
+            }
+
+            const response = await instance.chatCompletions({
+                messages: [
+                    {
+                        role: 'system',
+                        content: '你是一个新闻助手。根据提供的新闻内容回答用户问题。回答简洁清晰，用中文。如果内容不足以回答问题，请如实说明。',
+                    },
+                    { role: 'user', content: question },
+                ],
+                model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+                ai_search_options: searchOptions,
+            });
+
+            const answer = response.choices?.[0]?.message?.content || '';
+            const chunks = response.chunks || [];
+
+            if (!chunks || chunks.length === 0) {
+                const recentNews = await env.DB.prepare(
+                    `SELECT n.title, n.description, COALESCE(s.language, 'zh') as lang
+                     FROM news_items n
+                     LEFT JOIN news_sources s ON n.source_id = s.id
+                     WHERE n.is_deleted = 0 ORDER BY n.published_at DESC LIMIT 20`
+                ).all<{ title: string; description: string; lang: string }>();
+
+                if (recentNews.results.length > 0) {
+                    const context = recentNews.results
+                        .map(n => `[${n.lang === 'zh' ? 'CN' : 'EN'}] ${n.title}\n${(n.description || '').substring(0, 200)}`)
+                        .join('\n---\n');
+
+                    const fallbackResponse = await instance.chatCompletions({
+                        messages: [
+                            { role: 'system', content: '你是一个新闻助手。根据提供的新闻内容回答用户问题。回答简洁清晰，用中文。如果内容不足以回答问题，请如实说明。' },
+                            { role: 'user', content: `以下是最近的新闻:\n${context}\n\n用户问题: ${question}` },
+                        ],
+                        model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+                    });
+                    return {
+                        answer: fallbackResponse.choices?.[0]?.message?.content || '无法生成回答',
+                        chunks: [],
+                    };
+                }
+            }
+
+            return { answer, chunks };
+        } catch (e) {
+            console.error('AI Search askQuestion failed, falling back:', e);
+        }
+    }
+
+    // Fallback: use callAI (provider chain with fallbacks)
+    const { callAI } = await import('./aiProvider');
+    const recentNews = await env.DB.prepare(
+        `SELECT title, description FROM news_items WHERE is_deleted = 0 ORDER BY created_at DESC LIMIT 10`
+    ).all<{ title: string; description: string }>();
+
+    const context = recentNews.results
+        .map(n => `标题: ${n.title}\n内容: ${(n.description || '').substring(0, 200)}`)
+        .join('\n---\n');
+
+    const prompt = `以下是最近的新闻:\n${context}\n\n用户问题: ${question}\n\n请基于以上新闻回答问题。如果新闻内容不足以回答，请说明。`;
+    const answer = await callAI(env, prompt, {
+        system_prompt: '你是一个新闻助手。回答简洁清晰，用中文。',
+        max_tokens: 1000,
     });
 
     return {
-        answer: (aiResponse as any).response || '无法生成回答',
+        answer: answer || '无法生成回答',
         chunks: [],
     };
 }

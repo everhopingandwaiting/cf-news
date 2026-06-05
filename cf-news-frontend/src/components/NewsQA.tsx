@@ -58,6 +58,15 @@ export default function NewsQA({ visible, onClose, token }: Props) {
       }
 
       setLoading(false);
+
+      const ct = response.headers.get('Content-Type') || '';
+      if (ct.includes('application/json')) {
+        const data = await response.json();
+        setMessages(prev => [...prev, { role: 'ai', content: data.answer || data.error || '无法生成回答' }]);
+        setStreaming(false);
+        return;
+      }
+
       setStreaming(true);
       setMessages(prev => [...prev, { role: 'ai', content: '' }]);
 
