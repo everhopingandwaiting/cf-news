@@ -22,6 +22,8 @@ const CATEGORIES = [
   { key: 'ai', label: 'AI 动态', emoji: '⟡' },
   { key: 'tech', label: '科技', emoji: '⚙' },
   { key: 'energy', label: '新能源', emoji: '⚡' },
+  { key: 'stocks', label: '股票', emoji: '📈' },
+  { key: 'funds', label: '基金', emoji: '💰' },
   { key: 'science', label: '科学', emoji: '🔬' },
   { key: 'health', label: '健康', emoji: '🏥' },
   { key: 'news', label: '新闻', emoji: '◇' },
