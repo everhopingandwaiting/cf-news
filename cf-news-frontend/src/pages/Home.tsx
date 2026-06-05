@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef, lazy, Suspense } from 'react';
 import type { NewsItem, NewsSource, User, Pagination } from '../types';
-import { getNews, getSources, triggerFetch, getMe, triggerSummarizeOne, getNewsItem } from '../api/client';
+import { getNews, getSources, triggerFetch, getMe, triggerSummarize, getNewsItem } from '../api/client';
 import Header from '../components/Header';
 import CategoryNav from '../components/CategoryNav';
 import NewsCard from '../components/NewsCard';
@@ -190,19 +190,18 @@ export default function Home() {
     const ids = news.filter(n => !n.ai_summary).map(n => n.id);
     if (ids.length === 0) { showToast('没有需要摘要的新闻', 'error'); return; }
     setSummarizing(true);
-    let done = 0;
-    for (const id of ids) {
-      try {
-        const result = await triggerSummarizeOne(id);
-        if (result.generated > 0) {
-          done++;
-          const updated = await getNewsItem(id);
-          if (updated) setNews(prev => prev.map(n => n.id === id ? { ...n, ai_summary: updated.ai_summary } : n));
-        }
-      } catch {}
+    try {
+      const result = await triggerSummarize(ids);
+      if (result.generated > 0) {
+        const items = await loadNews();
+        if (items.length > 0) setNews(items);
+        showToast(`✅ 共生成 ${result.generated}/${ids.length} 条摘要`, 'success');
+      } else {
+        showToast('摘要生成失败', 'error');
+      }
+    } catch {
+      showToast('摘要生成失败', 'error');
     }
-    if (done > 0) showToast(`✅ 共生成 ${done}/${ids.length} 条摘要`, 'success');
-    else showToast('摘要生成失败', 'error');
     setSummarizing(false);
   }
 

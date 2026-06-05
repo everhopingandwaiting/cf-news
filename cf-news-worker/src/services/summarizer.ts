@@ -103,7 +103,7 @@ export async function generateSummary(env: Bindings, item: { id?: number; title:
     const combined = `${item.title}. ${input}`;
     if (combined.length < 60) return null;
 
-    const tmpl = await getConfig(env, 'prompt_template') || 'Please summarize the following news in 2 concise Chinese sentences. ONLY output Chinese, no English. Focus on key information.\n\n{{TEXT}}\n\nChinese summary:';
+    const tmpl = await getConfig(env, 'prompt_template') || 'Summarize the news below in 2 concise Chinese sentences. Output ONLY the 2 sentences — no labels, no notes, no English.\n\n{{TEXT}}';
     const prompt = tmpl.replace('{{TEXT}}', combined);
 
     const order = await getProviderOrder(env);
@@ -194,14 +194,11 @@ async function generateOneBatch(
         `Article ${i + 1}:\nTitle: ${items[i].title}\nContent: ${a.text}`
     ).join('\n\n');
 
-    const batchPrompt = `Please summarize each of the following news articles in 2 concise Chinese sentences. ONLY output Chinese, no English. Focus on key information.
+    const batchPrompt = `For each article below, write a 2-sentence Chinese summary. Output ONLY a JSON array — no labels, no notes, no English.
 
 ${blocks}
 
-Return a JSON array where each element has a "summary" field for the corresponding article.
-Example: [{"summary": "summary of article 1"}, {"summary": "summary of article 2"}]
-
-JSON array:`;
+Return: [{"summary":"<article1 summary>"},{"summary":"<article2 summary>"},...]`;
 
     // Try batch via shared callAI (handles full provider chain with fallbacks)
     const result = await callAI(env, batchPrompt, {

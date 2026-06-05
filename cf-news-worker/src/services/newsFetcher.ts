@@ -237,6 +237,7 @@ async function fetchFeed(env: Bindings, source: NewsSource): Promise<RSSItem[]> 
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (compatible; CFNewsWorker/1.0)',
                 },
+                signal: AbortSignal.timeout(15_000),
             });
             if (!response.ok) {
                 console.error(`Failed to fetch ${source.name}: ${response.status}`);
@@ -351,16 +352,18 @@ async function processSource(
     source: NewsSource,
     skipSummary: boolean,
 ): Promise<number> {
+    const t0 = Date.now();
     try {
         console.log(`Fetching ${source.name}...`);
         const items = await fetchFeed(env, source);
-        console.log(`Got ${items.length} items from ${source.name}`);
+        const fetchMs = Date.now() - t0;
+        console.log(`[${fetchMs}ms] Got ${items.length} items from ${source.name}`);
 
         // Batch-classify all items BEFORE the save loop (removes per-item AI calls)
         const categories = await batchClassifyCategories(env, source, items);
 
         const saved = await saveNewsItems(env, source, items, categories, skipSummary);
-        console.log(`Saved ${saved} new items from ${source.name}`);
+        console.log(`[${Date.now() - t0}ms] Saved ${saved} new items from ${source.name}`);
 
         await env.DB.prepare(
             'UPDATE news_sources SET last_fetched_at = datetime("now", "+8 hours"), last_fetched_count = ? WHERE id = ?',
