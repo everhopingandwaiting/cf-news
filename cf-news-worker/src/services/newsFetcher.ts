@@ -275,7 +275,7 @@ async function saveNewsItems(
             const category = categories[i] || source.category;
             const publishedAt = item.pubDate ? new Date(item.pubDate).toISOString() : null;
 
-            await env.DB.prepare(`
+            const result = await env.DB.prepare(`
                 INSERT INTO news_items 
                 (source_id, title, url, description, content, image_url, category, published_at, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+8 hours'))
@@ -301,8 +301,13 @@ async function saveNewsItems(
                 'SELECT id FROM news_items WHERE url = ?',
             ).bind(item.link).first<{ id: number }>();
 
-            if (row && row.id > 0) {
+            // Only count truly new items (last_row_id > 0 = new insert)
+            const isNew = result.meta.last_row_id > 0;
+            if (isNew) {
                 savedCount++;
+            }
+
+            if (row && row.id > 0) {
                 newItems.push({
                     id: row.id,
                     title: item.title,
