@@ -35,8 +35,16 @@ export interface User {
     email: string;
     password_hash: string;
     username?: string;
+    role: string;
     created_at: string;
     updated_at: string;
+}
+
+export interface JWTPayload {
+    sub: number;
+    email: string;
+    role: string;
+    exp: number;
 }
 
 export interface NewsSource {

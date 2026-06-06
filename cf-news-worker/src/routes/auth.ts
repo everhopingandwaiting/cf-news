@@ -17,6 +17,7 @@ async function generateJWT(user: User, secret: string): Promise<string> {
     const payload: JWTPayload = {
         sub: user.id,
         email: user.email,
+        role: user.role || 'user',
         exp: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60, // 7 days
     };
 
@@ -108,14 +109,15 @@ auth.post('/register', async (c) => {
     const password_hash = await hashPassword(password);
     
     const result = await c.env.DB.prepare(
-        'INSERT INTO users (email, password_hash, username) VALUES (?, ?, ?)'
-    ).bind(email, password_hash, username || email.split('@')[0]).run();
+        'INSERT INTO users (email, password_hash, username, role) VALUES (?, ?, ?, ?)'
+    ).bind(email, password_hash, username || email.split('@')[0], 'user').run();
 
     const user: User = {
         id: result.meta.last_row_id as number,
         email,
         password_hash,
         username: username || email.split('@')[0],
+        role: 'user',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
     };
@@ -125,7 +127,7 @@ auth.post('/register', async (c) => {
     return c.json({
         message: '注册成功',
         token,
-        user: { id: user.id, email: user.email, username: user.username },
+        user: { id: user.id, email: user.email, username: user.username, role: user.role },
     }, 201);
 });
 
