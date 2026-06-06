@@ -78,17 +78,18 @@ async function verifyJWT(token: string, secret: string): Promise<JWTPayload | nu
 auth.post('/register', async (c) => {
     const { email, password, username, turnstileToken } = await c.req.json();
 
-    // Verify Turnstile
-    if (turnstileToken) {
-        const verify = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
-            method: 'POST',
-            body: `secret=${c.env.TURNSTILE_SECRET}&response=${turnstileToken}`,
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        });
-        const outcome = await verify.json<any>();
-        if (!outcome.success) {
-            return c.json({ error: '验证失败，请重试' }, 403);
-        }
+    // Verify Turnstile (required)
+    if (!turnstileToken) {
+        return c.json({ error: '缺少验证令牌' }, 403);
+    }
+    const verify = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+        method: 'POST',
+        body: `secret=${c.env.TURNSTILE_SECRET}&response=${turnstileToken}`,
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    });
+    const outcome = await verify.json<any>();
+    if (!outcome.success) {
+        return c.json({ error: '验证失败，请重试' }, 403);
     }
 
     if (!email || !password) {
@@ -136,17 +137,18 @@ const LOGIN_LOCK_TTL = 900; // 15 minutes
 auth.post('/login', async (c) => {
     const { email, password, turnstileToken } = await c.req.json();
 
-    // Verify Turnstile
-    if (turnstileToken) {
-        const verify = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
-            method: 'POST',
-            body: `secret=${c.env.TURNSTILE_SECRET}&response=${turnstileToken}`,
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        });
-        const outcome = await verify.json<any>();
-        if (!outcome.success) {
-            return c.json({ error: '验证失败，请重试' }, 403);
-        }
+    // Verify Turnstile (required)
+    if (!turnstileToken) {
+        return c.json({ error: '缺少验证令牌' }, 403);
+    }
+    const verify = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+        method: 'POST',
+        body: `secret=${c.env.TURNSTILE_SECRET}&response=${turnstileToken}`,
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    });
+    const outcome = await verify.json<any>();
+    if (!outcome.success) {
+        return c.json({ error: '验证失败，请重试' }, 403);
     }
 
     if (!email || !password) {
