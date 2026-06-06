@@ -148,7 +148,7 @@ INSERT OR IGNORE INTO news_sources (name, url, feed_url, category, language) VAL
     ('Kyodo News English', 'https://english.kyodonews.net', 'https://english.kyodonews.net/rss/all.xml', 'news', 'en'),
     ('The Mainichi English', 'https://mainichi.jp/english', 'https://www.mainichi.jp/rss/etc/english_latest.rss', 'news', 'en'),
     ('Yonhap News English', 'https://en.yna.co.kr', 'https://en.yna.co.kr/RSS/news.xml', 'news', 'en'),
-    ('Korea JoongAng Daily', 'https://koreajoongangdaily.joins.com', 'https://koreajoongangdaily.joins.com/feed', 'news', 'en'),
+    ('Korea JoongAng Daily', 'https://koreajoongangdaily.joins.com', 'https://koreajoongangdaily.joins.com/feed', 'news', 'en'),  -- disabled: feed dead
     ('The Japan Times', 'https://japantimes.co.jp', 'https://www.japantimes.co.jp/feed/', 'news', 'en'),
     ('澎湃新闻', 'https://www.thepaper.cn', 'https://www.thepaper.cn/rss_newsDetail_wap.jsp', 'news', 'zh'),
     ('联合早报', 'https://www.zaobao.com', 'https://www.zaobao.com/realtime/china/feed', 'news', 'zh'),
@@ -158,7 +158,7 @@ INSERT OR IGNORE INTO news_sources (name, url, feed_url, category, language) VAL
     ('MIT Technology Review AI', 'https://www.technologyreview.com/topic/artificial-intelligence', 'https://www.technologyreview.com/topic/artificial-intelligence/feed/', 'ai', 'en'),
     ('MarkTechPost', 'https://www.marktechpost.com', 'https://www.marktechpost.com/feed/', 'ai', 'en'),
     ('Simon Willison', 'https://simonwillison.net', 'https://simonwillison.net/atom/everything/', 'ai', 'en'),
-    ('世纪新能源网', 'https://www.ne21.com', 'https://www.ne21.com/feed/', 'energy', 'zh'),
+    ('世纪新能源网', 'https://www.ne21.com', 'https://www.ne21.com/feed/', 'energy', 'zh'),  -- disabled: no real RSS
     ('CnEVPost', 'https://cnevpost.com', 'https://cnevpost.com/feed/', 'energy', 'en'),
     ('华尔街见闻', 'https://wallstreetcn.com', 'https://plink.anyfeeder.com/weixin/wallstreetcn', 'finance', 'zh'),
     ('第一财经YiMagazine', 'https://www.yicai.com', 'https://decemberpei.cyou/rssbox/wechat-diyicaijing.xml', 'finance', 'zh'),
@@ -176,7 +176,7 @@ INSERT OR IGNORE INTO news_sources (name, url, feed_url, category, language) VAL
     ('中华网军事', 'https://military.china.com', 'https://military.china.com/rss.xml', 'military', 'zh'),
     ('Defense News', 'https://www.defensenews.com', 'https://www.defensenews.com/arc/outboundfeeds/rss/', 'military', 'en'),
     ('品玩 PingWest', 'https://www.pingwest.com', 'https://decemberpei.cyou/rssbox/pingwest.xml', 'tech', 'zh'),
-    ('端传媒', 'https://theinitium.com', 'http://feeds.initium.news/theinitium', 'news', 'zh'),
+    ('端传媒', 'https://theinitium.com', 'http://feeds.initium.news/theinitium', 'news', 'zh'),  -- disabled: feed dead
     ('纽约时报中文', 'https://cn.nytimes.com', 'https://cn.nytimes.com/rss/', 'news', 'zh'),
     ('Seeking Alpha', 'https://seekingalpha.com', 'https://seekingalpha.com/tag/editors-picks.xml', 'stocks', 'en'),
     ('MarketWatch', 'https://www.marketwatch.com', 'https://www.marketwatch.com/rss/topstories', 'stocks', 'en'),
