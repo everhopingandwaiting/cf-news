@@ -123,10 +123,16 @@ export async function findRelated(
 
         if (results?.chunks) {
             return results.chunks.map((chunk: any) => ({
-                id: chunk.id,
+                id: chunk.item?.metadata?.news_id || chunk.id,
                 text: chunk.text,
                 score: chunk.score || 0,
-                item: chunk.item,
+                item: {
+                    metadata: {
+                        news_id: chunk.item?.metadata?.news_id,
+                        description: chunk.item?.metadata?.description,
+                        image_url: chunk.item?.metadata?.image_url,
+                    },
+                },
             }));
         }
         return [];

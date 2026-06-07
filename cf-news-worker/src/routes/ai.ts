@@ -86,59 +86,95 @@ router.post('/digest/generate', async (c) => {
     }
 });
 
-// Related articles
+let _stopWords: Set<string> | null = null;
+async function getStopWords(env: Bindings): Promise<Set<string>> {
+    if (_stopWords) return _stopWords;
+    const db = getDb(env);
+    const rows = await db.all<{ word: string }>(sql`SELECT word FROM stop_words`);
+    _stopWords = new Set(rows.map(r => r.word.toLowerCase()));
+    return _stopWords;
+}
+
+function stem(w: string): string {
+    if (w.endsWith('ly')) w = w.slice(0, -2);
+    if (w.endsWith('ing')) w = w.slice(0, -3);
+    if (w.endsWith('ied')) w = w.slice(0, -3) + 'y';
+    else if (w.endsWith('ed')) w = w.slice(0, -2);
+    if (w.endsWith('ies')) w = w.slice(0, -3) + 'y';
+    else if (w.endsWith('es')) w = w.slice(0, -2);
+    else if (w.endsWith('s') && !w.endsWith('ss')) w = w.slice(0, -1);
+    return w;
+}
+
+// Related articles (with FTS5 + edge cache)
 router.get('/related/:id', async (c) => {
     try {
         const id = parseInt(c.req.param('id'));
         if (isNaN(id)) return c.json({ error: 'Invalid id' }, 400);
 
-        const db = getDb(c.env);
+        const cacheVer = await c.env.KV.get('news_cache_ver').catch(() => null) || '0';
+        const cacheKey = new Request(`https://related/${id}?cv=${cacheVer}`, {
+            headers: { 'Accept': 'application/json' },
+        });
+        const cached = await caches.default.match(cacheKey);
+        if (cached) return cached;
 
-        // Get the news item
+        const db = getDb(c.env);
         const item = await db.select({
             id: newsItems.id, title: newsItems.title, category: newsItems.category,
         }).from(newsItems)
             .where(and(eq(newsItems.id, id), eq(newsItems.is_deleted, 0)))
             .get();
-
         if (!item) return c.json({ error: 'News not found' }, 404);
 
-        // Try AI Search first
-        const aiRelated = await findRelated(c.env, item.title, 5);
-
-        if (aiRelated.length > 0) {
-            return c.json({ related: aiRelated });
-        }
-
-        // Fallback: keyword matching via LIKE (more robust than FTS5 MATCH)
         let related: any[] = [];
-        const keywords = item.title
-            .replace(/[^\w\u4e00-\u9fff\s]/g, ' ')
-            .split(/\s+/)
-            .filter(w => w.length > 1 && !['the','a','an','is','of','to','in','for','on','and','or','by','at','it','as','be','this','that','with','from'].includes(w.toLowerCase()))
-            .slice(0, 3);
-        if (keywords.length > 0) {
-            const likeConds = keywords.map(k => like(newsItems.title, `%${k}%`));
-            const results = await db.select({
-                id: newsItems.id, title: newsItems.title,
-                description: newsItems.description, image_url: newsItems.image_url,
-                published_at: newsItems.published_at,
-            }).from(newsItems)
-                .where(and(
-                    or(...likeConds),
-                    ne(newsItems.id, item.id),
-                    eq(newsItems.is_deleted, 0)
-                ))
-                .orderBy(
-                    sql`CASE WHEN category = ${item.category} THEN 0 ELSE 1 END`,
-                    desc(newsItems.created_at)
-                )
-                .limit(5)
-                .all();
-            related = results;
+
+        // 1) AI Search - only accept results with valid numeric IDs
+        const aiRelated = await findRelated(c.env, item.title, 5);
+        if (aiRelated.length > 0) {
+            related = aiRelated.filter((r: any) => String(r.id).match(/^\d+$/));
         }
+
+        // 2) FTS5 keyword match
         if (related.length === 0) {
-            const sameCat = await db.select({
+            const stopWords = await getStopWords(c.env);
+            const keywords = item.title
+                .replace(/[^\w\u4e00-\u9fff\s]/g, ' ')
+                .split(/\s+/)
+                .map(w => stem(w.toLowerCase()))
+                .filter(w => w.length > 1 && !stopWords.has(w))
+                .slice(0, 3);
+            if (keywords.length > 0) {
+                const ftsQuery = keywords.map(k => `"${k.replace(/"/g, '')}"`).join(' OR ');
+                const ftsIds = await db.all<{ rowid: number }>(
+                    sql`SELECT rowid FROM news_fts WHERE news_fts MATCH ${ftsQuery} LIMIT 20`
+                );
+                if (ftsIds.length > 0) {
+                    const matchedIds = ftsIds.map(r => r.rowid).filter(rid => rid !== id);
+                    if (matchedIds.length > 0) {
+                        related = await db.select({
+                            id: newsItems.id, title: newsItems.title,
+                            description: newsItems.description, image_url: newsItems.image_url,
+                            published_at: newsItems.published_at,
+                        }).from(newsItems)
+                            .where(and(
+                                sql`${newsItems.id} IN (${sql.join(matchedIds.map(i => sql`${i}`))})`,
+                                eq(newsItems.is_deleted, 0),
+                            ))
+                            .orderBy(
+                                sql`CASE WHEN category = ${item.category} THEN 0 ELSE 1 END`,
+                                desc(newsItems.created_at)
+                            )
+                            .limit(5)
+                            .all();
+                    }
+                }
+            }
+        }
+
+        // 3) Same category fallback
+        if (related.length === 0) {
+            related = await db.select({
                 id: newsItems.id, title: newsItems.title,
                 description: newsItems.description, image_url: newsItems.image_url,
                 published_at: newsItems.published_at,
@@ -151,17 +187,32 @@ router.get('/related/:id', async (c) => {
                 .orderBy(desc(newsItems.created_at))
                 .limit(5)
                 .all();
-            related = sameCat;
         }
 
-        return c.json({
+        // Normalize both AI Search chunks ({id,text,score,item}) and DB rows ({id,title,description,image_url})
+        const body = JSON.stringify({
             related: related.map((n: any) => ({
                 id: String(n.id),
-                text: n.title,
-                score: 0.5,
-                item: { metadata: { description: n.description, image_url: n.image_url } },
+                text: n.title || n.text || '',
+                score: n.score ?? 0.5,
+                item: {
+                    metadata: {
+                        description: n.description || n.item?.metadata?.description || null,
+                        image_url: n.image_url || n.item?.metadata?.image_url || null,
+                    },
+                },
             })),
         });
+
+        // Cache at edge for 1h (free, unlimited)
+        const res = new Response(body, {
+            headers: {
+                'Content-Type': 'application/json',
+                'Cache-Control': 'public, max-age=3600, s-maxage=3600',
+            },
+        });
+        c.executionCtx.waitUntil(caches.default.put(cacheKey, res.clone()));
+        return res;
     } catch (error) {
         return c.json({ error: String(error) }, 500);
     }

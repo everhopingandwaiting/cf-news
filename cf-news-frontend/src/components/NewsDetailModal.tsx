@@ -207,6 +207,8 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
           </select>
         </div>
 
+        <style>{`@keyframes fsi{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}.fi{animation:fsi .2s ease-out}`}</style>
+        <div key={currentItem.id} className="fi">
         {currentItem.ai_summary ? (
           <div className="bg-gradient-to-r from-indigo-50 to-purple-50 px-5 py-4 rounded-lg mb-5 border-l-[3px] border-indigo-500">
             <div className="font-semibold text-[13px] text-indigo-500 mb-2">⟡ AI 摘要</div>
@@ -293,6 +295,7 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
         )}
 
         <RelatedArticles newsId={itemId} title={currentItem!.title} onSelect={handleRelatedSelect} />
+        </div>
 
         <div className="flex gap-3 mt-4 flex-wrap">
           <button className="px-5 py-2.5 bg-indigo-500 text-white rounded-lg text-[13px] font-medium hover:bg-indigo-600 transition" onClick={() => { setSourceView(sourceView ? null : 'iframe'); setReaderContent(null); }}>
