@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import type { NewsItem } from '../types';
+import TrendingCompareChart from './TrendingCompareChart';
+import TrendingHourlyChart from './TrendingHourlyChart';
 
 // --- Constants ---
 const KEYWORD_ARTICLES_LIMIT = 6;
@@ -58,8 +60,6 @@ interface HourlySource {
 interface HourlyCat {
     hour: string; category: string; count: number;
 }
-type HourlyRow = HourlySource | HourlyCat;
-
 const PERIODS = [
     { key: 6, label: '6h' },
     { key: 12, label: '12h' },
@@ -78,8 +78,6 @@ const PALETTE = [
     'bg-orange-100 text-orange-700 border-orange-200 hover:bg-orange-200',
     'bg-teal-100 text-teal-700 border-teal-200 hover:bg-teal-200',
 ];
-
-const CHART_COLORS = ['#6366f1', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
 
 function isBigram(w: string) { return w.includes('_'); }
 function displayWord(w: string) { return w.replace(/_/g, ' '); }
@@ -241,144 +239,6 @@ export default function TrendingPanel({ visible, onClose, onSearch, onSelectArti
             .catch(() => setInsight({ keyword, text: '分析失败', loading: false }));
     }
 
-    // Chart tab: multi-keyword comparison SVG
-    function renderCompareChart() {
-        if (compareLoading) {
-            return (
-                <div className="mt-4 bg-gray-50 rounded-xl p-4 border border-gray-100">
-                    <div className="flex items-center justify-center gap-2 py-6">
-                        <span className="w-4 h-4 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin" />
-                        <span className="text-[12px] text-gray-400">加载对比数据...</span>
-                    </div>
-                </div>
-            );
-        }
-        if (compareSeries.length < 2) return null;
-        const allPoints = compareSeries.flatMap(s => s.points);
-        const allHours = [...new Set(allPoints.map(p => p.date_hour))].sort();
-        if (allHours.length < 2) return null;
-
-        const maxVal = Math.max(...allPoints.map(p => p.count), 1);
-        const W = 600, H = 140, PAD = 4;
-
-        return (
-            <div className="mt-4 bg-gray-50 rounded-xl p-4 border border-gray-100">
-                <div className="text-[12px] text-gray-500 mb-2 text-center font-medium">关键词对比</div>
-                <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-36" preserveAspectRatio="xMidYMid meet">
-                    {compareSeries.map((s, si) => {
-                        const pts = allHours.map((h, i) => {
-                            const p = s.points.find(p => p.date_hour === h);
-                            const x = (i / (allHours.length - 1)) * (W - PAD * 2) + PAD;
-                            const y = H - PAD - ((p?.count || 0) / maxVal) * (H - PAD * 2);
-                            return `${x},${y}`;
-                        });
-                        return <polyline key={s.keyword} points={pts.join(' ')} fill="none"
-                            stroke={CHART_COLORS[si % CHART_COLORS.length]} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />;
-                    })}
-                </svg>
-                <div className="flex flex-wrap gap-3 justify-center mt-1">
-                    {compareSeries.map((s, si) => (
-                        <span key={s.keyword} className="text-[11px] text-gray-600 flex items-center gap-1">
-                            <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: CHART_COLORS[si % CHART_COLORS.length] }} />
-                            {displayWord(s.keyword)}
-                        </span>
-                    ))}
-                </div>
-            </div>
-        );
-    }
-
-    function renderHourlyChart(mode: 'sources' | 'cats') {
-        const raw = mode === 'sources' ? hourlySrc : hourlyCat;
-        if (hourlyLoading) {
-            return (
-                <div className="mt-4 bg-gray-50 rounded-xl p-4 border border-gray-100">
-                    <div className="flex items-center justify-center gap-2 py-6">
-                        <span className="w-4 h-4 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin" />
-                        <span className="text-[12px] text-gray-400">加载数据...</span>
-                    </div>
-                </div>
-            );
-        }
-        if (raw.length === 0) {
-            return <div className="text-center py-8 text-gray-400 text-sm">暂无数据</div>;
-        }
-
-        const hours = [...new Set(raw.map(r => r.hour))].sort();
-        const getName = (r: HourlyRow): string => mode === 'sources' ? (r as HourlySource).source_name : (r as HourlyCat).category;
-        const groups = [...new Set(raw.map(getName))] as string[];
-        let topGroups: string[];
-        let otherLabel = '';
-        if (mode === 'sources') {
-            const totals: Record<string, number> = {};
-            for (const r of raw) totals[getName(r)] = (totals[getName(r)] || 0) + r.count;
-            topGroups = groups.sort((a, b) => (totals[b] || 0) - (totals[a] || 0)).slice(0, 6);
-            otherLabel = '其他';
-        } else {
-            topGroups = groups;
-        }
-
-        const series: Record<string, number[]> = {};
-        for (const g of topGroups) series[g] = hours.map(() => 0);
-        if (otherLabel) series[otherLabel] = hours.map(() => 0);
-        for (const r of raw) {
-            const hi = hours.indexOf(r.hour);
-            const name = getName(r);
-            if (topGroups.includes(name)) {
-                series[name][hi] += r.count;
-            } else if (otherLabel) {
-                series[otherLabel][hi] += r.count;
-            }
-        }
-
-        const maxTotal = Math.max(...hours.map((_, i) => Object.values(series).reduce((s, arr) => s + arr[i], 0)), 1);
-        const H = 140, W = 600, PAD = 4;
-
-        return (
-            <div className="mt-4 bg-gray-50 rounded-xl p-4 border border-gray-100">
-                <div className="text-[12px] text-gray-500 mb-2 text-center font-medium">{mode === 'sources' ? '每小时源分布' : '每小时类分布'}</div>
-                {hours.length <= 1 ? (
-                    <div className="text-center py-8 text-gray-400 text-sm">需要更多小时的数据</div>
-                ) : (
-                    <>
-                        <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-36" preserveAspectRatio="xMidYMid meet">
-                            {hours.map((h, hi) => {
-                                let yOff = 0;
-                                const barW = (W - PAD * 2) / hours.length * 0.7;
-                                const x = hi * (W - PAD * 2) / hours.length + PAD + ((W - PAD * 2) / hours.length - barW) / 2;
-                                return Object.keys(series).map((g, gi) => {
-                                    const val = series[g][hi];
-                                    if (val === 0) return null;
-                                    const barH = (val / maxTotal) * (H - PAD * 2);
-                                    const y = H - PAD - yOff - barH;
-                                    yOff += barH;
-                                    return <g key={`${h}-${gi}`}><rect x={x} y={y} width={barW} height={barH}
-                                        fill={CHART_COLORS[gi % CHART_COLORS.length]} rx={1} opacity={0.9} /><title>{g}: {val}</title></g>;
-                                });
-                            })}
-                        </svg>
-                        <div className="flex mt-1" style={{ paddingLeft: `${PAD}px` }}>
-                            {hours.map((h, i) => (
-                                <div key={h} className="flex-1 text-[9px] text-gray-400 text-center truncate"
-                                    style={{ display: hours.length > 12 && i % Math.ceil(hours.length / 8) !== 0 ? 'none' : 'block' }}>
-                                    {h.substring(11, 16)}
-                                </div>
-                            ))}
-                        </div>
-                        <div className="flex flex-wrap gap-2 justify-center mt-2">
-                            {Object.keys(series).map((g, gi) => (
-                                <span key={g} className="text-[10px] text-gray-600 flex items-center gap-1">
-                                    <span className="w-2 h-2 rounded-sm inline-block" style={{ backgroundColor: CHART_COLORS[gi % CHART_COLORS.length] }} />
-                                    {g}
-                                </span>
-                            ))}
-                        </div>
-                    </>
-                )}
-            </div>
-        );
-    }
-
     return (
         <div className="fixed inset-0 z-50 flex justify-end">
             <div className="absolute inset-0 bg-black/30 animate-fadeIn" onClick={onClose} />
@@ -483,7 +343,7 @@ export default function TrendingPanel({ visible, onClose, onSearch, onSelectArti
                     )
                 )}
                 {compareSeries.length >= 2 && (
-                    <div className="mt-4">{renderCompareChart()}</div>
+                    <div className="mt-4"><TrendingCompareChart series={compareSeries} loading={compareLoading} /></div>
                 )}
 
                 {/* Keyword articles inline */}
@@ -628,7 +488,7 @@ export default function TrendingPanel({ visible, onClose, onSearch, onSelectArti
                                 </div>
 
                                 {/* Multi-keyword comparison chart */}
-                                {compareSeries.length >= 2 && renderCompareChart()}
+                                {compareSeries.length >= 2 && <TrendingCompareChart series={compareSeries} loading={compareLoading} />}
 
                                 {/* Single keyword bar chart */}
                                 {chartTopic && (
@@ -678,8 +538,8 @@ export default function TrendingPanel({ visible, onClose, onSearch, onSelectArti
                         )
                     )}
 
-                    {tab === 'sources' && renderHourlyChart('sources')}
-                    {tab === 'cats' && renderHourlyChart('cats')}
+                    {tab === 'sources' && <TrendingHourlyChart mode="sources" sources={hourlySrc} categories={hourlyCat} loading={hourlyLoading} />}
+                    {tab === 'cats' && <TrendingHourlyChart mode="cats" sources={hourlySrc} categories={hourlyCat} loading={hourlyLoading} />}
                 </div>
 
                 {/* AI Insight tooltip */}

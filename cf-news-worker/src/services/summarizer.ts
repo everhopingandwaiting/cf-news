@@ -1,5 +1,6 @@
 import { Bindings } from '../types';
-import { getConfig, getConfigInt, getModels, getProviderInfo, getProviderOrder, getFailed, markFailed, logAICall, callAI } from './aiProvider';
+import { getConfig, getConfigInt, getModels, getProviderInfo, getProviderOrder, getFailed, callAI, doOpenAICompat as aiDoOpenAICompat, doCF as aiDoCF } from './aiProvider';
+import { fetchRichArticleContent } from './contentFetcher';
 
 // ========== 通用工具 ==========
 
@@ -27,56 +28,21 @@ async function doOpenAICompat(
     env: Bindings, provider: string, baseUrl: string, apiKey: string,
     model: string, prompt: string, newsId?: number, newsTitle?: string
 ): Promise<string | null> {
-    const start = Date.now();
+    // Preserve summarizer-specific defaults (summary_max_tokens=180) when delegating to aiProvider
     const maxTokens = await getConfigInt(env, 'summary_max_tokens', 180);
     const temp = parseFloat(await getConfig(env, 'summary_temperature') || '0.3');
-    try {
-        const url = baseUrl.endsWith('/') ? `${baseUrl}chat/completions` : `${baseUrl}/chat/completions`;
-        const res = await fetch(url, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], max_tokens: maxTokens, temperature: temp }),
-            signal: AbortSignal.timeout(30000),
-        });
-        if (!res.ok) {
-            const errText = await res.text().catch(() => '');
-            console.error(`${provider}/${model} error ${res.status}: ${errText}`);
-            await markFailed(env, model, provider);
-            return null;
-        }
-        const body: any = await res.json();
-        const text = body?.choices?.[0]?.message?.content || '';
-        await logAICall(env, { provider, model, news_id: newsId, news_title: newsTitle,
-            prompt_length: prompt.length, response_length: text.length, response_preview: text,
-            duration_ms: Date.now() - start, success: !!text });
-        if (!text) await markFailed(env, model, provider);
-        return text || null;
-    } catch (e: any) {
-        await logAICall(env, { provider, model, news_id: newsId, news_title: newsTitle,
-            prompt_length: prompt.length, response_length: 0, duration_ms: Date.now() - start, success: false, error: String(e) });
-        await markFailed(env, model, provider);
-        return null;
-    }
+    return aiDoOpenAICompat(env, provider, baseUrl, apiKey, model,
+        [{ role: 'user', content: prompt }],
+        { max_tokens: maxTokens, temperature: temp, news_id: newsId, news_title: newsTitle }
+    );
 }
 
 async function doCF(env: Bindings, model: string, prompt: string, newsId?: number, newsTitle?: string): Promise<string | null> {
-    const start = Date.now();
     const maxTokens = await getConfigInt(env, 'summary_max_tokens', 180);
     const temp = parseFloat(await getConfig(env, 'summary_temperature') || '0.3');
-    try {
-        const r: any = await env.AI.run(model, { prompt, max_tokens: maxTokens, temperature: temp });
-        const text = r?.response || r?.output || '';
-        await logAICall(env, { provider: 'cloudflare', model, news_id: newsId, news_title: newsTitle,
-            prompt_length: prompt.length, response_length: text.length, response_preview: text,
-            duration_ms: Date.now() - start, success: !!text });
-        if (!text) await markFailed(env, model, 'cloudflare');
-        return text || null;
-    } catch (e: any) {
-        await logAICall(env, { provider: 'cloudflare', model, news_id: newsId, news_title: newsTitle,
-            prompt_length: prompt.length, response_length: 0, duration_ms: Date.now() - start, success: false, error: String(e) });
-        await markFailed(env, model, 'cloudflare');
-        return null;
-    }
+    return aiDoCF(env, model, [{ role: 'user', content: prompt }],
+        { max_tokens: maxTokens, temperature: temp, news_id: newsId, news_title: newsTitle }
+    );
 }
 
 // ========== Provider 路由 ==========
@@ -365,4 +331,48 @@ export async function generatePerspectives(env: Bindings, newsId: number): Promi
         console.error('generatePerspectives error:', e);
         return null;
     }
+}
+
+/**
+ * Generate AI summaries for news items that don't have them yet.
+ * First enriches items with short/no content, then generates summaries.
+ * Called by cron handler.
+ */
+export async function generatePendingSummaries(env: Bindings): Promise<void> {
+    console.log('Generating pending AI summaries...');
+    // Enrich items with short RSS content first (max 5 per run, separated from fetch to avoid 50-req limit)
+    const shortItems = await env.DB.prepare(
+        `SELECT id, title, url FROM news_items 
+         WHERE LENGTH(COALESCE(content,'')) < 300 AND LENGTH(COALESCE(description,'')) < 300
+         AND url IS NOT NULL LIMIT 5`
+    ).all<{ id: number; title: string; url: string }>();
+    for (const item of shortItems.results) {
+        try {
+            const rich = await fetchRichArticleContent(item.url);
+            if (rich) {
+                await env.DB.prepare(
+                    'UPDATE news_items SET content = ?, description = ? WHERE id = ?'
+                ).bind(rich.html, rich.text, item.id).run();
+                console.log(`Enriched: "${item.title.substring(0, 40)}"`);
+            }
+        } catch (e) {
+            console.error(`Enrich failed for "${item.title}":`, e);
+        }
+    }
+    // Then generate summaries for items missing them
+    const items = await env.DB.prepare(
+        `SELECT n.id, n.title, n.description, n.content 
+         FROM news_items n LEFT JOIN news_summaries ns ON ns.news_id = n.id 
+         WHERE ns.id IS NULL AND (n.description IS NOT NULL OR n.content IS NOT NULL)
+         LIMIT 10`
+    ).all<{ id: number; title: string; description: string; content: string }>();
+
+    if (items.results.length === 0) {
+        console.log('No pending summaries');
+        return;
+    }
+
+    console.log(`Found ${items.results.length} items without summaries`);
+    const done = await generateBatchSummariesForNews(env, items.results);
+    console.log(`Summary generation complete: ${done}/${items.results.length}`);
 }

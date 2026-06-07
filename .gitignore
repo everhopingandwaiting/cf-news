@@ -1,21 +1,54 @@
+# Dependencies
 node_modules/
+
+# Build output
 dist/
+
+# Environment & secrets
 .env
+.env.local
+.env.*.local
+.admin-token
+.secrets-cache
+
+# Logs
 *.log
-__pycache__/
-*.pyc
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.tsbuildinfo
+.eslintcache
+
+# AI agent files (never commit)
 .omo/
 thoughts/
+.learnings/
+skills/
 AGENTS.md
 PLAN-*.md
 cf-news-frontend/AGENTS.md
 cf-news-worker/AGENTS.md
-.admin-token
 
 # Separate project (not part of this repo)
 /cf-dns-manager/
 
 # Cloudflare
 .wrangler/
+cf-news-worker/.wrangler/
 cf-news-worker/wrangler.toml
 cf-news-worker/public/
+
+# Python
+__pycache__/
+*.pyc

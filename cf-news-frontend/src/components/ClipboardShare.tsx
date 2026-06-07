@@ -44,35 +44,8 @@ interface Props {
     onCancelFile: (transferId: string) => void;
 }
 
+import { formatFileSize, loadHistory, appendHistory } from '../utils/clipboard';
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
-const MAX_HISTORY = 20;
-
-function historyKey(userId: string): string {
-    return userId ? `cb_history_${userId}` : 'cb_history';
-}
-
-function formatFileSize(bytes: number): string {
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-    return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
-}
-
-function loadHistory(userId: string): string[] {
-    try { const v = localStorage.getItem(historyKey(userId)); return v ? JSON.parse(v) : []; } catch { return []; }
-}
-
-function saveHistory(userId: string, items: string[]) {
-    try { localStorage.setItem(historyKey(userId), JSON.stringify(items.slice(0, MAX_HISTORY))); } catch {}
-}
-
-function appendHistory(userId: string, text: string) {
-    if (!text.trim()) return;
-    const history = loadHistory(userId);
-    const filtered = history.filter(h => h !== text);
-    filtered.unshift(text);
-    saveHistory(userId, filtered);
-}
 
 function compressImage(blob: Blob): Promise<Blob> {
     return new Promise((resolve) => {

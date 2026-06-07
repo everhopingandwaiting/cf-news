@@ -56,29 +56,48 @@ docker run --rm --env-file "$WORKER_DIR/.env" \
   --network=host \
   cf-news-worker npx wrangler deploy 2>&1
 
-# 5. Purge Cloudflare cache so users see the new frontend immediately
+# 5. Purge CF edge cache for updated frontend assets
 echo "==> Purging edge cache..."
 ZONE_ID="${ZONE_ID:-}"
-CF_API_TOKEN="${CF_API_TOKEN:-}"
-if [ -n "$ZONE_ID" ] && [ -n "$CF_API_TOKEN" ]; then
-  curl -sf -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/purge_cache" \
-    -H "Authorization: Bearer $CF_API_TOKEN" \
-    -H "Content-Type: application/json" \
-    --data '{"purge_everything":true}' > /dev/null && echo "  Cache purged" || echo "  Cache purge skipped"
+if [ -n "$ZONE_ID" ]; then
+  # Try API token first, fall back to wrangler (uses CLOUDFLARE_API_TOKEN)
+  CF_API_TOKEN="${CF_API_TOKEN:-${CLOUDFLARE_API_TOKEN:-}}"
+  if [ -n "$CF_API_TOKEN" ]; then
+    curl -sf -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/purge_cache" \
+      -H "Authorization: Bearer $CF_API_TOKEN" \
+      -H "Content-Type: application/json" \
+      --data '{"purge_everything":true}' > /dev/null && echo "  Cache purged via API" || echo "  API purge failed (token may lack Zone > Cache > Purge permission)"
+  else
+    echo "  No API token available, skipping cache purge"
+  fi
 else
-  echo "  ZONE_ID or CF_API_TOKEN not set, skipping cache purge"
+  echo "  ZONE_ID not set, skipping cache purge"
 fi
 
-# 6. Push secrets to Cloudflare (idempotent, updates if changed)
+# 6. Push secrets to Cloudflare (only if changed)
 echo "==> Updating secrets..."
+SECRETS_CACHE="$WORKER_DIR/.secrets-cache"
+mkdir -p "$(dirname "$SECRETS_CACHE")"
+touch "$SECRETS_CACHE"
 for key in JWT_SECRET OPENROUTER_API_KEY NVIDIA_API_KEY MANGO_API_KEY GROQ_API_KEY TURNSTILE_SECRET; do
   value=$(grep "^${key}=" "$WORKER_DIR/.env" | cut -d= -f2-)
-  if [ -n "$value" ]; then
+  if [ -z "$value" ]; then continue; fi
+  last_hash=$(grep "^${key}=" "$SECRETS_CACHE" | cut -d= -f2-)
+  current_hash=$(echo -n "$value" | md5sum | cut -d' ' -f1)
+  if [ "$last_hash" = "$current_hash" ]; then
+    echo "  $key unchanged, skipping"
+  else
     echo "$value" | docker run --rm -i --env-file "$WORKER_DIR/.env" \
       -v "$WORKER_DIR:/app" \
       -v /app/node_modules \
       --network=host \
       cf-news-worker npx wrangler secret put "$key" 2>&1 | tail -1
+    # Update cache
+    if grep -q "^${key}=" "$SECRETS_CACHE" 2>/dev/null; then
+      sed -i "s/^${key}=.*/${key}=${current_hash}/" "$SECRETS_CACHE"
+    else
+      echo "${key}=${current_hash}" >> "$SECRETS_CACHE"
+    fi
   fi
 done
 

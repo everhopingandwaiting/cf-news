@@ -67,7 +67,7 @@ export async function askQuestion(
     question: string,
     stream = false
 ): Promise<{ answer: string; chunks: any[] } | ReadableStream> {
-    const { callAI, callAIStream } = await import('./aiProvider');
+    const { callAI } = await import('./aiProvider');
     const recentNews = await env.DB.prepare(
         `SELECT title, description FROM news_items WHERE is_deleted = 0 ORDER BY created_at DESC LIMIT 10`
     ).all<{ title: string; description: string }>();
@@ -80,7 +80,7 @@ export async function askQuestion(
 
     if (stream) {
         try {
-            const { callAIStream } = await import('./aiProvider');
+            const { callAIStream } = await import('./aiStream');
             const s = await callAIStream(env, prompt, {
                 system_prompt: '你是一个新闻助手。回答简洁清晰，用中文。',
                 max_tokens: 1000,
