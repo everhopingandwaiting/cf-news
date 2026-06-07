@@ -185,7 +185,7 @@ INSERT OR IGNORE INTO news_sources (name, url, feed_url, category, language) VAL
     ('Yahoo Finance', 'https://finance.yahoo.com', 'https://finance.yahoo.com/news/rssindex', 'stocks', 'en'),
     ('凤凰网财经', 'https://finance.ifeng.com', 'https://finance.ifeng.com/rss/stocknews.xml', 'stocks', 'zh'),
     ('The Guardian', 'https://www.theguardian.com', 'https://www.theguardian.com/world/rss', 'news', 'en'),
-    ('凤凰网 基金', 'https://finance.ifeng.com', 'https://finance.ifeng.com/rss/fundnews.xml', 'funds', 'zh'),
+    ('凤凰网 基金', 'https://finance.ifeng.com', 'https://finance.ifeng.com/rss/fundnews.xml', 'funds', 'zh'),  -- disabled: feed dead (ifeng shut down RSS)
     ('雪球 今日话题', 'https://xueqiu.com', 'https://xueqiu.com/hots/topic/rss', 'stocks', 'zh'),
     ('凤凰网 理财', 'https://finance.ifeng.com', 'https://finance.ifeng.com/rss/moneynews.xml', 'finance', 'zh');
 CREATE TABLE IF NOT EXISTS user_preferences (
