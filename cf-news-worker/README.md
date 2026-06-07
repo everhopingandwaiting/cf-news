@@ -141,6 +141,41 @@ Cron Triggers 配置为每小时执行一次（`0 * * * *`），自动抓取所�
 crons = ["0 * * * *"]  # 每小时整点
 ```
 
+## 测试
+
+```bash
+# 在 Docker 中运行所有测试
+docker run --rm -v $(pwd):/app -v /app/node_modules --network=host cf-news-worker npx vitest run --reporter=verbose
+```
+
+测试使用 vitest + MockD1（内存中的 D1 模拟），不依赖 Cloudflare 远程服务。
+
+### 测试文件
+
+| 文件 | 说明 | 用例数 |
+|------|------|--------|
+| `src/__tests__/routes/health.test.ts` | 健康检查端点 | 1 |
+| `src/__tests__/routes/auth.test.ts` | 用户注册/登录/个人信息 | 7 |
+| `src/__tests__/routes/news.test.ts` | 新闻列表/详情/分类/来源/搜索 | 9 |
+| `src/__tests__/routes/favorites.test.ts` | 收藏 CRUD | 5 |
+| `src/__tests__/routes/history.test.ts` | 阅读历史 CRUD | 5 |
+| `src/__tests__/routes/comments.test.ts` | 评论 CRUD | 5 |
+| `src/__tests__/routes/user.test.ts` | 用户设置/推送订阅 | 6 |
+| `src/__tests__/routes/admin.test.ts` | 管理后台 | 4 |
+| `src/__tests__/routes/ai.test.ts` | AI 摘要/问答 | 3 |
+| `src/__tests__/routes/image.test.ts` | 图片代理 | 3 |
+| `src/__tests__/routes/screenshot.test.ts` | 页面截图 | 3 |
+| `src/__tests__/routes/share.test.ts` | 分享 OG 卡片 | 3 |
+| `src/__tests__/routes/operations.test.ts` | 手动操作 | 2 |
+| `src/__tests__/routes/trending.test.ts` | 趋势数据 | 2 |
+
+### 测试架构
+
+- **vitest** — 测试运行器
+- **MockD1** — `MockD1` 类模拟 Cloudflare D1 绑定，支持 Drizzle ORM 生成的 SQL 模式（SELECT/INSERT/UPDATE/DELETE，含 JOIN、COUNT、GROUP BY、LIMIT/OFFSET、子查询）
+- **hono/testing** — 通过 `app.fetch()` 发送 HTTP 请求测试路由
+- **helpers.ts** — `buildTestApp()` 构建测试应用，`request()` 封装请求
+
 ## 注意事项
 
 1. **RSS 源可用性**: 某些 RSS 源可能需要代理或有访问限制

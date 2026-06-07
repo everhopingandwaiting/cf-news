@@ -1,0 +1,40 @@
+name = "cf-news-worker-test"
+main = "src/index.ts"
+compatibility_date = "2026-05-28"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "news-db-test"
+database_id = "test"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "test"
+
+[[durable_objects.bindings]]
+name = "CLIPBOARD"
+class_name = "ClipboardRoom"
+
+[[durable_objects.bindings]]
+name = "COMMENTS"
+class_name = "CommentsRoom"
+
+[[durable_objects.bindings]]
+name = "PIPING"
+class_name = "PipingRoom"
+
+[vars]
+NEWS_FETCH_INTERVAL = "3600"
+TURNSTILE_SITE_KEY = "test-site-key"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ClipboardRoom"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["CommentsRoom"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["PipingRoom"]
