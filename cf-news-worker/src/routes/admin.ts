@@ -141,6 +141,43 @@ admin.post('/sources/:id/fetch', async (c) => {
     }
 });
 
+// Debug: fetch any URL from Workers network (admin only)
+admin.get('/debug/fetch', async (c) => {
+    const targetUrl = c.req.query('url');
+    if (!targetUrl) return c.json({ error: 'Missing ?url=' }, 400);
+
+    let parsed: URL;
+    try { parsed = new URL(targetUrl); } catch {
+        return c.json({ error: 'Invalid URL' }, 400);
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        return c.json({ error: 'Only http/https supported' }, 400);
+    }
+
+    try {
+        const t0 = Date.now();
+        const res = await fetch(targetUrl, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (compatible; CFNewsDebug/1.0)' },
+            signal: AbortSignal.timeout(15_000),
+        });
+        const ms = Date.now() - t0;
+        const text = await res.text();
+        const items = (text.match(/<item[^>]*>[\s\S]*?<\/item>/gi) || []).length;
+        return c.json({
+            url: targetUrl,
+            status: res.status,
+            ms,
+            bytes: text.length,
+            content_type: res.headers.get('Content-Type') || '',
+            feed_type: text.includes('<rss') ? 'RSS' : text.includes('<feed') ? 'Atom' : 'Unknown',
+            item_count: items,
+            body_preview: text.slice(0, 300),
+        });
+    } catch (e: any) {
+        return c.json({ url: targetUrl, error: e.message }, 502);
+    }
+});
+
 // Rebuild FTS5 search index from all existing news items (async, runs in background)
 admin.post('/rebuild-index', async (c) => {
     const db = getDb(c.env);
