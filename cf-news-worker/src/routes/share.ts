@@ -1,13 +1,10 @@
 import { Bindings } from '../types';
+import { eq } from 'drizzle-orm';
+import { getDb } from '../db';
+import { newsItems, newsSummaries } from '../db/schema';
 
 const CRAWLER_RE = /facebookexternalhit|twitterbot|linkedinbot|slackbot|discordbot|telegrambot|whatsapp|pinterest|baiduspider|googlebot|bingbot|yandexbot/i;
 
-/**
- * Handle /share/:id — OG preview for social media crawlers.
- * For crawlers: returns HTML with OG meta tags.
- * For normal browsers: redirects to SPA with ?id= param.
- * Returns a Response directly.
- */
 export async function handleShare(request: Request, env: Bindings): Promise<Response | null> {
     const url = new URL(request.url);
     if (!url.pathname.startsWith('/share/')) return null;
@@ -20,14 +17,23 @@ export async function handleShare(request: Request, env: Bindings): Promise<Resp
 
     if (isCrawler) {
         try {
-            const item = await env.DB.prepare(
-                'SELECT title, description, image_url FROM news_items WHERE id = ?'
-            ).bind(Number(id)).first<{ title: string; description: string; image_url: string }>();
+            const db = getDb(env);
+            const item = await db.select({
+                title: newsItems.title,
+                description: newsItems.description,
+                image_url: newsItems.image_url,
+            })
+                .from(newsItems)
+                .where(eq(newsItems.id, Number(id)))
+                .get();
+
             if (item) {
-                // 优先用 AI 摘要，没有再用原文描述
-                const summary = await env.DB.prepare('SELECT summary FROM news_summaries WHERE news_id = ?').bind(Number(id)).first<{ summary: string }>();
+                const summary = await db.select({ summary: newsSummaries.summary })
+                    .from(newsSummaries)
+                    .where(eq(newsSummaries.news_id, Number(id)))
+                    .get();
+
                 const desc = (summary?.summary || item.description || '').replace(/<[^>]+>/g, '').substring(0, 200);
-                // 图片走 CF 代理避免防盗链
                 const imgUrl = item.image_url ? `/api/image?url=${encodeURIComponent(item.image_url)}` : '';
                 const shareUrl = `https://${url.hostname}/share/${id}`;
                 return new Response(`<!DOCTYPE html><html><head>
@@ -48,7 +54,6 @@ ${imgUrl ? `<meta property="og:image" content="${imgUrl}"><meta name="twitter:im
         } catch { /* fall through to SPA redirect */ }
     }
 
-    // Non-crawler → serve SPA for client-side routing
     const spaRes = await fetch(new URL('/', request.url));
     return new Response(spaRes.body, {
         headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' },

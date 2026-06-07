@@ -60,8 +60,8 @@ app.use('/api/user/*', async (c, next) => {
     await next();
 });
 app.route('/api/user', userRoutes);
-app.route('/api/user', favoritesRoutes);
-app.route('/api/user', historyRoutes);
+app.route('/api/user/favorites', favoritesRoutes);
+app.route('/api/user/history', historyRoutes);
 
 // Admin routes (require auth + admin role)
 app.use('/api/admin/*', async (c, next) => {
@@ -113,7 +113,12 @@ export default {
             if (!token || !newsId) return new Response('Missing params', { status: 401 });
             const payload = await verifyJWT(token, env.JWT_SECRET);
             if (!payload) return new Response('Invalid token', { status: 403 });
-            const user = await env.DB.prepare('SELECT username FROM users WHERE id = ?').bind(payload.sub).first<{ username: string }>();
+            const user = await import('./db').then(m => {
+                const db = m.getDb(env);
+                return import('./db/schema').then(s => import('drizzle-orm').then(d => 
+                    db.select({ username: s.users.username }).from(s.users).where(d.eq(s.users.id, payload.sub)).get()
+                ));
+            });
             if (!user) return new Response('User not found', { status: 404 });
             const stub = env.COMMENTS.get(env.COMMENTS.idFromName(newsId));
             const wsUrl = new URL(request.url);

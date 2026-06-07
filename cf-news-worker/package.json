@@ -7,17 +7,30 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "db:init": "wrangler d1 execute news-db --local --file=./src/db/schema.sql",
-    "db:init:remote": "wrangler d1 execute news-db --remote --file=./src/db/schema.sql"
+    "db:init:remote": "wrangler d1 execute news-db --remote --file=./src/db/schema.sql",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
-  "keywords": ["cloudflare", "worker", "news", "rss"],
+  "keywords": [
+    "cloudflare",
+    "worker",
+    "news",
+    "rss"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "drizzle-orm": "^0.45.2",
     "hono": "^4.0.0"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.9.14",
     "@cloudflare/workers-types": "^4.0.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "better-sqlite3": "^12.10.0",
+    "sql.js": "^1.11.0",
     "typescript": "^5.0.0",
+    "vitest": "^3.0.0",
     "wrangler": "^4.0.0"
   }
 }

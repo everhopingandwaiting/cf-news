@@ -3,12 +3,16 @@ import { Bindings } from '../types';
 import { fetchNews } from '../services/newsFetcher';
 import { generateSummaryForNews, generateBatchSummariesForNews, generateAITake } from '../services/summarizer';
 import { translateText } from '../services/translator';
+import { eq, sql, isNull, and } from 'drizzle-orm';
+import { getDb } from '../db';
+import { appConfig, newsItems, newsSummaries, newsAiTake } from '../db/schema';
 
 const operations = new Hono<{ Bindings: Bindings }>();
 
-// POST /api/fetch — manually trigger news fetch
 operations.post('/fetch', async (c) => {
-    const row = await c.env.DB.prepare("SELECT value FROM app_config WHERE key = 'last_fetch_time'").first<{ value: string }>();
+    const db = getDb(c.env);
+    const row = await db.select({ value: appConfig.value })
+        .from(appConfig).where(eq(appConfig.key, 'last_fetch_time')).get();
     const lastFetch = row?.value;
     const now = Date.now();
     if (lastFetch && (now - parseInt(lastFetch)) < 300000) {
@@ -17,88 +21,97 @@ operations.post('/fetch', async (c) => {
     }
     try {
         await fetchNews(c.env, true);
-        await c.env.DB.prepare("INSERT OR REPLACE INTO app_config (key, value) VALUES ('last_fetch_time', ?)").bind(String(now)).run();
+        await db.insert(appConfig).values({ key: 'last_fetch_time', value: String(now) })
+            .onConflictDoUpdate({ target: appConfig.key, set: { value: String(now) } });
         return c.json({ success: true, message: 'News fetch triggered' });
     } catch (error) {
         return c.json({ success: false, error: String(error) }, 500);
     }
 });
 
-// POST /api/summarize — generate summaries for items without them
 operations.post('/summarize', async (c) => {
+    const db = getDb(c.env);
     try {
         const body = await c.req.json().catch(() => ({}));
         const ids = body?.ids as number[] | undefined;
 
-        let items: any;
+        let items: { id: number; title: string; description: string | null; content: string | null }[];
         if (ids && ids.length > 0) {
-            const placeholders = ids.map(() => '?').join(',');
-            items = await c.env.DB.prepare(
-                `SELECT id, title, description, content FROM news_items WHERE id IN (${placeholders})`
-            ).bind(...ids).all<{ id: number; title: string; description: string; content: string }>();
+            items = await Promise.all(
+                ids.map(id => db.select({
+                    id: newsItems.id, title: newsItems.title,
+                    description: newsItems.description, content: newsItems.content,
+                }).from(newsItems).where(eq(newsItems.id, id)).get().then(r => r!))
+            );
         } else {
-            items = await c.env.DB.prepare(
-                `SELECT n.id, n.title, n.description, n.content 
-                 FROM news_items n LEFT JOIN news_summaries ns ON ns.news_id = n.id 
-                 WHERE ns.id IS NULL AND (n.description IS NOT NULL OR n.content IS NOT NULL)
-                 LIMIT 10`
-            ).all<{ id: number; title: string; description: string; content: string }>();
+            items = await db.select({
+                id: newsItems.id, title: newsItems.title,
+                description: newsItems.description, content: newsItems.content,
+            })
+                .from(newsItems)
+                .leftJoin(newsSummaries, eq(newsSummaries.news_id, newsItems.id))
+                .where(and(isNull(newsSummaries.id), sql`${newsItems.description} IS NOT NULL OR ${newsItems.content} IS NOT NULL`))
+                .limit(10)
+                .all() as any[];
         }
 
-        const done = await generateBatchSummariesForNews(c.env, items.results);
-        return c.json({ success: true, generated: done, total: items.results.length });
+        const done = await generateBatchSummariesForNews(c.env, items as any);
+        return c.json({ success: true, generated: done, total: items.length });
     } catch (error) {
         return c.json({ success: false, error: String(error) }, 500);
     }
 });
 
-// POST /api/summarize/:newsId — generate summary for a single news item
 operations.post('/summarize/:newsId', async (c) => {
     const newsId = parseInt(c.req.param('newsId'));
+    const db = getDb(c.env);
     try {
-        const item = await c.env.DB.prepare(
-            'SELECT id, title, description, content FROM news_items WHERE id = ?'
-        ).bind(newsId).first<{ id: number; title: string; description: string; content: string }>();
+        const item = await db.select({
+            id: newsItems.id, title: newsItems.title,
+            description: newsItems.description, content: newsItems.content,
+        }).from(newsItems).where(eq(newsItems.id, newsId)).get();
         if (!item) return c.json({ success: false, error: '新闻不存在' }, 404);
-        const existing = await c.env.DB.prepare('SELECT id FROM news_summaries WHERE news_id = ?').bind(newsId).first();
-        if (existing) {
-            return c.json({ success: true, generated: 0, skipped: true });
-        }
 
-        const ok = await generateSummaryForNews(c.env, newsId, item);
+        const existing = await db.select({ id: newsSummaries.id })
+            .from(newsSummaries).where(eq(newsSummaries.news_id, newsId)).get();
+        if (existing) return c.json({ success: true, generated: 0, skipped: true });
+
+        const ok = await generateSummaryForNews(c.env, newsId, item as any);
         return c.json({ success: true, generated: ok ? 1 : 0 });
     } catch (error) {
         return c.json({ success: false, error: String(error) }, 500);
     }
 });
 
-// POST /api/take/:newsId — generate AI take (吐槽) for a news item (synchronous)
 operations.post('/take/:newsId', async (c) => {
     const newsId = parseInt(c.req.param('newsId'));
+    const db = getDb(c.env);
     try {
-        const item = await c.env.DB.prepare(
-            'SELECT id, title, description, content FROM news_items WHERE id = ?'
-        ).bind(newsId).first<{ id: number; title: string; description: string; content: string }>();
+        const item = await db.select({
+            id: newsItems.id, title: newsItems.title,
+            description: newsItems.description, content: newsItems.content,
+        }).from(newsItems).where(eq(newsItems.id, newsId)).get();
         if (!item) return c.json({ success: false, error: '新闻不存在' }, 404);
-        await generateAITake(c.env, newsId, item);
-        const row = await c.env.DB.prepare('SELECT take FROM news_ai_take WHERE news_id = ?').bind(newsId).first<{ take: string }>();
+
+        await generateAITake(c.env, newsId, item as any);
+        const row = await db.select({ take: newsAiTake.take })
+            .from(newsAiTake).where(eq(newsAiTake.news_id, newsId)).get();
         return c.json({ success: true, take: row?.take || null });
     } catch (error) {
         return c.json({ success: false, error: String(error) }, 500);
     }
 });
 
-// POST /api/summarize/clear — delete all summaries
 operations.post('/summarize/clear', async (c) => {
+    const db = getDb(c.env);
     try {
-        await c.env.DB.prepare('DELETE FROM news_summaries').run();
+        await db.delete(newsSummaries);
         return c.json({ success: true, message: '所有摘要已清空' });
     } catch (error) {
         return c.json({ success: false, error: String(error) }, 500);
     }
 });
 
-// POST /api/translate — translate text
 operations.post('/translate', async (c) => {
     try {
         const { text, lang } = await c.req.json();

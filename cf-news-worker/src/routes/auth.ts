@@ -1,9 +1,11 @@
 import { Hono } from 'hono';
 import { Bindings, User, JWTPayload } from '../types';
+import { eq, sql } from 'drizzle-orm';
+import { getDb } from '../db';
+import { users, appConfig } from '../db/schema';
 
 const auth = new Hono<{ Bindings: Bindings }>();
 
-// Helper function to hash password using Web Crypto API
 async function hashPassword(password: string): Promise<string> {
     const encoder = new TextEncoder();
     const data = encoder.encode(password);
@@ -11,75 +13,45 @@ async function hashPassword(password: string): Promise<string> {
     return btoa(String.fromCharCode(...new Uint8Array(hash)));
 }
 
-// Helper function to generate JWT
 async function generateJWT(user: User, secret: string): Promise<string> {
     const header = { alg: 'HS256', typ: 'JWT' };
     const payload: JWTPayload = {
         sub: user.id,
         email: user.email,
         role: user.role || 'user',
-        exp: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60, // 7 days
+        exp: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60,
     };
-
     const encoder = new TextEncoder();
     const headerBase64 = btoa(JSON.stringify(header));
     const payloadBase64 = btoa(JSON.stringify(payload));
     const message = `${headerBase64}.${payloadBase64}`;
-
-    const key = await crypto.subtle.importKey(
-        'raw',
-        encoder.encode(secret),
-        { name: 'HMAC', hash: 'SHA-256' },
-        false,
-        ['sign']
-    );
-
+    const key = await crypto.subtle.importKey('raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
     const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(message));
     const signatureBase64 = btoa(String.fromCharCode(...new Uint8Array(signature)));
-
     return `${message}.${signatureBase64}`;
 }
 
-// Helper function to verify JWT
 async function verifyJWT(token: string, secret: string): Promise<JWTPayload | null> {
     try {
         const [headerBase64, payloadBase64, signatureBase64] = token.split('.');
-        
         const encoder = new TextEncoder();
         const message = `${headerBase64}.${payloadBase64}`;
-
-        const key = await crypto.subtle.importKey(
-            'raw',
-            encoder.encode(secret),
-            { name: 'HMAC', hash: 'SHA-256' },
-            false,
-            ['verify']
-        );
-
+        const key = await crypto.subtle.importKey('raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['verify']);
         const signature = Uint8Array.from(atob(signatureBase64), c => c.charCodeAt(0));
-        const valid = await crypto.subtle.verify(
-            'HMAC',
-            key,
-            signature,
-            encoder.encode(message)
-        );
-
+        const valid = await crypto.subtle.verify('HMAC', key, signature, encoder.encode(message));
         if (!valid) return null;
-
         const payload = JSON.parse(atob(payloadBase64)) as JWTPayload;
         if (payload.exp < Math.floor(Date.now() / 1000)) return null;
-
         return payload;
-    } catch {
+    } catch (e) {
+        console.error('JWT verification failed:', e);
         return null;
     }
 }
 
-// Register
 auth.post('/register', async (c) => {
     const { email, password, username, turnstileToken } = await c.req.json();
 
-    // Verify Turnstile (required for register, optional for login — login has rate limiting + brute-force protection)
     if (turnstileToken) {
         const verify = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
             method: 'POST',
@@ -87,59 +59,43 @@ auth.post('/register', async (c) => {
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         });
         const outcome = await verify.json<any>();
-        if (!outcome.success) {
-            return c.json({ error: '验证失败，请重试' }, 403);
-        }
+        if (!outcome.success) return c.json({ error: '验证失败，请重试' }, 403);
     }
 
-    if (!email || !password) {
-        return c.json({ error: '邮箱和密码必填' }, 400);
-    }
+    if (!email || !password) return c.json({ error: '邮箱和密码必填' }, 400);
 
-    // Check if user exists
+    const db = getDb(c.env);
+    const existing = await db.select({ id: users.id }).from(users).where(eq(users.email, email)).get();
 
-    const existing = await c.env.DB.prepare(
-        'SELECT id FROM users WHERE email = ?'
-    ).bind(email).first();
-
-    if (existing) {
-        return c.json({ error: '该邮箱已注册' }, 409);
-    }
+    if (existing) return c.json({ error: '该邮箱已注册' }, 409);
 
     const password_hash = await hashPassword(password);
-    
-    const result = await c.env.DB.prepare(
-        'INSERT INTO users (email, password_hash, username, role) VALUES (?, ?, ?, ?)'
-    ).bind(email, password_hash, username || email.split('@')[0], 'user').run();
+    const uname = username || email.split('@')[0];
+
+    await db.insert(users).values({ email, password_hash, username: uname, role: 'user' });
+
+    const created = await db.select().from(users).where(eq(users.email, email)).get();
 
     const user: User = {
-        id: result.meta.last_row_id as number,
+        id: created!.id,
         email,
         password_hash,
-        username: username || email.split('@')[0],
+        username: uname,
         role: 'user',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
     };
 
     const token = await generateJWT(user, c.env.JWT_SECRET);
-
-    return c.json({
-        message: '注册成功',
-        token,
-        user: { id: user.id, email: user.email, username: user.username, role: user.role },
-    }, 201);
+    return c.json({ message: '注册成功', token, user: { id: user.id, email: user.email, username: user.username, role: user.role } }, 201);
 });
 
 const LOGIN_LOCK_PREFIX = 'login:fail:';
 const LOGIN_MAX_ATTEMPTS = 5;
-const LOGIN_LOCK_TTL = 900; // 15 minutes
 
-// Login
 auth.post('/login', async (c) => {
     const { email, password, turnstileToken } = await c.req.json();
 
-    // Verify Turnstile (optional — has rate limiting + brute-force protection)
     if (turnstileToken) {
         const verify = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
             method: 'POST',
@@ -147,73 +103,61 @@ auth.post('/login', async (c) => {
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         });
         const outcome = await verify.json<any>();
-        if (!outcome.success) {
-            return c.json({ error: '验证失败，请重试' }, 403);
-        }
+        if (!outcome.success) return c.json({ error: '验证失败，请重试' }, 403);
     }
 
-    if (!email || !password) {
-        return c.json({ error: '邮箱和密码必填' }, 400);
-    }
+    if (!email || !password) return c.json({ error: '邮箱和密码必填' }, 400);
 
-    // Check brute-force lock
     const lockKey = LOGIN_LOCK_PREFIX + email.toLowerCase().trim();
-    const lockRow = await c.env.DB.prepare("SELECT value FROM app_config WHERE key = ?").bind(lockKey).first<{ value: string }>();
+    const db = getDb(c.env);
+
+    const lockRow = await db.select({ value: appConfig.value })
+        .from(appConfig).where(eq(appConfig.key, lockKey)).get();
     const failCount = parseInt(lockRow?.value || '0');
     if (failCount >= LOGIN_MAX_ATTEMPTS) {
         return c.json({ error: '登录失败次数过多，请 15 分钟后再试' }, 429);
     }
 
-    const user = await c.env.DB.prepare(
-        'SELECT * FROM users WHERE email = ?'
-    ).bind(email).first<User>();
-
-    if (!user) {
-        return c.json({ error: '邮箱或密码错误' }, 401);
-    }
+    const userRow = await db.select().from(users).where(eq(users.email, email)).get();
+    if (!userRow) return c.json({ error: '邮箱或密码错误' }, 401);
 
     const password_hash = await hashPassword(password);
-    if (password_hash !== user.password_hash) {
-        // Record failed attempt
-        await c.env.DB.prepare("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)").bind(lockKey, String(failCount + 1)).run();
+    if (password_hash !== userRow.password_hash) {
+        await db.insert(appConfig).values({ key: lockKey, value: String(failCount + 1) })
+            .onConflictDoUpdate({ target: appConfig.key, set: { value: String(failCount + 1) } });
         return c.json({ error: '邮箱或密码错误' }, 401);
     }
 
-    // Clear lock on success
-    await c.env.DB.prepare("DELETE FROM app_config WHERE key = ?").bind(lockKey).run();
+    await db.delete(appConfig).where(eq(appConfig.key, lockKey));
+
+    const user: User = {
+        id: userRow.id,
+        email: userRow.email,
+        password_hash: userRow.password_hash,
+        username: userRow.username || undefined,
+        role: userRow.role || 'user',
+        created_at: userRow.created_at || '',
+        updated_at: userRow.updated_at || '',
+    };
 
     const token = await generateJWT(user, c.env.JWT_SECRET);
-
-    return c.json({
-        message: '登录成功',
-        token,
-        user: { id: user.id, email: user.email, username: user.username },
-    });
+    return c.json({ message: '登录成功', token, user: { id: user.id, email: user.email, username: user.username } });
 });
 
-// Get current user profile
 auth.get('/me', async (c) => {
     const authHeader = c.req.header('Authorization');
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        return c.json({ error: '未授权' }, 401);
-    }
+    if (!authHeader || !authHeader.startsWith('Bearer ')) return c.json({ error: '未授权' }, 401);
 
     const token = authHeader.substring(7);
     const payload = await verifyJWT(token, c.env.JWT_SECRET);
+    if (!payload) return c.json({ error: 'Token 无效或已过期' }, 401);
 
-    if (!payload) {
-        return c.json({ error: 'Token 无效或已过期' }, 401);
-    }
+    const db = getDb(c.env);
+    const userRow = await db.select({ id: users.id, email: users.email, username: users.username, created_at: users.created_at })
+        .from(users).where(eq(users.id, payload.sub)).get();
 
-    const user = await c.env.DB.prepare(
-        'SELECT id, email, username, created_at FROM users WHERE id = ?'
-    ).bind(payload.sub).first();
-
-    if (!user) {
-        return c.json({ error: '用户不存在' }, 404);
-    }
-
-    return c.json({ user });
+    if (!userRow) return c.json({ error: '用户不存在' }, 404);
+    return c.json({ user: userRow });
 });
 
 export default auth;

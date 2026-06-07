@@ -1,6 +1,9 @@
 import { Hono } from 'hono';
 import { Bindings } from '../types';
 import { verifyJWT } from './auth';
+import { eq, desc, count, and, sql } from 'drizzle-orm';
+import { getDb } from '../db';
+import { userFavorites, newsItems, newsSources, newsSummaries } from '../db/schema';
 
 const favorites = new Hono<{ Bindings: Bindings }>();
 
@@ -12,7 +15,6 @@ async function getUserId(c: any): Promise<number | null> {
     return payload?.sub || null;
 }
 
-// Get user favorites
 favorites.get('/', async (c) => {
     const userId = await getUserId(c);
     if (!userId) return c.json({ error: '未授权' }, 401);
@@ -22,24 +24,39 @@ favorites.get('/', async (c) => {
     const offset = (page - 1) * limit;
 
     try {
-        const result = await c.env.DB.prepare(`
-            SELECT n.*, s.name as source_name, f.created_at as favorited_at
-            FROM user_favorites f
-            JOIN news_items n ON f.news_id = n.id
-            LEFT JOIN news_sources s ON n.source_id = s.id
-            WHERE f.user_id = ?
-            ORDER BY f.created_at DESC
-            LIMIT ? OFFSET ?
-        `).bind(userId, limit, offset).all();
+        const db = getDb(c.env);
+        const result = await db.select({
+            id: newsItems.id,
+            source_id: newsItems.source_id,
+            title: newsItems.title,
+            url: newsItems.url,
+            description: newsItems.description,
+            content: newsItems.content,
+            image_url: newsItems.image_url,
+            category: newsItems.category,
+            published_at: newsItems.published_at,
+            is_deleted: newsItems.is_deleted,
+            created_at: newsItems.created_at,
+            source_name: newsSources.name,
+            favorited_at: userFavorites.created_at,
+        })
+            .from(userFavorites)
+            .innerJoin(newsItems, eq(userFavorites.news_id, newsItems.id))
+            .leftJoin(newsSources, eq(newsItems.source_id, newsSources.id))
+            .where(eq(userFavorites.user_id, userId))
+            .orderBy(desc(userFavorites.created_at))
+            .limit(limit)
+            .offset(offset);
 
-        const countResult = await c.env.DB.prepare(
-            'SELECT COUNT(*) as total FROM user_favorites WHERE user_id = ?'
-        ).bind(userId).first();
+        const countResult = await db.select({ total: count() })
+            .from(userFavorites)
+            .where(eq(userFavorites.user_id, userId))
+            .get();
 
-        const total = (countResult as any)?.total || 0;
+        const total = countResult?.total || 0;
 
         return c.json({
-            favorites: result.results,
+            favorites: result,
             pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
         });
     } catch (error) {
@@ -48,27 +65,33 @@ favorites.get('/', async (c) => {
     }
 });
 
-// Export favorites as Markdown
 favorites.get('/export', async (c) => {
     const userId = await getUserId(c);
     if (!userId) return c.json({ error: '未授权' }, 401);
 
     try {
-        const result = await c.env.DB.prepare(`
-            SELECT n.title, n.url, n.description, ns.summary as ai_summary, s.name as source_name, n.category, n.published_at, f.created_at as favorited_at
-            FROM user_favorites f
-            JOIN news_items n ON f.news_id = n.id
-            LEFT JOIN news_sources s ON n.source_id = s.id
-            LEFT JOIN news_summaries ns ON ns.news_id = n.id
-            WHERE f.user_id = ? AND f.is_deleted = 0
-            ORDER BY f.created_at DESC
-        `).bind(userId).all();
+        const db = getDb(c.env);
+        const items = await db.select({
+            title: newsItems.title,
+            url: newsItems.url,
+            description: newsItems.description,
+            aiSummary: newsSummaries.summary,
+            sourceName: newsSources.name,
+            category: newsItems.category,
+            published_at: newsItems.published_at,
+            favorited_at: userFavorites.created_at,
+        })
+            .from(userFavorites)
+            .innerJoin(newsItems, eq(userFavorites.news_id, newsItems.id))
+            .leftJoin(newsSources, eq(newsItems.source_id, newsSources.id))
+            .leftJoin(newsSummaries, eq(newsSummaries.news_id, newsItems.id))
+            .where(and(eq(userFavorites.user_id, userId), eq(userFavorites.is_deleted, 0)))
+            .orderBy(desc(userFavorites.created_at));
 
-        const items = result.results as any[];
         const now = new Date().toISOString().split('T')[0];
         let md = `# 我的收藏\n\n导出时间: ${now} | 共 ${items.length} 条\n\n---\n\n`;
 
-        const categories: Record<string, any[]> = {};
+        const categories: Record<string, typeof items> = {};
         for (const item of items) {
             const cat = item.category || '未分类';
             if (!categories[cat]) categories[cat] = [];
@@ -79,11 +102,11 @@ favorites.get('/export', async (c) => {
             md += `## ${cat}\n\n`;
             for (const item of catItems) {
                 md += `### ${item.title}\n\n`;
-                md += `- 来源: ${item.source_name || '未知'}\n`;
+                md += `- 来源: ${item.sourceName || '未知'}\n`;
                 md += `- 链接: ${item.url}\n`;
                 if (item.published_at) md += `- 发布: ${item.published_at}\n`;
-                md += `- 收藏: ${item.favorited_at}\n`;
-                if (item.ai_summary) md += `\n> ${item.ai_summary}\n`;
+                md += `- 收藏: ${item.favoritedAt}\n`;
+                if (item.aiSummary) md += `\n> ${item.aiSummary}\n`;
                 md += `\n`;
             }
         }
@@ -100,16 +123,14 @@ favorites.get('/export', async (c) => {
     }
 });
 
-// Add favorite
 favorites.post('/:newsId', async (c) => {
     const userId = await getUserId(c);
     if (!userId) return c.json({ error: '未授权' }, 401);
 
     const newsId = parseInt(c.req.param('newsId'));
     try {
-        await c.env.DB.prepare(
-            'INSERT OR IGNORE INTO user_favorites (user_id, news_id) VALUES (?, ?)'
-        ).bind(userId, newsId).run();
+        const db = getDb(c.env);
+        await db.insert(userFavorites).values({ user_id: userId, news_id: newsId }).onConflictDoNothing();
         return c.json({ message: '收藏成功' }, 201);
     } catch (error) {
         console.error('Error adding favorite:', error);
@@ -117,16 +138,15 @@ favorites.post('/:newsId', async (c) => {
     }
 });
 
-// Remove favorite
 favorites.delete('/:newsId', async (c) => {
     const userId = await getUserId(c);
     if (!userId) return c.json({ error: '未授权' }, 401);
 
     const newsId = parseInt(c.req.param('newsId'));
     try {
-        await c.env.DB.prepare(
-            'DELETE FROM user_favorites WHERE user_id = ? AND news_id = ?'
-        ).bind(userId, newsId).run();
+        const db = getDb(c.env);
+        await db.delete(userFavorites)
+            .where(and(eq(userFavorites.user_id, userId), eq(userFavorites.news_id, newsId)));
         return c.json({ message: '取消收藏成功' });
     } catch (error) {
         console.error('Error removing favorite:', error);

@@ -1,4 +1,7 @@
 import { Bindings } from '../types';
+import { eq, sql, and } from 'drizzle-orm';
+import { getDb } from '../db';
+import { newsComments, users } from '../db/schema';
 
 interface WsComment {
     id: number;
@@ -9,8 +12,6 @@ interface WsComment {
     created_at: string;
 }
 
-// Durable Object for real-time comments per news item
-// Each DO instance is keyed by newsId — all users viewing the same article share one room
 export class CommentsRoom {
     private connections: Map<WebSocket, { userId: number; username: string }> = new Map();
     private env: Bindings;
@@ -33,7 +34,6 @@ export class CommentsRoom {
         server.accept();
         this.connections.set(server, { userId, username });
 
-        // Send initial comments list on connection
         try {
             const comments = await this.loadComments(newsId);
             server.send(JSON.stringify({ type: 'comments', comments }));
@@ -69,42 +69,42 @@ export class CommentsRoom {
     }
 
     private async loadComments(newsId: number): Promise<WsComment[]> {
-        const result = await this.env.DB.prepare(`
+        const db = getDb(this.env);
+        return db.all<WsComment>(sql`
             SELECT nc.id, nc.news_id, nc.user_id, u.username, nc.content, nc.created_at
             FROM news_comments nc
             JOIN users u ON nc.user_id = u.id
-            WHERE nc.news_id = ? AND nc.is_deleted = 0
+            WHERE nc.news_id = ${newsId} AND nc.is_deleted = 0
             ORDER BY nc.created_at ASC
-        `).bind(newsId).all<WsComment>();
-        return result.results || [];
+        `);
     }
 
     private async createComment(newsId: number, userId: number, username: string, content: string): Promise<WsComment | null> {
-        const result = await this.env.DB.prepare(`
+        const db = getDb(this.env);
+        const result = await db.run(sql`
             INSERT INTO news_comments (news_id, user_id, content, created_at)
-            VALUES (?, ?, ?, datetime('now', '+8 hours'))
-        `).bind(newsId, userId, content).run();
+            VALUES (${newsId}, ${userId}, ${content}, datetime('now', '+8 hours'))
+        `);
 
         const id = result.meta.last_row_id;
         if (!id) return null;
 
-        // Fetch back the full comment with joined username
-        const comment = await this.env.DB.prepare(`
+        const comments = await db.all<WsComment>(sql`
             SELECT nc.id, nc.news_id, nc.user_id, u.username, nc.content, nc.created_at
             FROM news_comments nc
             JOIN users u ON nc.user_id = u.id
-            WHERE nc.id = ?
-        `).bind(id).first<WsComment>();
-
-        return comment || null;
+            WHERE nc.id = ${id}
+        `);
+        return comments[0] || null;
     }
 
     private async deleteComment(commentId: number, userId: number): Promise<boolean> {
-        const result = await this.env.DB.prepare(`
+        const db = getDb(this.env);
+        const result = await db.run(sql`
             UPDATE news_comments
             SET is_deleted = 1, deleted_at = datetime("now", "+8 hours")
-            WHERE id = ? AND user_id = ? AND is_deleted = 0
-        `).bind(commentId, userId).run();
+            WHERE id = ${commentId} AND user_id = ${userId} AND is_deleted = 0
+        `);
         return result.success;
     }
 

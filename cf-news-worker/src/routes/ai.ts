@@ -2,6 +2,9 @@ import { Hono } from 'hono';
 import { Bindings } from '../types';
 import { askQuestion, findRelated, getDailyDigest, generateDailyDigest, listDigestDates } from '../services/aiSearch';
 import { verifyJWT } from './auth';
+import { eq, sql, like, and, ne, or, desc, isNotNull } from 'drizzle-orm';
+import { getDb } from '../db';
+import { newsItems, newsSources } from '../db/schema';
 
 const router = new Hono<{ Bindings: Bindings }>();
 
@@ -89,10 +92,14 @@ router.get('/related/:id', async (c) => {
         const id = parseInt(c.req.param('id'));
         if (isNaN(id)) return c.json({ error: 'Invalid id' }, 400);
 
+        const db = getDb(c.env);
+
         // Get the news item
-        const item = await c.env.DB.prepare(
-            'SELECT id, title, category FROM news_items WHERE id = ? AND is_deleted = 0'
-        ).bind(id).first<{ id: number; title: string; category: string }>();
+        const item = await db.select({
+            id: newsItems.id, title: newsItems.title, category: newsItems.category,
+        }).from(newsItems)
+            .where(and(eq(newsItems.id, id), eq(newsItems.is_deleted, 0)))
+            .get();
 
         if (!item) return c.json({ error: 'News not found' }, 404);
 
@@ -111,27 +118,40 @@ router.get('/related/:id', async (c) => {
             .filter(w => w.length > 1 && !['the','a','an','is','of','to','in','for','on','and','or','by','at','it','as','be','this','that','with','from'].includes(w.toLowerCase()))
             .slice(0, 3);
         if (keywords.length > 0) {
-            const likeClauses = keywords.map(() => `title LIKE ?`).join(' OR ');
-            const params = keywords.map(k => `%${k}%`);
-            const like = await c.env.DB.prepare(
-                `SELECT id, title, description, image_url, published_at
-                 FROM news_items
-                 WHERE (${likeClauses}) AND id != ? AND is_deleted = 0
-                 ORDER BY
-                   CASE WHEN category = ? THEN 0 ELSE 1 END,
-                   created_at DESC
-                 LIMIT 5`
-            ).bind(...params, id, item.category).all<any>();
-            related = like.results;
+            const likeConds = keywords.map(k => like(newsItems.title, `%${k}%`));
+            const results = await db.select({
+                id: newsItems.id, title: newsItems.title,
+                description: newsItems.description, image_url: newsItems.image_url,
+                published_at: newsItems.published_at,
+            }).from(newsItems)
+                .where(and(
+                    or(...likeConds),
+                    ne(newsItems.id, item.id),
+                    eq(newsItems.is_deleted, 0)
+                ))
+                .orderBy(
+                    sql`CASE WHEN category = ${item.category} THEN 0 ELSE 1 END`,
+                    desc(newsItems.created_at)
+                )
+                .limit(5)
+                .all();
+            related = results;
         }
         if (related.length === 0) {
-            const sameCat = await c.env.DB.prepare(
-                `SELECT id, title, description, image_url, published_at
-                 FROM news_items
-                 WHERE category = ? AND id != ? AND is_deleted = 0
-                 ORDER BY created_at DESC LIMIT 5`
-            ).bind(item.category, id).all<any>();
-            related = sameCat.results;
+            const sameCat = await db.select({
+                id: newsItems.id, title: newsItems.title,
+                description: newsItems.description, image_url: newsItems.image_url,
+                published_at: newsItems.published_at,
+            }).from(newsItems)
+                .where(and(
+                    eq(newsItems.category, item.category!),
+                    ne(newsItems.id, item.id),
+                    eq(newsItems.is_deleted, 0)
+                ))
+                .orderBy(desc(newsItems.created_at))
+                .limit(5)
+                .all();
+            related = sameCat;
         }
 
         return c.json({
@@ -157,24 +177,25 @@ router.post('/trending/insight', async (c) => {
         const period = hours || 24;
 
         const escaped = keyword.replace(/[%_]/g, '=$&');
-        const newsRows = await c.env.DB.prepare(`
+        const db = getDb(c.env);
+        const newsRows = await db.all<{
+            title: string; description: string; source_name: string; published_at: string;
+        }>(sql`
             SELECT n.title, n.description, ns.name as source_name, n.published_at
             FROM news_items n
             LEFT JOIN news_sources ns ON n.source_id = ns.id
-            WHERE n.created_at >= datetime('now', '-' || ? || ' hours')
+            WHERE n.created_at >= datetime('now', '-' || ${period} || ' hours')
               AND n.is_deleted = 0
-              AND (n.title LIKE ? ESCAPE '=' OR n.description LIKE ? ESCAPE '=')
+              AND (n.title LIKE ${`%${escaped}%`} ESCAPE '=' OR n.description LIKE ${`%${escaped}%`} ESCAPE '=')
             ORDER BY n.published_at DESC
             LIMIT 8
-        `).bind(period, `%${escaped}%`, `%${escaped}%`).all<{
-            title: string; description: string; source_name: string; published_at: string;
-        }>();
+        `);
 
-        if (newsRows.results.length === 0) {
+        if (newsRows.length === 0) {
             return c.json({ insight: `近期没有找到与"${keyword}"相关的新闻报道。` });
         }
 
-        const articles = newsRows.results.map((r, i) =>
+        const articles = newsRows.map((r, i) =>
             `标题: ${r.title}\n来源: ${r.source_name || '未知'}\n摘要: ${(r.description || '').substring(0, 200)}`
         ).join('\n---\n');
 

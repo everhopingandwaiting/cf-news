@@ -1,10 +1,12 @@
 import { Bindings } from '../types';
+import { eq, sql } from 'drizzle-orm';
+import { getDb } from '../db';
+import { newsItems } from '../db/schema';
 import { checkQuota, recordUsage, estimateEmbeddingNeurons } from './quota';
 
-// 1024维度嵌入模型，按优先级排序
 const EMBEDDING_MODELS = [
-    '@cf/qwen/qwen3-embedding-0.6b',  // 阿里，中文原生支持，最便宜
-    '@cf/baai/bge-m3',                 // BAAI 多语言，备选
+    '@cf/qwen/qwen3-embedding-0.6b',
+    '@cf/baai/bge-m3',
 ];
 
 function normalizeText(text: string): string {
@@ -22,9 +24,12 @@ function computeHash(text: string): string {
 }
 
 async function checkByHash(env: Bindings, hash: string): Promise<boolean> {
-    const existing = await env.DB.prepare(
-        'SELECT id FROM news_items WHERE dedup_hash = ? AND is_deleted = 0 LIMIT 1'
-    ).bind(hash).first();
+    const db = getDb(env);
+    const existing = await db.select({ id: newsItems.id })
+        .from(newsItems)
+        .where(sql`dedup_hash = ${hash} AND is_deleted = 0`)
+        .limit(1)
+        .get();
     return !!existing;
 }
 
@@ -76,11 +81,12 @@ export async function checkDuplicate(env: Bindings, title: string, description?:
 export async function storeDedupHash(env: Bindings, newsId: number, title: string, description?: string): Promise<void> {
     const normalized = normalizeText(`${title} ${description || ''}`);
     const hash = computeHash(normalized);
+    const db = getDb(env);
 
     try {
-        await env.DB.prepare(
-            'UPDATE news_items SET dedup_hash = ? WHERE id = ?'
-        ).bind(hash, newsId).run();
+        await db.update(newsItems)
+            .set({ dedupHash: hash })
+            .where(eq(newsItems.id, newsId));
     } catch (e) {
         console.error('Failed to store dedup hash:', e);
     }

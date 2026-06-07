@@ -1,4 +1,7 @@
 import { Bindings } from '../types';
+import { eq, sql, and, desc } from 'drizzle-orm';
+import { getDb } from '../db';
+import { users, userPreferences, newsItems, newsSources } from '../db/schema';
 
 async function sendDigestEmail(env: Bindings, to: string, username: string, items: any[]): Promise<boolean> {
     const today = new Date().toISOString().split('T')[0];
@@ -49,27 +52,28 @@ async function sendDigestEmail(env: Bindings, to: string, username: string, item
 }
 
 export async function sendDailyDigest(env: Bindings): Promise<{ sent: number; failed: number }> {
-    const users = await env.DB.prepare(`
-        SELECT u.email, u.username FROM users u
-        JOIN user_preferences up ON up.user_id = u.id
-        WHERE up.receive_digest = 1
-    `).all<{ email: string; username: string }>();
+    const db = getDb(env);
+    const usersList = await db.select({ email: users.email, username: users.username })
+        .from(users)
+        .innerJoin(userPreferences, eq(userPreferences.user_id, users.id))
+        .where(eq(userPreferences.receive_digest, 1))
+        .all();
 
-    if (users.results.length === 0) return { sent: 0, failed: 0 };
+    if (usersList.length === 0) return { sent: 0, failed: 0 };
 
-    const news = await env.DB.prepare(`
-        SELECT n.id, n.title, n.description, n.content, n.ai_summary, n.category, s.name as source_name
+    const news = await db.all<any>(sql`
+        SELECT n.id, n.title, n.description, n.content, n.category, s.name as source_name
         FROM news_items n
         LEFT JOIN news_sources s ON n.source_id = s.id
         WHERE n.created_at > datetime('now', '-24 hours')
         AND n.is_deleted = 0
         ORDER BY n.created_at DESC
         LIMIT 20
-    `).all();
+    `);
 
     let sent = 0, failed = 0;
-    for (const user of users.results) {
-        const ok = await sendDigestEmail(env, user.email, user.username, news.results);
+    for (const user of usersList) {
+        const ok = await sendDigestEmail(env, user.email!, user.username!, news);
         if (ok) sent++; else failed++;
     }
 

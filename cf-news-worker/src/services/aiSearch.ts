@@ -1,4 +1,7 @@
 import { Bindings } from '../types';
+import { eq, sql, desc, and } from 'drizzle-orm';
+import { getDb } from '../db';
+import { newsItems, newsSources, dailyDigests } from '../db/schema';
 
 interface AISearchChunk {
     id: string;
@@ -17,7 +20,6 @@ interface DigestResult {
 
 function getToday(): string {
     const now = new Date();
-    // 使用 Asia/Shanghai 时区
     const opts = { timeZone: 'Asia/Shanghai', year: 'numeric' as const, month: '2-digit' as const, day: '2-digit' as const };
     const parts = new Intl.DateTimeFormat('en-CA', opts).formatToParts(now);
     const y = parts.find(p => p.type === 'year')!.value;
@@ -27,7 +29,6 @@ function getToday(): string {
 }
 
 function getTodayStart(): string {
-    // 当天 00:00:00 Asia/Shanghai 转 UTC
     const now = new Date();
     const opts = { timeZone: 'Asia/Shanghai', year: 'numeric' as const, month: '2-digit' as const, day: '2-digit' as const };
     const parts = new Intl.DateTimeFormat('en-CA', opts).formatToParts(now);
@@ -36,8 +37,6 @@ function getTodayStart(): string {
     const d = parts.find(p => p.type === 'day')!.value;
     return new Date(`${y}-${m}-${d}T00:00:00+08:00`).toISOString();
 }
-
-const AI_SEARCH_PREFIX = 'ai_search:uploaded:';
 
 function hasAISearch(env: Bindings): boolean {
     return !!(env as any).AI_SEARCH;
@@ -50,16 +49,19 @@ function getSearchInstance(env: Bindings) {
 }
 
 async function wasUploaded(env: Bindings, newsId: number): Promise<boolean> {
-    const row = await env.DB.prepare(
-        'SELECT ai_search_uploaded FROM news_items WHERE id = ?'
-    ).bind(newsId).first<{ ai_search_uploaded: number }>();
+    const db = getDb(env);
+    const row = await db.select({ ai_search_uploaded: newsItems.ai_search_uploaded })
+        .from(newsItems)
+        .where(eq(newsItems.id, newsId))
+        .get();
     return row?.ai_search_uploaded === 1;
 }
 
 async function markUploaded(env: Bindings, newsId: number): Promise<void> {
-    await env.DB.prepare(
-        'UPDATE news_items SET ai_search_uploaded = 1 WHERE id = ?'
-    ).bind(newsId).run();
+    const db = getDb(env);
+    await db.update(newsItems)
+        .set({ ai_search_uploaded: 1 })
+        .where(eq(newsItems.id, newsId));
 }
 
 export async function askQuestion(
@@ -67,12 +69,17 @@ export async function askQuestion(
     question: string,
     stream = false
 ): Promise<{ answer: string; chunks: any[] } | ReadableStream> {
+    const db = getDb(env);
     const { callAI } = await import('./aiProvider');
-    const recentNews = await env.DB.prepare(
-        `SELECT title, description FROM news_items WHERE is_deleted = 0 ORDER BY created_at DESC LIMIT 10`
-    ).all<{ title: string; description: string }>();
+    const recentNews = await db.select({
+        title: newsItems.title, description: newsItems.description,
+    }).from(newsItems)
+        .where(eq(newsItems.is_deleted, 0))
+        .orderBy(desc(newsItems.created_at))
+        .limit(10)
+        .all();
 
-    const context = recentNews.results
+    const context = recentNews
         .map(n => `标题: ${n.title}\n内容: ${(n.description || '').substring(0, 200)}`)
         .join('\n---\n');
 
@@ -125,15 +132,18 @@ export async function findRelated(
         return [];
     }
 
-    // Fallback: query D1 for similar category news
     return [];
 }
 
 export async function getDailyDigest(env: Bindings, date?: string): Promise<DigestResult | null> {
+    const db = getDb(env);
     const targetDate = date || getToday();
-    const row = await env.DB.prepare(
-        'SELECT id, date, content, news_ids, created_at FROM daily_digests WHERE date = ?'
-    ).bind(targetDate).first<{ id: number; date: string; content: string; news_ids: string; created_at: string }>();
+    const row = await db.select({
+        id: dailyDigests.id, date: dailyDigests.date, content: dailyDigests.content,
+        newsIds: dailyDigests.news_ids, createdAt: dailyDigests.created_at,
+    }).from(dailyDigests)
+        .where(eq(dailyDigests.date, targetDate))
+        .get();
 
     if (row) {
         return {
@@ -141,11 +151,10 @@ export async function getDailyDigest(env: Bindings, date?: string): Promise<Dige
             date: row.date,
             content: row.content,
             news_ids: JSON.parse(row.news_ids || '[]'),
-            created_at: row.created_at,
+            created_at: row.created_at ?? undefined,
         };
     }
 
-    // Only auto-generate for today
     if (!date || date === getToday()) {
         return generateDailyDigest(env);
     }
@@ -153,32 +162,33 @@ export async function getDailyDigest(env: Bindings, date?: string): Promise<Dige
 }
 
 export async function listDigestDates(env: Bindings): Promise<string[]> {
-    const rows = await env.DB.prepare(
-        'SELECT date FROM daily_digests ORDER BY date DESC LIMIT 30'
-    ).all<{ date: string }>();
-    return rows.results.map(r => r.date);
+    const db = getDb(env);
+    const rows = await db.select({ date: dailyDigests.date })
+        .from(dailyDigests)
+        .orderBy(desc(dailyDigests.date))
+        .limit(30)
+        .all();
+    return rows.map(r => r.date);
 }
 
 export async function generateDailyDigest(env: Bindings): Promise<DigestResult | null> {
+    const db = getDb(env);
     const today = getToday();
-
-    // Fetch all news published today in Asia/Shanghai timezone
     const sinceStr = getTodayStart();
 
-    const news = await env.DB.prepare(
-        `SELECT n.id, n.title, n.description, n.published_at, COALESCE(s.language, 'zh') as lang, COALESCE(s.name, '') as source_name
-         FROM news_items n
-         LEFT JOIN news_sources s ON n.source_id = s.id
-         WHERE n.is_deleted = 0 AND (n.published_at >= ? OR n.published_at IS NULL)
-         ORDER BY n.published_at DESC`
-    ).bind(sinceStr).all<{ id: number; title: string; description: string; published_at: string; lang: string; source_name: string }>();
+    const news = await db.all<{ id: number; title: string; description: string | null; published_at: string | null; lang: string; source_name: string }>(sql`
+        SELECT n.id, n.title, n.description, n.published_at, COALESCE(s.language, 'zh') as lang, COALESCE(s.name, '') as source_name
+        FROM news_items n
+        LEFT JOIN news_sources s ON n.source_id = s.id
+        WHERE n.is_deleted = 0 AND (n.published_at >= ${sinceStr} OR n.published_at IS NULL)
+        ORDER BY n.published_at DESC
+    `);
 
-    if (news.results.length === 0) {
-        return null;
-    }
+    if (news.length === 0) return null;
 
-    const newsIds = news.results.map(n => n.id);
-    function fmtTime(published_at: string): string {
+    const newsIds = news.map(n => n.id);
+
+    function fmtTime(published_at: string | null): string {
         if (!published_at) return '';
         try {
             const d = new Date(published_at);
@@ -192,14 +202,9 @@ export async function generateDailyDigest(env: Bindings): Promise<DigestResult |
     }
     function langTag(lang: string): string { return lang === 'zh' ? 'CN' : 'EN'; }
 
-    const newsText = news.results
-        .map(n => `来源: ${n.source_name}\t语言: ${langTag(n.lang)}\t时间: ${fmtTime(n.published_at)}\n标题: ${n.title}\n内容: ${(n.description || '').substring(0, 300)}`)
-        .join('\n---\n');
-
     const instance = getSearchInstance(env);
 
-    // Only ask AI to translate English titles (shorter task, more reliable)
-    const enItems = news.results.filter(n => n.lang !== 'zh').map((n, i) => ({ idx: news.results.indexOf(n), title: n.title }));
+    const enItems = news.filter(n => n.lang !== 'zh').map((n, i) => ({ idx: news.indexOf(n), title: n.title }));
     const enTranslations = new Map<number, string>();
 
     if (enItems.length > 0 && instance) {
@@ -213,20 +218,17 @@ export async function generateDailyDigest(env: Bindings): Promise<DigestResult |
                 model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
             });
             const text = resp.choices?.[0]?.message?.content || '';
-            text.trim().split('\n').filter(l => l.trim()).forEach((line, i) => {
+            text.trim().split('\n').filter((l: string) => l.trim()).forEach((line: string, i: number) => {
                 if (i < enItems.length) enTranslations.set(enItems[i].idx, line.replace(/^\d+[\.\s]+/, '').trim());
             });
         } catch {}
     }
 
-    // Build content server-side with guaranteed times, translated titles, and source info
-    const content = news.results.map((n, i) => {
+    const content = news.map((n, i) => {
         const t = fmtTime(n.published_at);
         const lang = langTag(n.lang);
         const src = n.source_name ? ` (${n.source_name})` : '';
         const translated = enTranslations.get(i);
-        // For Chinese items: no extra line (title already shown above)
-        // For English items: show Chinese translation
         if (lang === 'EN') {
             const desc = translated || `[英] ${n.title}`;
             return `${i + 1}. **${n.title}** [${lang}]${t ? ' ' + t : ''}${src}\n${desc}`;
@@ -234,10 +236,7 @@ export async function generateDailyDigest(env: Bindings): Promise<DigestResult |
         return `${i + 1}. **${n.title}** [${lang}]${t ? ' ' + t : ''}${src}`;
     }).join('\n\n');
 
-    // Save to D1
-    await env.DB.prepare(
-        'INSERT OR REPLACE INTO daily_digests (date, content, news_ids) VALUES (?, ?, ?)'
-    ).bind(today, content, JSON.stringify(newsIds)).run();
+    await db.run(sql`INSERT OR REPLACE INTO daily_digests (date, content, news_ids) VALUES (${today}, ${content}, ${JSON.stringify(newsIds)})`);
 
     return { date: today, content, news_ids: newsIds };
 }
@@ -249,7 +248,6 @@ export async function uploadNewsItem(
     const instance = getSearchInstance(env);
     if (!instance) return false;
 
-    // Skip if already uploaded (KV dedup)
     if (await wasUploaded(env, item.id)) return true;
 
     try {
@@ -272,7 +270,6 @@ export async function uploadNewsItem(
         return true;
     } catch (e) {
         console.error(`AI Search upload failed for news-${item.id}:`, e);
-        // Don't mark as uploaded on failure, will retry next cycle
         return false;
     }
 }

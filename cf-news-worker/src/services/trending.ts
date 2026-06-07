@@ -1,4 +1,7 @@
 import { Bindings } from '../types';
+import { eq, sql, desc, and, like, gte } from 'drizzle-orm';
+import { getDb } from '../db';
+import { newsItems, stopWords, trendingTopics, newsSources } from '../db/schema';
 
 // Asia/Shanghai hour bucket string "YYYY-MM-DD HH:00:00". trending_topics.date_hour
 // is stored in Shanghai time so the 24h window aligns with the user's local day.
@@ -17,8 +20,6 @@ export function shanghaiHourString(d: Date = new Date()): string {
     return new Date(shanghaiMs).toISOString().substring(0, 19).replace('T', ' ');
 }
 
-// Lowercase, keep alphanumerics + CJK + collapse internal whitespace to underscores.
-// This is the canonical form stored in trending_topics.keyword and used for matching.
 export function normalizeKeyword(s: string): string {
     return s
         .trim()
@@ -29,24 +30,31 @@ export function normalizeKeyword(s: string): string {
         .replace(/^_|_$/g, '');
 }
 
-// Hourly cron job: pick trending keywords from the last 24h, then store the
-// current hour's bucket atomically. LLM proposes keywords only; D1 counts the
-// real article matches so the count is data, not a model guess.
 export async function refreshTrendingTopics(env: Bindings): Promise<{ status: string; detail?: any }> {
+    const db = getDb(env);
     try {
-        const rows = await env.DB.prepare(`
-            SELECT id, title, description, created_at FROM news_items
-            WHERE is_deleted = 0 AND created_at > datetime('now', '-1 day')
-            ORDER BY created_at DESC LIMIT 60
-        `).all<{ id: number; title: string; description: string | null; created_at: string }>();
-        if (rows.results.length < 3) {
-            return { status: 'no_news', detail: { count: rows.results.length } };
+        const rows = await db.select({
+            id: newsItems.id, title: newsItems.title,
+            description: newsItems.description, createdAt: newsItems.created_at,
+        }).from(newsItems)
+            .where(and(
+                eq(newsItems.is_deleted, 0),
+                sql`created_at > datetime('now', '-1 day')`
+            ))
+            .orderBy(desc(newsItems.created_at))
+            .limit(60)
+            .all();
+
+        if (rows.length < 3) {
+            return { status: 'no_news', detail: { count: rows.length } };
         }
 
-        const titles = rows.results.map(r => r.title);
+        const titles = rows.map(r => r.title);
 
-        const stopRows = await env.DB.prepare('SELECT word FROM stop_words').all<{ word: string }>();
-        const stopSet = new Set(stopRows.results.map(r => normalizeKeyword(r.word)));
+        const stopRows = await db.select({ word: stopWords.word })
+            .from(stopWords)
+            .all();
+        const stopSet = new Set(stopRows.map(r => normalizeKeyword(r.word)));
 
         const prompt = `分析以下新闻标题，提取当前最热门的10-15个话题/关键词。
 要求：
@@ -97,38 +105,27 @@ ${titles.map((t, i) => `${i + 1}. ${t}`).join('\n')}`;
             return { status: 'no_valid_keywords', detail: { llmCount: raw.length, sampleKeywords: raw.slice(0, 3), stopSetSize: stopSet.size } };
         }
 
-        const shaOneHourAgo = `datetime('now', '+7 hours')`;
-        const shaNow = `datetime('now', '+8 hours')`;
-        const countResults = await env.DB.batch(
-            keywords.map(kw =>
-                env.DB.prepare(
-                    `SELECT COUNT(*) as c FROM news_items
-                     WHERE created_at > ${shaOneHourAgo}
-                       AND created_at < ${shaNow}
-                       AND (title LIKE ? OR description LIKE ?)`
-                ).bind(`%${kw}%`, `%${kw}%`)
-            )
-        );
+        // Use raw SQL for batch counting with LIKE
+        const countQueries = keywords.map(kw => env.DB.prepare(
+            `SELECT COUNT(*) as c FROM news_items
+             WHERE created_at > datetime('now', '+7 hours')
+               AND created_at < datetime('now', '+8 hours')
+               AND (title LIKE ? OR description LIKE ?)`
+        ).bind(`%${kw}%`, `%${kw}%`));
+        const countResults = await env.DB.batch(countQueries);
         const valid = keywords
-            .map((kw, i) => ({ keyword: kw, count: Number((countResults[i]?.results?.[0] as { c?: number } | undefined)?.c ?? 0) }))
+            .map((kw, i) => ({ keyword: kw, count: Number(((countResults[i]?.results?.[0] as { c?: number } | undefined)?.c ?? 0)) }))
             .filter(t => t.count > 0)
             .slice(0, 20);
         if (valid.length === 0) {
             return { status: 'no_articles_matched', detail: { llmKeywords: keywords, countResults: countResults.slice(0, 3) } };
         }
 
-        // Atomic replace: DELETE the current Shanghai hour bucket, then INSERT new rows.
-        // D1 batch is transactional; if any statement fails, the whole thing rolls back
-        // and the previous hour's data stays intact.
         const dateHour = shanghaiHourString();
-        const statements = [
-            env.DB.prepare('DELETE FROM trending_topics WHERE date_hour = ?').bind(dateHour),
-            ...valid.map(t =>
-                env.DB.prepare('INSERT INTO trending_topics (keyword, date_hour, count) VALUES (?, ?, ?)')
-                    .bind(t.keyword, dateHour, t.count)
-            ),
-        ];
-        await env.DB.batch(statements);
+        await db.run(sql`DELETE FROM trending_topics WHERE date_hour = ${dateHour}`);
+        for (const t of valid) {
+            await db.run(sql`INSERT INTO trending_topics (keyword, date_hour, count) VALUES (${t.keyword}, ${dateHour}, ${t.count})`);
+        }
         return { status: 'ok', detail: { dateHour, keywordsWritten: valid.length, sample: valid.slice(0, 5) } };
     } catch (e: any) {
         return { status: 'exception', detail: { message: e?.message || String(e), stack: e?.stack?.split('\n').slice(0, 3).join('\n') } };

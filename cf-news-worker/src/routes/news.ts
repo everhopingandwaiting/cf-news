@@ -1,6 +1,9 @@
 import { Hono } from 'hono';
 import { Bindings, NewsItem } from '../types';
 import { generatePerspectives } from '../services/summarizer';
+import { eq, sql, and, count, desc, like, SQL } from 'drizzle-orm';
+import { getDb } from '../db';
+import { newsItems, newsSources, newsSummaries, newsAiTake, newsComments, newsFts } from '../db/schema';
 
 const news = new Hono<{ Bindings: Bindings }>();
 
@@ -15,10 +18,11 @@ async function searchNewsFTS(env: Bindings, query: string): Promise<number[] | n
     let ids: number[] = [];
     try {
         const ftsQuery = sanitized.split(/\s+/).map(w => w + '*').join(' ');
-        const result = await env.DB.prepare(
-            'SELECT rowid FROM news_fts WHERE news_fts MATCH ? LIMIT 200'
-        ).bind(ftsQuery).all<{ rowid: number }>();
-        ids = result.results.map(r => r.rowid);
+        const db = getDb(env);
+        const result = await db.all<{ rowid: number }>(
+            sql`SELECT rowid FROM news_fts WHERE news_fts MATCH ${ftsQuery} LIMIT 200`
+        );
+        ids = result.map(r => r.rowid);
     } catch (e) {
         console.error('FTS5 search error:', e);
         return null;
@@ -42,73 +46,67 @@ news.get('/', async (c) => {
     const hasSummary = c.req.query('has_summary');
     const offset = (page - 1) * limit;
 
-    let query = `
-        SELECT n.*, s.name as source_name, s.language as source_lang,
-               (SELECT COUNT(*) FROM news_comments nc WHERE nc.news_id = n.id AND nc.is_deleted = 0) as comments_count,
-               ns.summary as ai_summary, nt.take as ai_take
-        FROM news_items n 
-        LEFT JOIN news_sources s ON n.source_id = s.id
-        LEFT JOIN news_summaries ns ON ns.news_id = n.id
-        LEFT JOIN news_ai_take nt ON nt.news_id = n.id
-        WHERE n.is_deleted = 0
-    `;
-    let countQuery = 'SELECT COUNT(*) as total FROM news_items n LEFT JOIN news_sources s ON n.source_id = s.id LEFT JOIN news_summaries ns ON ns.news_id = n.id LEFT JOIN news_ai_take nt ON nt.news_id = n.id WHERE n.is_deleted = 0';
-    const params: any[] = [];
-    const conditions: string[] = [];
+    const db = getDb(c.env);
+
+    const conds: SQL[] = [sql`n.is_deleted = 0`];
 
     if (hasSummary === '1') {
-        conditions.push('ns.id IS NOT NULL');
+        conds.push(sql`ns.id IS NOT NULL`);
     } else if (hasSummary === '0') {
-        conditions.push('ns.id IS NULL');
+        conds.push(sql`ns.id IS NULL`);
     }
 
     if (category && category !== 'all') {
-        conditions.push('n.category = ?');
-        params.push(category);
+        conds.push(sql`n.category = ${category}`);
     }
 
     if (sourceId) {
-        conditions.push('n.source_id = ?');
-        params.push(parseInt(sourceId));
+        conds.push(sql`n.source_id = ${parseInt(sourceId)}`);
     }
 
     if (lang) {
-        conditions.push('s.language = ?');
-        params.push(lang);
+        conds.push(sql`s.language = ${lang}`);
     }
 
     if (search) {
         const indexedIds = await searchNewsFTS(c.env, search);
         if (indexedIds && indexedIds.length > 0) {
-            const placeholders = indexedIds.map(() => '?').join(',');
-            conditions.push(`n.id IN (${placeholders})`);
-            params.push(...indexedIds);
+            conds.push(sql`n.id IN (${sql.join(indexedIds.map(id => sql`${id}`))})`);
         } else {
-            conditions.push('n.title LIKE ?');
-            params.push(`%${search}%`);
+            const escaped = search.replace(/[%_\\]/g, '\\$&');
+            conds.push(sql`n.title LIKE ${'%' + escaped + '%'} ESCAPE '\\'`);
         }
     }
 
-    if (conditions.length > 0) {
-        const whereClause = ' AND ' + conditions.join(' AND ');
-        query += whereClause;
-        countQuery += whereClause;
-    }
-
-    query += ' ORDER BY COALESCE(n.published_at, n.created_at) DESC LIMIT ? OFFSET ?';
-    params.push(limit, offset);
+    const whereClause = sql.join(conds, sql` AND `);
 
     try {
-        const [newsResult, countResult] = await Promise.all([
-            c.env.DB.prepare(query).bind(...params).all(),
-            c.env.DB.prepare(countQuery).bind(...params.slice(0, -2)).first()
-        ]);
-
-        const total = (countResult as any)?.total || 0;
+        const countResult = await db.all<{ total: number }>(sql`
+            SELECT COUNT(*) as total
+            FROM news_items n
+            LEFT JOIN news_sources s ON n.source_id = s.id
+            LEFT JOIN news_summaries ns ON ns.news_id = n.id
+            LEFT JOIN news_ai_take nt ON nt.news_id = n.id
+            WHERE ${whereClause}
+        `);
+        const total = countResult[0]?.total || 0;
         const totalPages = Math.ceil(total / limit);
 
+        const newsData = await db.all<any>(sql`
+            SELECT n.*, s.name as source_name, s.language as source_lang,
+                   (SELECT COUNT(*) FROM news_comments nc WHERE nc.news_id = n.id AND nc.is_deleted = 0) as comments_count,
+                   ns.summary as ai_summary, nt.take as ai_take
+            FROM news_items n
+            LEFT JOIN news_sources s ON n.source_id = s.id
+            LEFT JOIN news_summaries ns ON ns.news_id = n.id
+            LEFT JOIN news_ai_take nt ON nt.news_id = n.id
+            WHERE ${whereClause}
+            ORDER BY COALESCE(n.published_at, n.created_at) DESC
+            LIMIT ${limit} OFFSET ${offset}
+        `);
+
         const result = {
-            news: newsResult.results,
+            news: newsData,
             pagination: { page, limit, total, totalPages, hasMore: page < totalPages },
         };
 
@@ -124,34 +122,29 @@ news.get('/', async (c) => {
     }
 });
 
-// Get single news item
 news.get('/:id', async (c) => {
     const id = c.req.param('id');
-
+    const db = getDb(c.env);
     try {
-        const item = await c.env.DB.prepare(`
+        const item = await db.all<any>(sql`
             SELECT n.*, s.name as source_name, s.language as source_lang,
-                   ns.summary as ai_summary,
-                   nt.take as ai_take
-            FROM news_items n 
-            LEFT JOIN news_sources s ON n.source_id = s.id 
+                   ns.summary as ai_summary, nt.take as ai_take
+            FROM news_items n
+            LEFT JOIN news_sources s ON n.source_id = s.id
             LEFT JOIN news_summaries ns ON ns.news_id = n.id
             LEFT JOIN news_ai_take nt ON nt.news_id = n.id
-            WHERE n.id = ?
-        `).bind(id).first();
-
-        if (!item) {
+            WHERE n.id = ${id}
+        `);
+        if (!item || item.length === 0) {
             return c.json({ error: '新闻不存在' }, 404);
         }
-
-        return c.json({ news: item });
+        return c.json({ news: item[0] });
     } catch (error) {
         console.error('Error fetching news item:', error);
         return c.json({ error: '获取新闻详情失败' }, 500);
     }
 });
 
-// Get multi-perspective comparison
 news.get('/:id/perspectives', async (c) => {
     const id = parseInt(c.req.param('id'));
     try {
@@ -164,44 +157,60 @@ news.get('/:id/perspectives', async (c) => {
     }
 });
 
-// Get news sources
 news.get('/sources/list', async (c) => {
+    const db = getDb(c.env);
     try {
-        const sources = await c.env.DB.prepare(
-            'SELECT * FROM news_sources ORDER BY sort_order, language, name'
-        ).all();
-
-        return c.json({ sources: sources.results });
+        const rows = await db.select({
+            id: newsSources.id,
+            name: newsSources.name,
+            url: newsSources.url,
+            feed_url: newsSources.feed_url,
+            category: newsSources.category,
+            language: newsSources.language,
+            source_type: newsSources.source_type,
+            enabled: newsSources.enabled,
+            sort_order: newsSources.sort_order,
+            last_fetched_at: newsSources.last_fetched_at,
+            last_fetched_count: newsSources.last_fetched_count,
+            error_count: newsSources.error_count,
+        })
+            .from(newsSources)
+            .orderBy(newsSources.sort_order, newsSources.language, newsSources.name)
+            .all();
+        return c.json({ sources: rows });
     } catch (error) {
         console.error('Error fetching sources:', error);
         return c.json({ error: '获取新闻源失败' }, 500);
     }
 });
 
-// Get categories with counts
 news.get('/categories/list', async (c) => {
+    const db = getDb(c.env);
     try {
-        const categories = await c.env.DB.prepare(`
-            SELECT category, COUNT(*) as count 
-            FROM news_items 
-            GROUP BY category 
+        const categories = await db.all<{ category: string; count: number }>(sql`
+            SELECT category, COUNT(*) as count
+            FROM news_items
+            GROUP BY category
             ORDER BY count DESC
-        `).all();
-
-        return c.json({ categories: categories.results });
+        `);
+        return c.json({ categories });
     } catch (error) {
         console.error('Error fetching categories:', error);
         return c.json({ error: '获取分类失败' }, 500);
     }
 });
 
-// GET /:id/content — Fetch full article content
 news.get('/:id/content', async (c) => {
     const id = parseInt(c.req.param('id'));
+    const db = getDb(c.env);
     try {
-        const item = await c.env.DB.prepare(
-            'SELECT id, title, url, content, description FROM news_items WHERE id = ? AND is_deleted = 0'
-        ).bind(id).first<{ id: number; title: string; url: string; content: string | null; description: string | null }>();
+        const item = await db.select({
+            id: newsItems.id, title: newsItems.title, url: newsItems.url,
+            content: newsItems.content, description: newsItems.description,
+        }).from(newsItems)
+            .where(and(eq(newsItems.id, id), eq(newsItems.is_deleted, 0)))
+            .get();
+
         if (!item) return c.json({ error: '新闻不存在' }, 404);
 
         if (item.content && item.content.length > 500) {
@@ -211,9 +220,9 @@ news.get('/:id/content', async (c) => {
         const { fetchRichArticleContent } = await import('../services/contentFetcher');
         const rich = await fetchRichArticleContent(item.url);
         if (rich) {
-            await c.env.DB.prepare(
-                'UPDATE news_items SET content = ? WHERE id = ?'
-            ).bind(rich.html, item.id).run();
+            await db.update(newsItems)
+                .set({ content: rich.html })
+                .where(eq(newsItems.id, item.id));
             return c.json({ content: rich.html || rich.text });
         }
 

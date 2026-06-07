@@ -3,19 +3,36 @@ import { Bindings } from '../types';
 import { indexNewsItem } from '../services/tokenizer';
 import { fetchSourceNews } from '../services/newsFetcher';
 import { storeDedupHash } from '../services/dedup';
+import { eq, desc, sql, and, ne } from 'drizzle-orm';
+import { getDb } from '../db';
+import { newsSources, newsItems, newsFts } from '../db/schema';
 
 const admin = new Hono<{ Bindings: Bindings }>();
 
 admin.get('/sources', async (c) => {
-    const sources = await c.env.DB.prepare(
-        `SELECT ns.*,
-          (SELECT COUNT(*) FROM news_items ni
-           WHERE ni.source_id = ns.id
-             AND ni.created_at >= datetime('now', '+8 hours', 'start of day')
-          ) as today_count
-         FROM news_sources ns ORDER BY sort_order, language, name`
-    ).all();
-    return c.json({ sources: sources.results });
+    const db = getDb(c.env);
+    const sources = await db.select({
+        id: newsSources.id,
+        name: newsSources.name,
+        url: newsSources.url,
+        feed_url: newsSources.feed_url,
+        category: newsSources.category,
+        language: newsSources.language,
+        source_type: newsSources.source_type,
+        enabled: newsSources.enabled,
+        sort_order: newsSources.sort_order,
+        last_fetched_at: newsSources.last_fetched_at,
+        last_fetched_count: newsSources.last_fetched_count,
+        error_count: newsSources.error_count,
+        today_count: sql<number>`(
+            SELECT COUNT(*) FROM news_items ni
+            WHERE ni.source_id = news_sources.id
+              AND ni.created_at >= datetime('now', '+8 hours', 'start of day')
+        )`,
+    }).from(newsSources)
+        .orderBy(newsSources.sort_order, newsSources.language, newsSources.name)
+        .all();
+    return c.json({ sources });
 });
 
 admin.post('/sources', async (c) => {
@@ -23,37 +40,47 @@ admin.post('/sources', async (c) => {
     if (!name || !feed_url) {
         return c.json({ error: '名称和订阅地址必填' }, 400);
     }
-    const result = await c.env.DB.prepare(
-        'INSERT INTO news_sources (name, url, feed_url, category, language) VALUES (?, ?, ?, ?, ?)'
-    ).bind(name, url || '', feed_url, category || 'news', language || 'zh').run();
-    return c.json({ success: true, id: result.meta.last_row_id }, 201);
+    const db = getDb(c.env);
+    await db.insert(newsSources).values({
+        name, url: url || '', feed_url,
+        category: category || 'news', language: language || 'zh',
+    });
+    const created = await db.select({ id: newsSources.id })
+        .from(newsSources)
+        .where(eq(newsSources.feed_url, feed_url))
+        .orderBy(desc(newsSources.id))
+        .limit(1)
+        .get();
+    return c.json({ success: true, id: created?.id }, 201);
 });
 
 admin.put('/sources/:id', async (c) => {
     const id = parseInt(c.req.param('id'));
     const { name, url, feed_url, category, language, enabled, sort_order } = await c.req.json();
-    await c.env.DB.prepare(
-        'UPDATE news_sources SET name=?, url=?, feed_url=?, category=?, language=?, enabled=?, sort_order=? WHERE id=?'
-    ).bind(
-        name, url || '', feed_url,
-        category || 'news', language || 'zh',
-        enabled !== undefined ? (enabled ? 1 : 0) : 1,
-        sort_order !== undefined ? sort_order : 99, id
-    ).run();
+    const db = getDb(c.env);
+    await db.update(newsSources).set({
+        name, url: url || '', feed_url,
+        category: category || 'news', language: language || 'zh',
+        enabled: enabled !== undefined ? (enabled ? 1 : 0) : 1,
+        sort_order: sort_order !== undefined ? sort_order : 99,
+    }).where(eq(newsSources.id, id));
     return c.json({ success: true });
 });
 
 admin.delete('/sources/:id', async (c) => {
     const id = parseInt(c.req.param('id'));
-    await c.env.DB.prepare('DELETE FROM news_sources WHERE id = ?').bind(id).run();
+    const db = getDb(c.env);
+    await db.delete(newsSources).where(eq(newsSources.id, id));
     return c.json({ success: true });
 });
 
 admin.post('/sources/:id/test', async (c) => {
     const id = parseInt(c.req.param('id'));
-    const source = await c.env.DB.prepare(
-        'SELECT * FROM news_sources WHERE id = ?'
-    ).bind(id).first<{ feed_url: string }>();
+    const db = getDb(c.env);
+    const source = await db.select({ feed_url: newsSources.feed_url })
+        .from(newsSources)
+        .where(eq(newsSources.id, id))
+        .get();
     if (!source) return c.json({ error: '源不存在' }, 404);
     try {
         const res = await fetch(source.feed_url, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; CFNewsTest/1.0)' } });
@@ -66,23 +93,36 @@ admin.post('/sources/:id/test', async (c) => {
 });
 
 admin.post('/sources/dedup', async (c) => {
+    const db = getDb(c.env);
     try {
-        const dupes = await c.env.DB.prepare(
-            `SELECT feed_url, MIN(id) as keep_id FROM news_sources GROUP BY feed_url HAVING COUNT(*) > 1`
-        ).all();
+        // Find duplicate feed_urls — keep the lowest id
+        const dupes = await db.select({
+            feed_url: newsSources.feed_url,
+            keepId: sql<number>`MIN(id)`,
+        }).from(newsSources)
+            .groupBy(newsSources.feed_url)
+            .having(sql`COUNT(*) > 1`)
+            .all();
+
         let totalDeleted = 0;
-        for (const row of (dupes.results as any[])) {
-            const dupRows = await c.env.DB.prepare(
-                `SELECT id FROM news_sources WHERE feed_url = ? AND id != ?`
-            ).bind(row.feed_url, row.keep_id).all();
-            for (const dup of (dupRows.results as any[])) {
-                await c.env.DB.prepare(`UPDATE news_items SET source_id = ? WHERE source_id = ?`).bind(row.keep_id, dup.id).run();
-                await c.env.DB.prepare(`DELETE FROM news_sources WHERE id = ?`).bind(dup.id).run();
+        for (const row of dupes) {
+            const dupRows = await db.select({ id: newsSources.id })
+                .from(newsSources)
+                .where(and(
+                    eq(newsSources.feed_url, row.feed_url),
+                    ne(newsSources.id, row.keepId),
+                ))
+                .all();
+            for (const dup of dupRows) {
+                await db.update(newsItems)
+                    .set({ source_id: row.keepId })
+                    .where(eq(newsItems.source_id, dup.id));
+                await db.delete(newsSources).where(eq(newsSources.id, dup.id));
                 totalDeleted++;
             }
         }
         try {
-            await c.env.DB.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_sources_feed_url ON news_sources(feed_url)`).run();
+            await db.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_sources_feed_url ON news_sources(feed_url)`);
         } catch {}
         return c.json({ success: true, deleted: totalDeleted });
     } catch (e: any) {
@@ -103,13 +143,14 @@ admin.post('/sources/:id/fetch', async (c) => {
 
 // Rebuild FTS5 search index from all existing news items (async, runs in background)
 admin.post('/rebuild-index', async (c) => {
+    const db = getDb(c.env);
     c.executionCtx.waitUntil((async () => {
         try {
-            // Batch rebuild: clear FTS5 table and re-insert all active items
-            await c.env.DB.prepare('DELETE FROM news_fts').run();
-            const result = await c.env.DB.prepare(
-                "INSERT INTO news_fts(rowid, title, description) SELECT id, title, COALESCE(description, '') FROM news_items WHERE is_deleted = 0"
-            ).run();
+            await db.run(sql`DELETE FROM news_fts`);
+            const result = await db.run(sql`
+                INSERT INTO news_fts(rowid, title, description)
+                SELECT id, title, COALESCE(description, '') FROM news_items WHERE is_deleted = 0
+            `);
             console.log(`FTS5 index rebuild complete: ${result.meta.changes || 0} items`);
         } catch (e) {
             console.error('FTS5 index rebuild failed:', e);
@@ -120,14 +161,19 @@ admin.post('/rebuild-index', async (c) => {
 
 // Backfill Vectorize embeddings for existing news items
 admin.post('/backfill-vectors', async (c) => {
+    const db = getDb(c.env);
     c.executionCtx.waitUntil((async () => {
         try {
-            const items = await c.env.DB.prepare(
-                'SELECT id, title, description FROM news_items WHERE is_deleted = 0 ORDER BY id DESC LIMIT 500'
-            ).all<{ id: number; title: string; description: string | null }>();
+            const items = await db.select({
+                id: newsItems.id, title: newsItems.title, description: newsItems.description,
+            }).from(newsItems)
+                .where(eq(newsItems.is_deleted, 0))
+                .orderBy(desc(newsItems.id))
+                .limit(500)
+                .all();
             let stored = 0;
             let failed = 0;
-            for (const item of items.results) {
+            for (const item of items) {
                 try {
                     await storeDedupHash(c.env, item.id, item.title, item.description || undefined);
                     stored++;

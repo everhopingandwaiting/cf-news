@@ -1,10 +1,15 @@
 import { Bindings } from '../types';
-
-// ========== 配置管理 ==========
+import { eq, sql } from 'drizzle-orm';
+import { getDb } from '../db';
+import { appConfig, providerModels, providers, aiCallLog } from '../db/schema';
 
 export async function getConfig(env: Bindings, key: string): Promise<string | null> {
+    const db = getDb(env);
     try {
-        const row = await env.DB.prepare('SELECT value FROM app_config WHERE key = ?').bind(key).first<{ value: string }>();
+        const row = await db.select({ value: appConfig.value })
+            .from(appConfig)
+            .where(eq(appConfig.key, key))
+            .get();
         return row?.value || null;
     } catch {}
     return null;
@@ -15,19 +20,20 @@ export async function getConfigInt(env: Bindings, key: string, def: number): Pro
     return v ? parseInt(v) : def;
 }
 
-// ========== Provider 查询 ==========
-
 export async function getProviderOrder(env: Bindings): Promise<string[]> {
     const order = await getConfig(env, 'provider_order');
     return order ? order.split(',').map(s => s.trim()) : ['groq', 'cloudflare', 'openrouter', 'nvidia', 'mango'];
 }
 
 export async function getModels(env: Bindings, provider: string): Promise<string[]> {
+    const db = getDb(env);
     try {
-        const rows = await env.DB.prepare(
-            'SELECT model_id FROM provider_models WHERE provider = ? AND enabled = 1 ORDER BY score DESC'
-        ).bind(provider).all<{ model_id: string }>();
-        return rows.results.map(r => r.model_id);
+        const rows = await db.select({ model_id: providerModels.model_id })
+            .from(providerModels)
+            .where(sql`provider = ${provider} AND enabled = 1`)
+            .orderBy(sql`score DESC`)
+            .all();
+        return rows.map(r => r.model_id);
     } catch (e) {
         console.error(`getModels error for ${provider}:`, e);
         return [];
@@ -35,10 +41,16 @@ export async function getModels(env: Bindings, provider: string): Promise<string
 }
 
 export async function getProviderInfo(env: Bindings, name: string): Promise<{ base_url: string; api_key: string } | null> {
+    const db = getDb(env);
     try {
-        const row = await env.DB.prepare(
-            'SELECT base_url, api_key_env, expires_at FROM providers WHERE name = ? AND enabled = 1'
-        ).bind(name).first<{ base_url: string; api_key_env: string | null; expires_at: string | null }>();
+        const row = await db.select({
+            base_url: providers.base_url,
+            api_key_env: providers.api_key_env,
+            expires_at: providers.expires_at,
+        }).from(providers)
+            .where(sql`name = ${name} AND enabled = 1`)
+            .get();
+
         if (!row) return null;
         if (row.expires_at && new Date(row.expires_at) < new Date()) {
             console.log(`Provider ${name} expired at ${row.expires_at}`);
@@ -56,11 +68,13 @@ export async function getProviderInfo(env: Bindings, name: string): Promise<{ ba
     }
 }
 
-// ========== 失败模型追踪 ==========
-
 export async function getFailed(env: Bindings): Promise<string[]> {
+    const db = getDb(env);
     try {
-        const row = await env.DB.prepare("SELECT value FROM app_config WHERE key = 'ai_failed_models'").first<{ value: string }>();
+        const row = await db.select({ value: appConfig.value })
+            .from(appConfig)
+            .where(eq(appConfig.key, 'ai_failed_models'))
+            .get();
         if (!row) return [];
         const data = JSON.parse(row.value);
         if (Array.isArray(data)) return [];
@@ -74,8 +88,12 @@ export async function getFailed(env: Bindings): Promise<string[]> {
 }
 
 export async function markFailed(env: Bindings, model: string, _provider: string): Promise<void> {
+    const db = getDb(env);
     const now = Math.floor(Date.now() / 1000);
-    const row = await env.DB.prepare("SELECT value FROM app_config WHERE key = 'ai_failed_models'").first<{ value: string }>();
+    const row = await db.select({ value: appConfig.value })
+        .from(appConfig)
+        .where(eq(appConfig.key, 'ai_failed_models'))
+        .get();
     const models: Record<string, number> = {};
     if (row) {
         const data = JSON.parse(row.value);
@@ -89,29 +107,31 @@ export async function markFailed(env: Bindings, model: string, _provider: string
     }
     if (!models[model]) {
         models[model] = now;
-        await env.DB.prepare("INSERT OR REPLACE INTO app_config (key, value) VALUES ('ai_failed_models', ?)")
-            .bind(JSON.stringify({ models })).run();
+        await db.run(sql`INSERT OR REPLACE INTO app_config (key, value) VALUES ('ai_failed_models', ${JSON.stringify({ models })})`);
     }
 }
-
-// ========== 日志 ==========
 
 export async function logAICall(env: Bindings, data: {
     provider: string; model?: string; news_id?: number; news_title?: string;
     prompt_length: number; response_length: number; response_preview?: string;
     duration_ms: number; success: boolean; error?: string;
 }) {
+    const db = getDb(env);
     try {
-        await env.DB.prepare(
-            `INSERT INTO ai_call_log (provider, model, news_id, news_title, prompt_length, response_length, response_preview, duration_ms, success, error)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        ).bind(data.provider, data.model || null, data.news_id || null, data.news_title || null,
-            data.prompt_length, data.response_length, data.response_preview?.substring(0, 200) || null,
-            data.duration_ms, data.success ? 1 : 0, data.error || null).run();
+        await db.insert(aiCallLog).values({
+            provider: data.provider,
+            model: data.model || null,
+            newsId: data.news_id || null,
+            newsTitle: data.news_title || null,
+            promptLength: data.prompt_length,
+            responseLength: data.response_length,
+            responsePreview: data.response_preview?.substring(0, 200) || null,
+            durationMs: data.duration_ms,
+            success: data.success ? 1 : 0,
+            error: data.error || null,
+        });
     } catch (e) { console.error('Log insert error:', e); }
 }
-
-// ========== 调用器 ==========
 
 export async function doOpenAICompat(
     env: Bindings, provider: string, baseUrl: string, apiKey: string,
@@ -174,8 +194,6 @@ export async function doCF(
         return null;
     }
 }
-
-// ========== 统一调用 ==========
 
 export interface AIOptions {
     max_tokens?: number;

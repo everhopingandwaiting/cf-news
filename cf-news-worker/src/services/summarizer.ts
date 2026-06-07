@@ -1,8 +1,9 @@
 import { Bindings } from '../types';
 import { getConfig, getConfigInt, getModels, getProviderInfo, getProviderOrder, getFailed, callAI, doOpenAICompat as aiDoOpenAICompat, doCF as aiDoCF } from './aiProvider';
 import { fetchRichArticleContent } from './contentFetcher';
-
-// ========== 通用工具 ==========
+import { eq, and, sql, isNull } from 'drizzle-orm';
+import { getDb } from '../db';
+import { newsSummaries, newsAiTake, newsPerspectives, newsItems, newsSources } from '../db/schema';
 
 function cleanText(text: string): string {
     return text.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
@@ -22,13 +23,10 @@ async function tryModels(
     return null;
 }
 
-// ========== Provider 调用器 ==========
-
 async function doOpenAICompat(
     env: Bindings, provider: string, baseUrl: string, apiKey: string,
     model: string, prompt: string, newsId?: number, newsTitle?: string
 ): Promise<string | null> {
-    // Preserve summarizer-specific defaults (summary_max_tokens=180) when delegating to aiProvider
     const maxTokens = await getConfigInt(env, 'summary_max_tokens', 180);
     const temp = parseFloat(await getConfig(env, 'summary_temperature') || '0.3');
     return aiDoOpenAICompat(env, provider, baseUrl, apiKey, model,
@@ -45,23 +43,18 @@ async function doCF(env: Bindings, model: string, prompt: string, newsId?: numbe
     );
 }
 
-// ========== Provider 路由 ==========
-
 const PROVIDER_MAP: Record<string, (env: Bindings, model: string, prompt: string, newsId?: number, newsTitle?: string) => Promise<string | null>> = {
     cloudflare: doCF,
-    nvidia: doCF,    // will be overridden below
-    openrouter: doCF, // will be overridden below
-    mango: doCF,      // will be overridden below
+    nvidia: doCF,
+    openrouter: doCF,
+    mango: doCF,
 };
 
-// Override OpenAI-compatible providers
 async function doGeneric(env: Bindings, provider: string, model: string, prompt: string, newsId?: number, newsTitle?: string): Promise<string | null> {
     const info = await getProviderInfo(env, provider);
     if (!info) return null;
     return doOpenAICompat(env, provider, info.base_url, info.api_key, model, prompt, newsId, newsTitle);
 }
-
-// ========== 主入口 ==========
 
 export async function generateSummary(env: Bindings, item: { id?: number; title: string; description?: string; content?: string }): Promise<string | null> {
     const text = cleanText(item.content || item.description || '');
@@ -75,7 +68,6 @@ export async function generateSummary(env: Bindings, item: { id?: number; title:
     const order = await getProviderOrder(env);
 
     for (const provider of order) {
-        // 检查 provider 是否已过期
         if (provider !== 'cloudflare') {
             const info = await getProviderInfo(env, provider);
             if (!info) continue;
@@ -87,7 +79,6 @@ export async function generateSummary(env: Bindings, item: { id?: number; title:
         let caller = PROVIDER_MAP[provider];
         if (!caller) continue;
 
-        // OpenAI-compatible providers use generic caller
         if (provider !== 'cloudflare') {
             const p = provider;
             caller = (env, model, prompt, newsId, newsTitle) => doGeneric(env, p, model, prompt, newsId, newsTitle);
@@ -102,23 +93,17 @@ export async function generateSummary(env: Bindings, item: { id?: number; title:
 export async function generateSummaryForNews(env: Bindings, newsId: number, item: { title: string; description?: string; content?: string }): Promise<boolean> {
     const summary = await generateSummary(env, { ...item, id: newsId });
     if (!summary || summary.length < 10) return false;
-    await env.DB.prepare('INSERT OR REPLACE INTO news_summaries (news_id, summary) VALUES (?, ?)').bind(newsId, summary.substring(0, 500)).run();
+    const db = getDb(env);
+    // Use raw SQL for INSERT OR REPLACE (Drizzle doesn't have a direct "or replace" for sqlite)
+    await db.run(sql`INSERT OR REPLACE INTO news_summaries (news_id, summary) VALUES (${newsId}, ${summary.substring(0, 500)})`);
 
-    // 顺便生成 AI 小编吐槽
-    generateAITake(env, newsId, item).catch(() => {}); // no waitUntil here, run in same context
+    generateAITake(env, newsId, item).catch(() => {});
 
     return true;
 }
 
-// ========== Batch summarization ==========
-
 const SUMMARY_BATCH_SIZE = 10;
 
-/**
- * Generate summaries for multiple articles, trying batch mode first.
- * Batch: N articles in one AI call -> JSON array of summaries.
- * Fallback: if JSON parse fails, retries per-article via generateSummaryForNews.
- */
 export async function generateBatchSummariesForNews(
     env: Bindings,
     items: { id: number; title: string; description?: string; content?: string }[]
@@ -132,19 +117,16 @@ export async function generateBatchSummariesForNews(
     return successCount;
 }
 
-/** Try one batch: multi-article prompt -> JSON parse -> fallback per-article. */
 async function generateOneBatch(
     env: Bindings,
     items: { id: number; title: string; description?: string; content?: string }[]
 ): Promise<number> {
-    // Build article content blocks; if anything is too short, skip batch for those
     const articles: { text: string; tooShort: boolean }[] = items.map(item => {
         const text = cleanText(item.content || item.description || '');
         const input = text.length > 1500 ? text.substring(0, 1500) : text;
         return { text: `${item.title}. ${input}`, tooShort: (`${item.title}. ${input}`).length < 60 };
     });
 
-    // Articles under 60 chars can't be summarized meaningfully — handle one by one
     if (articles.some(a => a.tooShort)) {
         let count = 0;
         for (let i = 0; i < items.length; i++) {
@@ -155,7 +137,6 @@ async function generateOneBatch(
         return count;
     }
 
-    // Build multi-article prompt
     const blocks = articles.map((a, i) =>
         `Article ${i + 1}:\nTitle: ${items[i].title}\nContent: ${a.text}`
     ).join('\n\n');
@@ -166,7 +147,6 @@ ${blocks}
 
 Return: [{"summary":"<article1 summary>"},{"summary":"<article2 summary>"},...]`;
 
-    // Try batch via shared callAI (handles full provider chain with fallbacks)
     const result = await callAI(env, batchPrompt, {
         max_tokens: items.length * 120,
         temperature: 0.3,
@@ -175,23 +155,19 @@ Return: [{"summary":"<article1 summary>"},{"summary":"<article2 summary>"},...]`
     if (result) {
         const summaries = parseBatchResult(result, items.length);
         if (summaries) {
-            // Batch succeeded — save all, fire AITake for each
+            const db = getDb(env);
             let count = 0;
             for (let i = 0; i < items.length; i++) {
                 if (summaries[i]) {
-                    await env.DB.prepare(
-                        'INSERT OR REPLACE INTO news_summaries (news_id, summary) VALUES (?, ?)'
-                    ).bind(items[i].id, summaries[i]!.substring(0, 500)).run();
+                    await db.run(sql`INSERT OR REPLACE INTO news_summaries (news_id, summary) VALUES (${items[i].id}, ${summaries[i]!.substring(0, 500)})`);
                     generateAITake(env, items[i].id, items[i]).catch(() => {});
                     count++;
                 }
             }
             return count;
         }
-        // JSON parse failed — fall through to per-article retry
     }
 
-    // Batch failed (API error or bad JSON) — fall back per-article
     let count = 0;
     for (const item of items) {
         if (await generateSummaryForNews(env, item.id, item)) count++;
@@ -199,7 +175,6 @@ Return: [{"summary":"<article1 summary>"},{"summary":"<article2 summary>"},...]`
     return count;
 }
 
-/** Parse batch JSON response. Returns null if unparseable. */
 function parseBatchResult(text: string, expectedCount: number): (string | null)[] | null {
     try {
         const jsonMatch = text.match(/\[[\s\S]*\]/);
@@ -216,11 +191,14 @@ function parseBatchResult(text: string, expectedCount: number): (string | null)[
     }
 }
 
-// ========== AI 小编吐槽 ==========
 const TAKE_PROMPT = '你是一个毒舌但有趣的新闻评论员。用一句中文吐槽这篇新闻，幽默犀利，一针见血，不超过40字。不要用表情符号。\n\n新闻标题：{{TITLE}}\n\n吐槽：';
 
 export async function generateAITake(env: Bindings, newsId: number, item: { title: string; description?: string; content?: string }): Promise<void> {
-    const existing = await env.DB.prepare('SELECT take FROM news_ai_take WHERE news_id = ?').bind(newsId).first();
+    const db = getDb(env);
+    const existing = await db.select({ take: newsAiTake.take })
+        .from(newsAiTake)
+        .where(eq(newsAiTake.news_id, newsId))
+        .get();
     if (existing) return;
 
     const prompt = TAKE_PROMPT.replace('{{TITLE}}', item.title || '');
@@ -244,28 +222,42 @@ export async function generateAITake(env: Bindings, newsId: number, item: { titl
                 text = await doOpenAICompat(env, provider, info.base_url, info.api_key, model, prompt);
             }
             if (text && text.length > 3 && text.length < 200) {
-                await env.DB.prepare('INSERT OR REPLACE INTO news_ai_take (news_id, take) VALUES (?, ?)').bind(newsId, text).run();
+                await db.run(sql`INSERT OR REPLACE INTO news_ai_take (news_id, take) VALUES (${newsId}, ${text})`);
                 return;
             }
         }
     }
 }
-// ========== 多视角对比 ==========
+
 const PERSPECTIVE_PROMPT = '以下是多篇媒体报道同一新闻事件的标题和摘要。请分析不同媒体的报道角度差异，用中文给出对比观点，200字以内。\n\n{{ARTICLES}}\n\n多视角分析：';
 
 export async function generatePerspectives(env: Bindings, newsId: number): Promise<{ related: { id: number; source: string; title: string }[]; perspective: string } | null> {
-    // 先查缓存
-    const cached = await env.DB.prepare('SELECT related_ids, perspective FROM news_perspectives WHERE news_id = ?').bind(newsId).first<{ related_ids: string; perspective: string }>();
+    const db = getDb(env);
+    const cached = await db.select({
+        relatedIds: newsPerspectives.related_ids,
+        perspective: newsPerspectives.perspective,
+    }).from(newsPerspectives)
+        .where(eq(newsPerspectives.news_id, newsId))
+        .get();
+
     if (cached) {
         const ids = cached.related_ids.split(',').map(Number);
-        const rows = await env.DB.prepare(`SELECT n.id, s.name as source_name, n.title FROM news_items n LEFT JOIN news_sources s ON n.source_id = s.id WHERE n.id IN (${ids.map(() => '?').join(',')})`).bind(...ids).all<{ id: number; source_name: string; title: string }>();
-        return { related: rows.results.map(r => ({ id: r.id, source: r.source_name, title: r.title })), perspective: cached.perspective };
+        const rows = await db.all<{ id: number; source_name: string; title: string }>(sql`
+            SELECT n.id, s.name as source_name, n.title
+            FROM news_items n LEFT JOIN news_sources s ON n.source_id = s.id
+            WHERE n.id IN (${ids.join(',')})
+        `);
+        return { related: rows.map(r => ({ id: r.id, source: r.source_name, title: r.title })), perspective: cached.perspective };
     }
 
     if (!env.VECTORIZE) return null;
 
-    // 从 D1 查询当前新闻标题
-    const item = await env.DB.prepare('SELECT title, description FROM news_items WHERE id = ? AND is_deleted = 0').bind(newsId).first<{ title: string; description: string | null }>();
+    const item = await db.select({
+        title: newsItems.title, description: newsItems.description,
+    }).from(newsItems)
+        .where(and(eq(newsItems.id, newsId), eq(newsItems.is_deleted, 0)))
+        .get();
+
     if (!item) return null;
 
     const text = `${item.title} ${item.description || ''}`;
@@ -282,13 +274,16 @@ export async function generatePerspectives(env: Bindings, newsId: number): Promi
         const ids = matches.matches.map((m: any) => parseInt(m.id)).filter((id: number) => id !== newsId).slice(0, 3);
         if (ids.length === 0) return null;
 
-        const rows = await env.DB.prepare(`SELECT n.id, s.name as source_name, n.title, n.description FROM news_items n LEFT JOIN news_sources s ON n.source_id = s.id WHERE n.id IN (${ids.map(() => '?').join(',')})`).bind(...ids).all<{ id: number; source_name: string; title: string; description: string | null }>();
-        if (rows.results.length === 0) return null;
+        const rows = await db.all<{ id: number; source_name: string; title: string; description: string | null }>(sql`
+            SELECT n.id, s.name as source_name, n.title, n.description
+            FROM news_items n LEFT JOIN news_sources s ON n.source_id = s.id
+            WHERE n.id IN (${ids.join(',')})
+        `);
+        if (rows.length === 0) return null;
 
-        const articles = rows.results.map((r, i) => `【来源${i + 1}】${r.source_name || '未知'}\n标题：${r.title}\n摘要：${(r.description || '').substring(0, 200)}`).join('\n\n');
+        const articles = rows.map((r, i) => `【来源${i + 1}】${r.source_name || '未知'}\n标题：${r.title}\n摘要：${(r.description || '').substring(0, 200)}`).join('\n\n');
         const prompt = PERSPECTIVE_PROMPT.replace('{{ARTICLES}}', articles);
 
-        // 用芒果/NVIDIA 生成多视角分析
         const order = await getProviderOrder(env);
         let perspective = '';
         for (const provider of order) {
@@ -319,12 +314,11 @@ export async function generatePerspectives(env: Bindings, newsId: number): Promi
 
         if (!perspective) return null;
 
-        // 缓存结果
-        const relatedIds = rows.results.map(r => r.id).join(',');
-        await env.DB.prepare('INSERT OR REPLACE INTO news_perspectives (news_id, related_ids, perspective) VALUES (?, ?, ?)').bind(newsId, relatedIds, perspective.substring(0, 500)).run();
+        const relatedIds = rows.map(r => r.id).join(',');
+        await db.run(sql`INSERT OR REPLACE INTO news_perspectives (news_id, related_ids, perspective) VALUES (${newsId}, ${relatedIds}, ${perspective.substring(0, 500)})`);
 
         return {
-            related: rows.results.map(r => ({ id: r.id, source: r.source_name, title: r.title })),
+            related: rows.map(r => ({ id: r.id, source: r.source_name, title: r.title })),
             perspective,
         };
     } catch (e) {
@@ -333,46 +327,42 @@ export async function generatePerspectives(env: Bindings, newsId: number): Promi
     }
 }
 
-/**
- * Generate AI summaries for news items that don't have them yet.
- * First enriches items with short/no content, then generates summaries.
- * Called by cron handler.
- */
 export async function generatePendingSummaries(env: Bindings): Promise<void> {
     console.log('Generating pending AI summaries...');
-    // Enrich items with short RSS content first (max 5 per run, separated from fetch to avoid 50-req limit)
-    const shortItems = await env.DB.prepare(
-        `SELECT id, title, url FROM news_items 
-         WHERE LENGTH(COALESCE(content,'')) < 300 AND LENGTH(COALESCE(description,'')) < 300
-         AND url IS NOT NULL LIMIT 5`
-    ).all<{ id: number; title: string; url: string }>();
-    for (const item of shortItems.results) {
+    const db = getDb(env);
+
+    const shortItems = await db.all<{ id: number; title: string; url: string }>(sql`
+        SELECT id, title, url FROM news_items 
+        WHERE LENGTH(COALESCE(content,'')) < 300 AND LENGTH(COALESCE(description,'')) < 300
+        AND url IS NOT NULL LIMIT 5
+    `);
+    for (const item of shortItems) {
         try {
             const rich = await fetchRichArticleContent(item.url);
             if (rich) {
-                await env.DB.prepare(
-                    'UPDATE news_items SET content = ?, description = ? WHERE id = ?'
-                ).bind(rich.html, rich.text, item.id).run();
+                await db.update(newsItems)
+                    .set({ content: rich.html, description: rich.text })
+                    .where(eq(newsItems.id, item.id));
                 console.log(`Enriched: "${item.title.substring(0, 40)}"`);
             }
         } catch (e) {
             console.error(`Enrich failed for "${item.title}":`, e);
         }
     }
-    // Then generate summaries for items missing them
-    const items = await env.DB.prepare(
-        `SELECT n.id, n.title, n.description, n.content 
-         FROM news_items n LEFT JOIN news_summaries ns ON ns.news_id = n.id 
-         WHERE ns.id IS NULL AND (n.description IS NOT NULL OR n.content IS NOT NULL)
-         LIMIT 10`
-    ).all<{ id: number; title: string; description: string; content: string }>();
 
-    if (items.results.length === 0) {
+    const items = await db.all<{ id: number; title: string; description: string | null; content: string | null }>(sql`
+        SELECT n.id, n.title, n.description, n.content 
+        FROM news_items n LEFT JOIN news_summaries ns ON ns.news_id = n.id 
+        WHERE ns.id IS NULL AND (n.description IS NOT NULL OR n.content IS NOT NULL)
+        LIMIT 10
+    `);
+
+    if (items.length === 0) {
         console.log('No pending summaries');
         return;
     }
 
-    console.log(`Found ${items.results.length} items without summaries`);
-    const done = await generateBatchSummariesForNews(env, items.results);
-    console.log(`Summary generation complete: ${done}/${items.results.length}`);
+    console.log(`Found ${items.length} items without summaries`);
+    const done = await generateBatchSummariesForNews(env, items as any);
+    console.log(`Summary generation complete: ${done}/${items.length}`);
 }

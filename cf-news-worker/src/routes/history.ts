@@ -1,6 +1,9 @@
 import { Hono } from 'hono';
 import { Bindings } from '../types';
 import { verifyJWT } from './auth';
+import { eq, desc, sql, count } from 'drizzle-orm';
+import { getDb } from '../db';
+import { userReadHistory, newsItems, newsSources } from '../db/schema';
 
 const history = new Hono<{ Bindings: Bindings }>();
 
@@ -12,7 +15,6 @@ async function getUserId(c: any): Promise<number | null> {
     return payload?.sub || null;
 }
 
-// Get read history
 history.get('/', async (c) => {
     const userId = await getUserId(c);
     if (!userId) return c.json({ error: '未授权' }, 401);
@@ -22,24 +24,39 @@ history.get('/', async (c) => {
     const offset = (page - 1) * limit;
 
     try {
-        const result = await c.env.DB.prepare(`
-            SELECT n.*, s.name as source_name, r.read_at
-            FROM user_read_history r
-            JOIN news_items n ON r.news_id = n.id
-            LEFT JOIN news_sources s ON n.source_id = s.id
-            WHERE r.user_id = ?
-            ORDER BY r.read_at DESC
-            LIMIT ? OFFSET ?
-        `).bind(userId, limit, offset).all();
+        const db = getDb(c.env);
+        const result = await db.select({
+            id: newsItems.id,
+            source_id: newsItems.source_id,
+            title: newsItems.title,
+            url: newsItems.url,
+            description: newsItems.description,
+            content: newsItems.content,
+            image_url: newsItems.image_url,
+            category: newsItems.category,
+            published_at: newsItems.published_at,
+            is_deleted: newsItems.is_deleted,
+            created_at: newsItems.created_at,
+            source_name: newsSources.name,
+            read_at: userReadHistory.read_at,
+        })
+            .from(userReadHistory)
+            .innerJoin(newsItems, eq(userReadHistory.news_id, newsItems.id))
+            .leftJoin(newsSources, eq(newsItems.source_id, newsSources.id))
+            .where(eq(userReadHistory.user_id, userId))
+            .orderBy(desc(userReadHistory.read_at))
+            .limit(limit)
+            .offset(offset);
 
-        const countResult = await c.env.DB.prepare(
-            'SELECT COUNT(*) as total FROM user_read_history WHERE user_id = ?'
-        ).bind(userId).first();
+        const countResult = await db.select({ total: count() })
+            .from(userReadHistory)
+            .where(eq(userReadHistory.user_id, userId))
+            .get();
 
-        const total = (countResult as any)?.total || 0;
+        const total = countResult?.total || 0;
 
         return c.json({
-            history: result.results,
+            history: result,
             pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
         });
     } catch (error) {
@@ -48,16 +65,14 @@ history.get('/', async (c) => {
     }
 });
 
-// Mark as read
 history.post('/:newsId', async (c) => {
     const userId = await getUserId(c);
     if (!userId) return c.json({ error: '未授权' }, 401);
 
     const newsId = parseInt(c.req.param('newsId'));
     try {
-        await c.env.DB.prepare(
-            'INSERT OR REPLACE INTO user_read_history (user_id, news_id) VALUES (?, ?)'
-        ).bind(userId, newsId).run();
+        const db = getDb(c.env);
+        await db.insert(userReadHistory).values({ user_id: userId, news_id: newsId }).onConflictDoNothing();
         return c.json({ message: '已标记为已读' });
     } catch (error) {
         console.error('Error marking as read:', error);
@@ -65,15 +80,13 @@ history.post('/:newsId', async (c) => {
     }
 });
 
-// Clear read history
 history.delete('/', async (c) => {
     const userId = await getUserId(c);
     if (!userId) return c.json({ error: '未授权' }, 401);
 
     try {
-        await c.env.DB.prepare(
-            'DELETE FROM user_read_history WHERE user_id = ?'
-        ).bind(userId).run();
+        const db = getDb(c.env);
+        await db.delete(userReadHistory).where(eq(userReadHistory.user_id, userId));
         return c.json({ message: '阅读历史已清空' });
     } catch (error) {
         console.error('Error clearing history:', error);

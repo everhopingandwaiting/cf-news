@@ -2,6 +2,9 @@ import { Hono } from 'hono';
 import { Bindings } from '../types';
 import { verifyJWT } from './auth';
 import { getRecommendations } from '../services/recommender';
+import { eq, and, or, sql, count } from 'drizzle-orm';
+import { getDb } from '../db';
+import { userPreferences, pushSubscriptions, users, userFavorites, userReadHistory } from '../db/schema';
 
 const user = new Hono<{ Bindings: Bindings }>();
 
@@ -13,39 +16,43 @@ async function getUserId(c: any): Promise<number | null> {
     return payload?.sub || null;
 }
 
-// Toggle email digest subscription
 user.post('/digest', async (c) => {
     const userId = await getUserId(c);
     if (!userId) return c.json({ error: '未授权' }, 401);
-
     try {
-        const existing = await c.env.DB.prepare('SELECT receive_digest FROM user_preferences WHERE user_id = ?').bind(userId).first();
+        const db = getDb(c.env);
+        const existing = await db.select({ receive_digest: userPreferences.receive_digest })
+            .from(userPreferences)
+            .where(eq(userPreferences.user_id, userId))
+            .get();
         const newValue = existing?.receive_digest ? 0 : 1;
-        await c.env.DB.prepare('INSERT OR REPLACE INTO user_preferences (user_id, receive_digest, updated_at) VALUES (?, ?, datetime("now"))').bind(userId, newValue).run();
+        await db.insert(userPreferences)
+            .values({ user_id: userId, receive_digest: newValue, updated_at: sql`datetime('now')` })
+            .onConflictDoUpdate({ target: userPreferences.user_id, set: { receive_digest: newValue, updated_at: sql`datetime('now')` } });
         return c.json({ receive_digest: newValue === 1 });
     } catch (error) {
         return c.json({ error: '操作失败' }, 500);
     }
 });
 
-// Get digest subscription status
 user.get('/digest', async (c) => {
     const userId = await getUserId(c);
     if (!userId) return c.json({ error: '未授权' }, 401);
-
     try {
-        const pref = await c.env.DB.prepare('SELECT receive_digest FROM user_preferences WHERE user_id = ?').bind(userId).first();
+        const db = getDb(c.env);
+        const pref = await db.select({ receive_digest: userPreferences.receive_digest })
+            .from(userPreferences)
+            .where(eq(userPreferences.user_id, userId))
+            .get();
         return c.json({ receive_digest: pref?.receive_digest === 1 });
     } catch {
         return c.json({ receive_digest: false });
     }
 });
 
-// Get recommendations
 user.get('/recommendations', async (c) => {
     const userId = await getUserId(c);
     if (!userId) return c.json({ error: '未授权' }, 401);
-
     try {
         const limit = parseInt(c.req.query('limit') || '10');
         const items = await getRecommendations(c.env, userId, limit);
@@ -55,53 +62,62 @@ user.get('/recommendations', async (c) => {
     }
 });
 
-// Get user profile
 user.get('/profile', async (c) => {
     const userId = await getUserId(c);
     if (!userId) return c.json({ error: '未授权' }, 401);
-
     try {
-        const u = await c.env.DB.prepare(
-            'SELECT id, email, username, created_at FROM users WHERE id = ?'
-        ).bind(userId).first();
+        const db = getDb(c.env);
+        const u = await db.select({
+            id: users.id, email: users.email, username: users.username, created_at: users.created_at,
+        })
+            .from(users)
+            .where(eq(users.id, userId))
+            .get();
 
-        const stats = await c.env.DB.prepare(`
-            SELECT 
-                (SELECT COUNT(*) FROM user_favorites WHERE user_id = ?) as favorites_count,
-                (SELECT COUNT(*) FROM user_read_history WHERE user_id = ?) as read_count
-        `).bind(userId, userId).first();
+        const favCount = await db.select({ count: count() })
+            .from(userFavorites)
+            .where(eq(userFavorites.user_id, userId))
+            .get();
+        const readCount = await db.select({ count: count() })
+            .from(userReadHistory)
+            .where(eq(userReadHistory.user_id, userId))
+            .get();
+        const data = { favoritesCount: favCount?.count ?? 0, readCount: readCount?.count ?? 0 };
 
-        return c.json({ user: u, stats });
+        return c.json({ user: u, stats: data });
     } catch (error) {
         console.error('Error fetching profile:', error);
         return c.json({ error: '获取用户信息失败' }, 500);
     }
 });
 
-// Push notification subscribe
 user.post('/push/subscribe', async (c) => {
     const userId = await getUserId(c);
     if (!userId) return c.json({ error: '未授权' }, 401);
     try {
         const { endpoint, keys } = await c.req.json();
         if (!endpoint || !keys?.p256dh || !keys?.auth) return c.json({ error: 'Invalid subscription' }, 400);
-        await c.env.DB.prepare('INSERT OR REPLACE INTO push_subscriptions (user_id, endpoint, p256dh_key, auth_key) VALUES (?, ?, ?, ?)').bind(userId, endpoint, keys.p256dh, keys.auth).run();
+        const db = getDb(c.env);
+        await db.insert(pushSubscriptions)
+            .values({ user_id: userId, endpoint, p256dh_key: keys.p256dh, auth_key: keys.auth })
+            .onConflictDoNothing();
         return c.json({ success: true });
     } catch (error) {
         return c.json({ error: '订阅失败' }, 500);
     }
 });
 
-// Push notification unsubscribe
 user.delete('/push/unsubscribe', async (c) => {
     const userId = await getUserId(c);
     if (!userId) return c.json({ error: '未授权' }, 401);
     try {
+        const db = getDb(c.env);
         const { endpoint } = await c.req.json();
         if (endpoint) {
-            await c.env.DB.prepare('DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?').bind(userId, endpoint).run();
+            await db.delete(pushSubscriptions)
+                .where(and(eq(pushSubscriptions.user_id, userId), eq(pushSubscriptions.endpoint, endpoint)));
         } else {
-            await c.env.DB.prepare('DELETE FROM push_subscriptions WHERE user_id = ?').bind(userId).run();
+            await db.delete(pushSubscriptions).where(eq(pushSubscriptions.user_id, userId));
         }
         return c.json({ success: true });
     } catch (error) {
