@@ -116,7 +116,7 @@ async function batchClassifyCategories(
 
         try {
             const titles = uncached.map(j => `${j + 1}. ${(batch[j].title || '').slice(0, 200)}`);
-            const prompt = `Classify each news title into exactly one category: tech, ai, news, finance, entertainment\n\n...`;
+            const prompt = `Classify each news title into exactly one category: tech, ai, news, finance, entertainment, stocks, funds\n\n...`;
             const result = await env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
                 prompt, max_tokens: uncached.length * 4, temperature: 0.1,
                 gateway: { id: 'default', cacheTtl: 86400, skipCache: false },
@@ -127,7 +127,7 @@ async function batchClassifyCategories(
             if (!jsonMatch) continue;
             const parsed = JSON.parse(jsonMatch[0]);
             if (!Array.isArray(parsed)) continue;
-            const valid = ['tech', 'ai', 'news', 'finance', 'entertainment'];
+            const valid = ['tech', 'ai', 'news', 'finance', 'entertainment', 'stocks', 'funds'];
             for (let k = 0; k < parsed.length && k < uncached.length; k++) {
                 const cat = String(parsed[k]).toLowerCase();
                 const matched = valid.find(v => cat.includes(v));
