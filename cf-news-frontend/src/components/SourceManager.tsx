@@ -18,7 +18,15 @@ export default function SourceManager({ token: _token, onClose }: Props) {
     const [fetching, setFetching] = useState<number | null>(null);
     const [deduping, setDeduping] = useState(false);
 
-    const load = async () => { const { data } = await api.get('/api/admin/sources'); setSources(data.sources); };
+    const [overallTodayCount, setOverallTodayCount] = useState(0);
+    const [overallTodayLastCount, setOverallTodayLastCount] = useState(0);
+
+    const load = async () => {
+        const { data } = await api.get('/api/admin/sources');
+        setSources(data.sources);
+        setOverallTodayCount(data.overall_today_count ?? 0);
+        setOverallTodayLastCount(data.overall_today_last_count ?? 0);
+    };
     useEffect(() => { load(); }, []);
 
     async function handleSave(id?: number) {
@@ -78,6 +86,11 @@ export default function SourceManager({ token: _token, onClose }: Props) {
                         <button className="px-4 py-2 rounded-lg text-[13px] font-medium border border-gray-200 text-gray-500 hover:bg-gray-50 transition disabled:opacity-50" onClick={handleDedup} disabled={deduping}>{deduping ? '处理中…' : '去重'}</button>
                         <button className="w-9 h-9 rounded-full bg-gray-100 border border-gray-200 text-gray-400 cursor-pointer text-base flex items-center justify-center hover:bg-gray-200 hover:text-gray-600 transition" onClick={onClose}>✕</button>
                     </div>
+                </div>
+
+                <div className="px-6 pt-3 flex gap-4 text-[13px]">
+                    <span className="text-gray-500">今日总计: <span className="text-indigo-600 font-semibold">{overallTodayCount}</span> 条</span>
+                    <span className="text-gray-500">上次总计: <span className="text-gray-700 font-semibold">{overallTodayLastCount}</span> 条</span>
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-6 pt-4 space-y-3" style={{ scrollbarWidth: 'thin' }}>

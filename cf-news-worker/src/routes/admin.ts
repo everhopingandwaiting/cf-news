@@ -32,7 +32,24 @@ admin.get('/sources', async (c) => {
     }).from(newsSources)
         .orderBy(newsSources.sort_order, newsSources.language, newsSources.name)
         .all();
-    return c.json({ sources });
+
+    const todayStart = sql`datetime('now', '+8 hours', 'start of day')`;
+    const countResult = await db.select({
+        today_count: sql<number>`COUNT(*)`,
+    }).from(newsItems)
+        .where(sql`created_at >= ${todayStart}`)
+        .get();
+
+    const lastCountResult = await db.select({
+        last_count: sql<number>`COALESCE(SUM(last_fetched_count), 0)`,
+    }).from(newsSources)
+        .get();
+
+    return c.json({
+        sources,
+        overall_today_count: countResult?.today_count ?? 0,
+        overall_today_last_count: lastCountResult?.last_count ?? 0,
+    });
 });
 
 admin.post('/sources', async (c) => {

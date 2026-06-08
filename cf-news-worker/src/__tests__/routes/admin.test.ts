@@ -27,6 +27,18 @@ describe('Admin API', () => {
     expect(typeof body.sources[0].today_count).toBe('number');
   });
 
+  it('GET /api/admin/sources - returns overall stats (today_count + last_count)', async () => {
+    await db.seed('news_sources', [
+      { id: 10, name: 'OverallSrc1', feed_url: 'https://overall1/rss', category: 'news', language: 'en', sort_order: 1, last_fetched_at: '2024-01-01 00:00:00', last_fetched_count: 10 },
+      { id: 11, name: 'OverallSrc2', feed_url: 'https://overall2/rss', category: 'tech', language: 'zh', sort_order: 2, last_fetched_at: '2024-01-01 00:00:00', last_fetched_count: 20 },
+    ]);
+    const { status, body } = await request(app, db, '/api/admin/sources');
+    expect(status).toBe(200);
+    expect(typeof body.overall_today_count).toBe('number');
+    expect(typeof body.overall_today_last_count).toBe('number');
+    expect(body.overall_today_last_count).toBe(35); // 5 (Src1) + 10 + 20
+  });
+
   it('POST /api/admin/sources - creates a source', async () => {
     const { status, body } = await request(app, db, '/api/admin/sources', {
       method: 'POST',

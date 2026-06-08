@@ -193,7 +193,6 @@ async function saveNewsItems(
             const category = categories[i] || source.category;
             const publishedAt = item.pubDate ? new Date(item.pubDate).toISOString() : null;
 
-            // Use raw SQL for INSERT ... ON CONFLICT with last_row_id
             const result = await db.run(sql`
                 INSERT INTO news_items 
                 (source_id, title, url, description, content, image_url, category, published_at, created_at)
