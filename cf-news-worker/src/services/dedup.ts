@@ -85,7 +85,7 @@ export async function storeDedupHash(env: Bindings, newsId: number, title: strin
 
     try {
         await db.update(newsItems)
-            .set({ dedupHash: hash })
+            .set({ dedup_hash: hash })
             .where(eq(newsItems.id, newsId));
     } catch (e) {
         console.error('Failed to store dedup hash:', e);

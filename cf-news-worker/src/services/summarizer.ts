@@ -240,7 +240,7 @@ export async function generatePerspectives(env: Bindings, newsId: number): Promi
         .get();
 
     if (cached) {
-        const ids = cached.related_ids.split(',').map(Number);
+        const ids = cached.relatedIds.split(',').map(Number);
         const rows = await db.all<{ id: number; source_name: string; title: string }>(sql`
             SELECT n.id, s.name as source_name, n.title
             FROM news_items n LEFT JOIN news_sources s ON n.source_id = s.id

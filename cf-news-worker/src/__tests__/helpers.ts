@@ -85,14 +85,18 @@ export async function request(
   db: MockD1,
   path: string,
   options?: { method?: string; body?: any; headers?: Record<string, string> }
-) {
+): Promise<{ status: number; body: any; headers: Headers }> {
   const req = new Request(`http://localhost${path}`, {
     method: options?.method || 'GET',
     headers: { 'Content-Type': 'application/json', ...options?.headers },
     body: options?.body ? JSON.stringify(options.body) : undefined,
   });
-  const execCtx = { waitUntil: () => {}, passThroughOnException: () => {} };
+  const execCtx = {
+    waitUntil: () => {},
+    passThroughOnException: () => {},
+    props: {},
+  } as ExecutionContext;
   const res = await app.fetch(req, { ...MOCK_ENV, DB: db }, execCtx);
-  const body = await res.clone().json().catch(() => res.text().catch(() => null));
+  const body: any = await res.clone().json().catch(() => res.text().catch(() => null));
   return { status: res.status, body, headers: res.headers };
 }

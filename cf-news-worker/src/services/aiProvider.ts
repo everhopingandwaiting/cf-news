@@ -134,12 +134,12 @@ export async function logAICall(env: Bindings, data: {
         await db.insert(aiCallLog).values({
             provider: data.provider,
             model: data.model || null,
-            newsId: data.news_id || null,
-            newsTitle: data.news_title || null,
-            promptLength: data.prompt_length,
-            responseLength: data.response_length,
-            responsePreview: data.response_preview?.substring(0, 200) || null,
-            durationMs: data.duration_ms,
+            news_id: data.news_id || null,
+            news_title: data.news_title || null,
+            prompt_length: data.prompt_length,
+            response_length: data.response_length,
+            response_preview: data.response_preview?.substring(0, 200) || null,
+            duration_ms: data.duration_ms,
             success: data.success ? 1 : 0,
             error: data.error || null,
         });

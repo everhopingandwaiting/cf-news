@@ -156,8 +156,8 @@ export async function getDailyDigest(env: Bindings, date?: string): Promise<Dige
             id: row.id,
             date: row.date,
             content: row.content,
-            news_ids: JSON.parse(row.news_ids || '[]'),
-            created_at: row.created_at ?? undefined,
+            news_ids: JSON.parse(row.newsIds || '[]'),
+            created_at: row.createdAt ?? undefined,
         };
     }
 

@@ -9,10 +9,9 @@ import { resolve } from 'path';
 // Module-level singleton — WASM loaded once
 let sqlJsPromise: Promise<SqlJsStatic> | null = null;
 function getSqlJs(): Promise<SqlJsStatic> {
-  if (!sqlJsPromise) {
-    sqlJsPromise = initSqlJs();
-  }
-  return sqlJsPromise;
+  const promise = sqlJsPromise ?? initSqlJs();
+  sqlJsPromise = promise;
+  return promise;
 }
 
 // DDL statements extracted from schema.sql (all CREATE/ALTER/INDEX statements, no INSERT)
@@ -98,7 +97,7 @@ class MockStatement {
     const results: T[] = [];
     do {
       const row = stmt.getAsObject() as Record<string, any>;
-      results.push(colNames.map(c => row[c]) as T);
+      results.push(colNames.map((c: string) => row[c]) as T);
     } while (stmt.step());
     stmt.free();
     return results;

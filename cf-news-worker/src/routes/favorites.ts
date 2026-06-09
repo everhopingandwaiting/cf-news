@@ -105,7 +105,7 @@ favorites.get('/export', async (c) => {
                 md += `- 来源: ${item.sourceName || '未知'}\n`;
                 md += `- 链接: ${item.url}\n`;
                 if (item.published_at) md += `- 发布: ${item.published_at}\n`;
-                md += `- 收藏: ${item.favoritedAt}\n`;
+                md += `- 收藏: ${item.favorited_at}\n`;
                 if (item.aiSummary) md += `\n> ${item.aiSummary}\n`;
                 md += `\n`;
             }
