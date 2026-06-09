@@ -79,6 +79,22 @@ export default function Home() {
 
   useEffect(() => { try { localStorage.setItem('cb_panel_open', showClipboard ? '1' : '0'); } catch {} }, [showClipboard]);
 
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (!hash.startsWith('#clip=')) return;
+    try {
+      const raw = hash.substring('#clip='.length).replace(/-/g, '+').replace(/_/g, '/');
+      const padded = raw + '='.repeat((4 - raw.length % 4) % 4);
+      const content = decodeURIComponent(escape(atob(padded)));
+      if (content && token) {
+        clipboard.sendText(content);
+        setShowClipboard(true);
+        showToast('已接收临时投递文本');
+        window.history.replaceState({}, '', window.location.pathname + window.location.search);
+      }
+    } catch {}
+  }, [token, clipboard]);
+
   // Load daily digest
   useEffect(() => {
     getDailyDigest().then(data => {
@@ -317,6 +333,8 @@ export default function Home() {
         onClearImages={clipboard.clearImages}
         incomingOffers={clipboard.incomingOffers}
         fileTransfers={clipboard.fileTransfers}
+        devices={clipboard.devices}
+        currentDeviceId={clipboard.currentDeviceId}
         onSendFile={clipboard.sendFile}
         onAcceptFile={clipboard.acceptFileOffer}
         onRejectFile={clipboard.rejectFileOffer}

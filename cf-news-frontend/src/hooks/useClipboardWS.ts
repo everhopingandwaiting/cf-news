@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import type { ClipboardTransport } from '../utils/clipboard';
 
 const MAX_CACHED_IMAGES = 10;
 const CHUNK_SIZE = 1024 * 1024; // 1MB per WS chunk
+export const HTTP_FILE_LIMIT_BYTES = 100 * 1024 * 1024;
 
 export function jwtUserId(token: string): string {
     try {
@@ -41,18 +43,23 @@ const HEARTBEAT_MS = 30000;
 const HEARTBEAT_TIMEOUT_MS = 90000;
 const HEARTBEAT_CHECK_MS = 10000;
 const OFFER_TIMEOUT_MS = 60000;
+const ACCEPT_TIMEOUT_MS = 60000;
 
 interface ClipboardMsg {
     type: 'text' | 'image' | 'sync_clipboard' | 'heartbeat' | 'heartbeat_ack'
-        | 'file_offer' | 'file_accept' | 'file_reject' | 'file_complete' | 'file_cancel';
+        | 'file_offer' | 'file_accept' | 'file_reject' | 'file_complete' | 'file_cancel'
+        | 'presence' | 'presence_update';
     content?: string;
     data?: string;
     mime?: string;
     sender?: string;
+    deviceId?: string;
+    transport?: ClipboardTransport;
     transferId?: string;
     fileName?: string;
     fileSize?: number;
     totalChunks?: number;
+    devices?: ClipboardDevice[];
 }
 
 interface IncomingFileOffer {
@@ -61,6 +68,9 @@ interface IncomingFileOffer {
     fileSize: number;
     mime: string;
     totalChunks: number;
+    transport: ClipboardTransport;
+    sender?: string;
+    deviceId?: string;
     receivedAt: number;
 }
 
@@ -77,6 +87,14 @@ interface FileTransfer {
     progress: number;
     startedAt: number;
     completedAt?: number;
+    transport: ClipboardTransport;
+    error?: string;
+}
+
+export interface ClipboardDevice {
+    deviceId: string;
+    deviceName: string;
+    connectedAt: number;
 }
 
 function loadLS<T>(key: string, fallback: T): T {
@@ -151,6 +169,7 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
     const [pendingCount, setPendingCount] = useState(0);
     const [incomingOffers, setIncomingOffers] = useState<IncomingFileOffer[]>([]);
     const [fileTransfers, setFileTransfers] = useState<FileTransfer[]>([]);
+    const [devices, setDevices] = useState<ClipboardDevice[]>([]);
     const pendingResolve = useRef<Map<string, (success: boolean) => void>>(new Map());
 
     const wsRef = useRef<WebSocket | null>(null);
@@ -166,7 +185,11 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
     const deviceNameRef = useRef(getDeviceName());
     const deviceIdRef = useRef(getDeviceId());
     const disposedRef = useRef(false);
+    const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
+    const cancelledTransfersRef = useRef<Set<string>>(new Set());
     const [deviceName] = useState(deviceNameRef.current);
+    const tokenRef = useRef(token);
+    tokenRef.current = token;
 
     const clearHeartbeat = useCallback(() => {
         if (heartbeatRef.current) { clearInterval(heartbeatRef.current); heartbeatRef.current = null; }
@@ -181,6 +204,9 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
         if (debounceRef.current) { clearTimeout(debounceRef.current); debounceRef.current = null; }
     }, []);
     const enqueueMsg = useCallback((msg: ClipboardMsg) => {
+        if (msg.type === 'text' || msg.type === 'sync_clipboard') {
+            queueRef.current = queueRef.current.filter(existing => existing.type !== msg.type);
+        }
         queueRef.current.push(msg);
         setPendingCount(queueRef.current.length);
     }, []);
@@ -221,7 +247,7 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
         clearReconnect();
         clearHeartbeat();
         setConnectionState('connecting');
-        const wsUrl = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/clipboard/ws?token=${encodeURIComponent(token)}&device_id=${encodeURIComponent(deviceIdRef.current)}`;
+        const wsUrl = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/clipboard/ws?token=${encodeURIComponent(token)}&device_id=${encodeURIComponent(deviceIdRef.current)}&device_name=${encodeURIComponent(deviceNameRef.current)}`;
         const ws = new WebSocket(wsUrl);
         ws.binaryType = 'arraybuffer';
 
@@ -230,6 +256,7 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
             backoffRef.current = 0;
             lastPongRef.current = Date.now();
             flushQueue();
+            ws.send('{"type":"presence"}');
             heartbeatRef.current = setInterval(() => {
                 if (ws.readyState === WebSocket.OPEN) ws.send('{"type":"heartbeat"}');
             }, HEARTBEAT_MS);
@@ -288,7 +315,8 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
                     setIncomingOffers(prev => [...prev, {
                         transferId: msg.transferId!, fileName: msg.fileName || 'unknown',
                         fileSize: msg.fileSize || 0, mime: msg.mime || 'application/octet-stream',
-                        totalChunks: msg.totalChunks || 0, receivedAt: Date.now(),
+                        totalChunks: msg.totalChunks || 0, transport: msg.transport || 'wss',
+                        sender: msg.sender, deviceId: msg.deviceId, receivedAt: Date.now(),
                     }]);
                     setFileTransfers(prev => {
                         if (prev.find(t => t.transferId === msg.transferId)) return prev;
@@ -297,6 +325,7 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
                             fileSize: msg.fileSize || 0, mime: msg.mime || 'application/octet-stream',
                             totalChunks: msg.totalChunks || 0, receivedChunks: 0, chunks: [],
                             direction: 'receive', status: 'offering', progress: 0, startedAt: Date.now(),
+                            transport: msg.transport || 'wss',
                         }];
                     });
                     if (!panelOpenRef.current) setHasNewData(true);
@@ -317,6 +346,8 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
                         t.transferId === msg.transferId ? { ...t, status: 'cancelled' as const } : t
                     ));
                     setIncomingOffers(prev => prev.filter(o => o.transferId !== msg.transferId));
+                } else if (msg.type === 'presence_update' && Array.isArray(msg.devices)) {
+                    setDevices(msg.devices);
                 }
             } catch {}
         };
@@ -420,24 +451,11 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
     }, [ukeys.images]);
 
     // WS chunked file send
-    const sendFile = useCallback(async (file: File) => {
+    const sendFileWss = useCallback(async (file: File, transferId: string) => {
         const ws = wsRef.current;
         if (!ws || ws.readyState !== WebSocket.OPEN) return;
-        const transferId = crypto.randomUUID();
         const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-
-        setFileTransfers(prev => [...prev, {
-            transferId, fileName: file.name, fileSize: file.size,
-            mime: file.type || 'application/octet-stream', totalChunks,
-            receivedChunks: 0, chunks: [],
-            direction: 'send', status: 'offering', progress: 0, startedAt: Date.now(),
-        }]);
-        safeSend({ type: 'file_offer', transferId, fileName: file.name, fileSize: file.size, mime: file.type, totalChunks });
-
-        const accepted = await new Promise<boolean>(resolve => {
-            pendingResolve.current.set(transferId, resolve);
-        });
-        if (!accepted) return;
+        cancelledTransfersRef.current.delete(transferId);
 
         setFileTransfers(prev => prev.map(t =>
             t.transferId === transferId ? { ...t, status: 'transferring' as const } : t
@@ -445,8 +463,10 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
 
         try {
             for (let i = 0; i < totalChunks; i++) {
+                if (cancelledTransfersRef.current.has(transferId)) throw new Error('cancelled');
                 // Backpressure: wait until buffer drains below 4MB
                 while (wsRef.current && wsRef.current.bufferedAmount > CHUNK_SIZE * 4) {
+                    if (cancelledTransfersRef.current.has(transferId)) throw new Error('cancelled');
                     await new Promise(r => setTimeout(r, 50));
                 }
                 const start = i * CHUNK_SIZE;
@@ -466,27 +486,164 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
             }
             // Wait for buffer to fully drain before marking complete
             while (wsRef.current && wsRef.current.bufferedAmount > 0) {
+                if (cancelledTransfersRef.current.has(transferId)) throw new Error('cancelled');
                 await new Promise(r => setTimeout(r, 100));
             }
+            cancelledTransfersRef.current.delete(transferId);
             safeSend({ type: 'file_complete', transferId });
             setFileTransfers(prev => prev.map(t =>
                 t.transferId === transferId ? { ...t, status: 'complete' as const, progress: 100, completedAt: Date.now() } : t
             ));
-        } catch {
+        } catch (e) {
             safeSend({ type: 'file_cancel', transferId });
             setFileTransfers(prev => prev.map(t =>
-                t.transferId === transferId ? { ...t, status: 'cancelled' as const } : t
+                t.transferId === transferId ? { ...t, status: 'cancelled' as const, error: e instanceof Error && e.message === 'cancelled' ? '已取消' : 'WSS 传输失败' } : t
             ));
         }
     }, [safeSend]);
 
+    const sendFileHttp = useCallback(async (file: File, transferId: string) => {
+        const controller = new AbortController();
+        abortControllersRef.current.set(transferId, controller);
+        try {
+            setFileTransfers(prev => prev.map(t =>
+                t.transferId === transferId ? { ...t, status: 'transferring' as const, progress: 5 } : t
+            ));
+            const res = await fetch(`/api/piping/upload/${encodeURIComponent(transferId)}`, {
+                method: 'PUT',
+                headers: {
+                    Authorization: `Bearer ${tokenRef.current}`,
+                    'Content-Type': file.type || 'application/octet-stream',
+                    'X-File-Name': encodeURIComponent(file.name),
+                },
+                body: file,
+                signal: controller.signal,
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            safeSend({ type: 'file_complete', transferId });
+            setFileTransfers(prev => prev.map(t =>
+                t.transferId === transferId ? { ...t, status: 'complete' as const, progress: 100, completedAt: Date.now() } : t
+            ));
+        } catch (e) {
+            safeSend({ type: 'file_cancel', transferId });
+            setFileTransfers(prev => prev.map(t =>
+                t.transferId === transferId ? { ...t, status: 'cancelled' as const, error: controller.signal.aborted ? '已取消' : e instanceof Error ? e.message : 'HTTP 传输失败' } : t
+            ));
+        } finally {
+            abortControllersRef.current.delete(transferId);
+        }
+    }, [safeSend]);
+
+    const sendFile = useCallback(async (file: File, transport: ClipboardTransport = 'http') => {
+        const ws = wsRef.current;
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        if (transport === 'http' && file.size > HTTP_FILE_LIMIT_BYTES) {
+            setFileTransfers(prev => [...prev, {
+                transferId: crypto.randomUUID(),
+                fileName: file.name,
+                fileSize: file.size,
+                mime: file.type || 'application/octet-stream',
+                totalChunks: 0,
+                receivedChunks: 0,
+                chunks: [],
+                direction: 'send',
+                status: 'cancelled',
+                progress: 0,
+                startedAt: Date.now(),
+                transport,
+                error: 'HTTP 模式默认限制 100MB，请切换 WSS 分片',
+            }]);
+            return;
+        }
+        const transferId = crypto.randomUUID();
+        const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+
+        setFileTransfers(prev => [...prev, {
+            transferId, fileName: file.name, fileSize: file.size,
+            mime: file.type || 'application/octet-stream', totalChunks,
+            receivedChunks: 0, chunks: [],
+            direction: 'send', status: 'offering', progress: 0, startedAt: Date.now(),
+            transport,
+        }]);
+        safeSend({
+            type: 'file_offer', transferId, fileName: file.name, fileSize: file.size,
+            mime: file.type, totalChunks, transport, sender: deviceNameRef.current,
+            deviceId: deviceIdRef.current,
+        });
+
+        const accepted = await new Promise<boolean>(resolve => {
+            const timer = setTimeout(() => {
+                pendingResolve.current.delete(transferId);
+                resolve(false);
+            }, ACCEPT_TIMEOUT_MS);
+            pendingResolve.current.set(transferId, success => {
+                clearTimeout(timer);
+                resolve(success);
+            });
+        });
+        if (!accepted) {
+            setFileTransfers(prev => prev.map(t =>
+                t.transferId === transferId ? { ...t, status: 'rejected' as const, error: '对方未接受或已拒绝' } : t
+            ));
+            return;
+        }
+        if (transport === 'http') await sendFileHttp(file, transferId);
+        else await sendFileWss(file, transferId);
+    }, [safeSend, sendFileHttp, sendFileWss]);
+
     const acceptFileOffer = useCallback((transferId: string) => {
+        const offer = incomingOffers.find(o => o.transferId === transferId);
         setIncomingOffers(prev => prev.filter(o => o.transferId !== transferId));
         setFileTransfers(prev => prev.map(t =>
             t.transferId === transferId ? { ...t, direction: 'receive' as const, status: 'transferring' as const } : t
         ));
         safeSend({ type: 'file_accept', transferId });
-    }, [safeSend]);
+        if (offer?.transport === 'http') {
+            void (async () => {
+                const controller = new AbortController();
+                abortControllersRef.current.set(transferId, controller);
+                try {
+                    const res = await fetch(`/api/piping/download/${encodeURIComponent(transferId)}`, {
+                        headers: { Authorization: `Bearer ${tokenRef.current}` },
+                        signal: controller.signal,
+                    });
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    const reader = res.body?.getReader();
+                    if (!reader) throw new Error('浏览器不支持流式下载');
+                    const chunks: Uint8Array[] = [];
+                    let received = 0;
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        if (value) {
+                            if (cancelledTransfersRef.current.has(transferId)) throw new Error('cancelled');
+                            chunks.push(value);
+                            received += value.byteLength;
+                            const progress = offer.fileSize > 0 ? Math.min(99, Math.round((received / offer.fileSize) * 100)) : 50;
+                            setFileTransfers(prev => prev.map(t =>
+                                t.transferId === transferId ? { ...t, progress } : t
+                            ));
+                        }
+                    }
+                    triggerDownloadRef.current?.(transferId, offer.fileName, chunks.map(c => {
+                        const copy = new ArrayBuffer(c.byteLength);
+                        new Uint8Array(copy).set(c);
+                        return copy;
+                    }), offer.mime);
+                } catch (e) {
+                    safeSend({ type: 'file_cancel', transferId });
+                    setFileTransfers(prev => prev.map(t =>
+                        t.transferId === transferId
+                            ? { ...t, status: 'cancelled' as const, error: controller.signal.aborted || (e instanceof Error && e.message === 'cancelled') ? '已取消' : e instanceof Error ? e.message : 'HTTP 接收失败' }
+                            : t
+                    ));
+                } finally {
+                    abortControllersRef.current.delete(transferId);
+                    cancelledTransfersRef.current.delete(transferId);
+                }
+            })();
+        }
+    }, [incomingOffers, safeSend]);
 
     const rejectFileOffer = useCallback((transferId: string) => {
         setIncomingOffers(prev => prev.filter(o => o.transferId !== transferId));
@@ -494,6 +651,9 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
     }, [safeSend]);
 
     const cancelFileTransfer = useCallback((transferId: string) => {
+        cancelledTransfersRef.current.add(transferId);
+        abortControllersRef.current.get(transferId)?.abort();
+        abortControllersRef.current.delete(transferId);
         setFileTransfers(prev => prev.map(t =>
             t.transferId === transferId ? { ...t, status: 'cancelled' as const } : t
         ));
@@ -507,7 +667,7 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
 
     return {
         text, images, connected, connecting, hasNewData, pendingCount, deviceName,
-        incomingOffers, fileTransfers, clearNewDataFlag,
+        incomingOffers, fileTransfers, devices, currentDeviceId: deviceIdRef.current, clearNewDataFlag,
         sendText, sendImage, syncClipboard, clearImages,
         sendFile, acceptFileOffer, rejectFileOffer, cancelFileTransfer,
     };

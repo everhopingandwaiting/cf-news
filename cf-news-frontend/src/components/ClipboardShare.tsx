@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import type { ClipboardTransport } from '../utils/clipboard';
 
 interface IncomingFileOffer {
     transferId: string;
@@ -6,6 +7,9 @@ interface IncomingFileOffer {
     fileSize: number;
     mime: string;
     totalChunks: number;
+    transport: ClipboardTransport;
+    sender?: string;
+    deviceId?: string;
 }
 
 interface FileTransfer {
@@ -20,6 +24,14 @@ interface FileTransfer {
     progress: number;
     startedAt: number;
     completedAt?: number;
+    transport: ClipboardTransport;
+    error?: string;
+}
+
+interface ClipboardDevice {
+    deviceId: string;
+    deviceName: string;
+    connectedAt: number;
 }
 
 interface Props {
@@ -38,13 +50,20 @@ interface Props {
     onClearImages: () => void;
     incomingOffers: IncomingFileOffer[];
     fileTransfers: FileTransfer[];
-    onSendFile: (file: File) => void;
+    devices: ClipboardDevice[];
+    currentDeviceId: string;
+    onSendFile: (file: File, transport: ClipboardTransport) => void;
     onAcceptFile: (transferId: string) => void;
     onRejectFile: (transferId: string) => void;
     onCancelFile: (transferId: string) => void;
 }
 
-import { formatFileSize, loadHistory, appendHistory } from '../utils/clipboard';
+import {
+    formatFileSize, loadHistory, appendHistory, clearHistory,
+    loadRichHistory, appendRichHistory, loadTrustedDevices, saveTrustedDevices,
+    loadTransport, saveTransport, loadPrivateMode, savePrivateMode,
+    loadAutoAccept, saveAutoAccept,
+} from '../utils/clipboard';
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 
 function compressImage(blob: Blob): Promise<Blob> {
@@ -80,23 +99,32 @@ function compressImage(blob: Blob): Promise<Blob> {
 export default function ClipboardShare({
     visible, onClose, userId, text, images, connected, connecting, pendingCount, deviceName,
     onSendText, onSendImage, onSyncClipboard, onClearImages,
-    incomingOffers, fileTransfers, onSendFile, onAcceptFile, onRejectFile, onCancelFile,
+    incomingOffers, fileTransfers, devices, currentDeviceId,
+    onSendFile, onAcceptFile, onRejectFile, onCancelFile,
 }: Props) {
     const [status, setStatus] = useState('');
-const [previewImg, setPreviewImg] = useState<string | null>(null);
-const [showHistory, setShowHistory] = useState(false);
-const [isDragOver, setIsDragOver] = useState(false);
-const [expandedTimeId, setExpandedTimeId] = useState<string | null>(null);
+    const [previewImg, setPreviewImg] = useState<string | null>(null);
+    const [showHistory, setShowHistory] = useState(false);
+    const [showDevices, setShowDevices] = useState(false);
+    const [isDragOver, setIsDragOver] = useState(false);
+    const [expandedTimeId, setExpandedTimeId] = useState<string | null>(null);
+    const [transport, setTransport] = useState<ClipboardTransport>(() => loadTransport(userId));
+    const [trustedDevices, setTrustedDevices] = useState<string[]>(() => loadTrustedDevices(userId));
+    const [privateMode, setPrivateMode] = useState(() => loadPrivateMode(userId));
+    const [autoAccept, setAutoAccept] = useState(() => loadAutoAccept(userId));
     const fileInputRef = useRef<HTMLInputElement>(null);
     const fileTransferInputRef = useRef<HTMLInputElement>(null);
     const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [autoAcceptRemaining, setAutoAcceptRemaining] = useState<number>(0);
 
     useEffect(() => {
-        if (incomingOffers.length > 0) {
+        const autoOffers = autoAccept
+            ? incomingOffers
+            : incomingOffers.filter(o => o.deviceId && trustedDevices.includes(o.deviceId));
+        if (autoOffers.length > 0) {
             setAutoAcceptRemaining(5);
             timerRef.current = setTimeout(() => {
-                for (const offer of incomingOffers) {
+                for (const offer of autoOffers) {
                     onAcceptFile(offer.transferId);
                 }
                 setAutoAcceptRemaining(0);
@@ -115,7 +143,12 @@ const [expandedTimeId, setExpandedTimeId] = useState<string | null>(null);
             if (timerRef.current) clearTimeout(timerRef.current);
             clearInterval(interval);
         };
-    }, [incomingOffers.length]);
+    }, [autoAccept, incomingOffers, onAcceptFile, trustedDevices]);
+
+    useEffect(() => { saveTransport(userId, transport); }, [userId, transport]);
+    useEffect(() => { saveTrustedDevices(userId, trustedDevices); }, [userId, trustedDevices]);
+    useEffect(() => { savePrivateMode(userId, privateMode); }, [userId, privateMode]);
+    useEffect(() => { saveAutoAccept(userId, autoAccept); }, [userId, autoAccept]);
 
     function handleManualAccept(transferId: string) {
         if (timerRef.current) clearTimeout(timerRef.current);
@@ -147,6 +180,7 @@ const [expandedTimeId, setExpandedTimeId] = useState<string | null>(null);
             reader.onload = () => {
                 const b64 = (reader.result as string).split(',')[1];
                 onSendImage(b64, compressed.type);
+                if (!privateMode) appendRichHistory(userId, { type: 'image', data: b64, mime: compressed.type });
             };
             reader.readAsDataURL(compressed);
         } else {
@@ -154,6 +188,7 @@ const [expandedTimeId, setExpandedTimeId] = useState<string | null>(null);
             reader.onload = () => {
                 const b64 = (reader.result as string).split(',')[1];
                 onSendImage(b64, blob.type);
+                if (!privateMode) appendRichHistory(userId, { type: 'image', data: b64, mime: blob.type });
             };
             reader.readAsDataURL(blob);
         }
@@ -201,7 +236,10 @@ const [expandedTimeId, setExpandedTimeId] = useState<string | null>(null);
     function handleSync() {
         if (text.trim()) {
             onSyncClipboard(text);
-            appendHistory(userId, text);
+            if (!privateMode) {
+                appendHistory(userId, text);
+                appendRichHistory(userId, { type: 'text', content: text });
+            }
             setStatus('✅ 已推送到其他设备剪贴板');
             setTimeout(() => setStatus(''), 2000);
         }
@@ -225,17 +263,36 @@ const [expandedTimeId, setExpandedTimeId] = useState<string | null>(null);
         setIsDragOver(false);
         const files = e.dataTransfer.files;
         if (files.length > 0) {
-            onSendFile(files[0]);
+            onSendFile(files[0], transport);
+            if (!privateMode) appendRichHistory(userId, { type: 'file', fileName: files[0].name, fileSize: files[0].size, mime: files[0].type });
         }
     }
 
     function handleFileTransferSelect(e: React.ChangeEvent<HTMLInputElement>) {
         const file = e.target.files?.[0];
-        if (file) onSendFile(file);
+        if (file) {
+            onSendFile(file, transport);
+            if (!privateMode) appendRichHistory(userId, { type: 'file', fileName: file.name, fileSize: file.size, mime: file.type });
+        }
         if (fileTransferInputRef.current) fileTransferInputRef.current.value = '';
     }
 
+    function handleCreateTemporaryLink() {
+        if (!text.trim()) return;
+        const encoded = btoa(unescape(encodeURIComponent(text))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        const url = `${window.location.origin}${window.location.pathname}#clip=${encoded}`;
+        navigator.clipboard.writeText(url).then(() => {
+            setStatus('✅ 临时投递链接已复制');
+            setTimeout(() => setStatus(''), 2000);
+        }).catch(() => setStatus('复制链接失败'));
+    }
+
+    function toggleTrustedDevice(deviceId: string) {
+        setTrustedDevices(prev => prev.includes(deviceId) ? prev.filter(id => id !== deviceId) : [...prev, deviceId]);
+    }
+
     const history = loadHistory(userId);
+    const richHistory = loadRichHistory(userId);
 
     return (
         <>
@@ -306,25 +363,38 @@ const [expandedTimeId, setExpandedTimeId] = useState<string | null>(null);
                                     📄 复制文本
                                 </button>
                             )}
-                            {history.length > 0 && (
+                            {text && (
+                                <button className="text-[11px] text-gray-400 hover:text-indigo-500 transition" onClick={handleCreateTemporaryLink}>
+                                    🔗 临时投递
+                                </button>
+                            )}
+                            {(history.length > 0 || richHistory.length > 0) && (
                                 <button
                                     className="text-[11px] text-gray-400 hover:text-gray-600 transition"
                                     onClick={() => setShowHistory(!showHistory)}
                                 >
-                                    📜 历史 ({history.length})
+                                    📜 历史 ({richHistory.length || history.length})
+                                </button>
+                            )}
+                            {(history.length > 0 || richHistory.length > 0) && (
+                                <button className="text-[11px] text-gray-400 hover:text-red-500 transition" onClick={() => { clearHistory(userId); setShowHistory(false); setStatus('历史已清除'); setTimeout(() => setStatus(''), 1200); }}>
+                                    清除历史
                                 </button>
                             )}
                         </div>
                         {/* History dropdown */}
-                        {showHistory && history.length > 0 && (
+                        {showHistory && (history.length > 0 || richHistory.length > 0) && (
                             <div className="mt-2 border border-gray-200 rounded-lg bg-white max-h-40 overflow-y-auto">
-                                {history.map((h, i) => (
+                                {(richHistory.length > 0 ? richHistory : history.map((h, i) => ({ id: String(i), type: 'text' as const, content: h, createdAt: Date.now() }))).map((h) => (
                                     <button
-                                        key={i}
+                                        key={h.id}
                                         className="w-full text-left px-3 py-2 text-[12px] text-gray-700 hover:bg-gray-50 border-b border-gray-100 last:border-b-0 truncate"
-                                        onClick={() => { onSendText(h); appendHistory(userId, h); setShowHistory(false); }}
+                                        onClick={() => {
+                                            if (h.type === 'text' && h.content) onSendText(h.content);
+                                            setShowHistory(false);
+                                        }}
                                     >
-                                        {h}
+                                        {h.type === 'text' ? h.content : h.type === 'file' ? `文件：${h.fileName}` : '图片记录'}
                                     </button>
                                 ))}
                             </div>
@@ -406,6 +476,22 @@ const [expandedTimeId, setExpandedTimeId] = useState<string | null>(null);
                                 </button>
                             </div>
                         </div>
+                        <div className="mb-2 grid grid-cols-2 gap-2">
+                            <button
+                                className={`px-3 py-1.5 rounded-lg border text-[12px] ${transport === 'http' ? 'bg-indigo-500 text-white border-indigo-500' : 'bg-white text-gray-600 border-gray-200'}`}
+                                onClick={() => setTransport('http')}
+                                title="适合 100MB 内文件，走 HTTP 流式通道"
+                            >
+                                HTTP 流 ≤100MB
+                            </button>
+                            <button
+                                className={`px-3 py-1.5 rounded-lg border text-[12px] ${transport === 'wss' ? 'bg-indigo-500 text-white border-indigo-500' : 'bg-white text-gray-600 border-gray-200'}`}
+                                onClick={() => setTransport('wss')}
+                                title="适合大文件，走 WebSocket 分片"
+                            >
+                                WSS 大文件
+                            </button>
+                        </div>
                         <input ref={fileTransferInputRef} type="file" accept="*/*" className="hidden" onChange={handleFileTransferSelect} />
                         {fileTransfers.length > 0 ? (
                             <div className="flex flex-col gap-2 max-h-[180px] overflow-y-auto">
@@ -415,6 +501,7 @@ const [expandedTimeId, setExpandedTimeId] = useState<string | null>(null);
                                             <div className="flex items-center gap-1.5">
                                                 <span className="text-sm">{transfer.direction === 'send' ? '↑' : '↓'}</span>
                                                 <span className="text-[12px] text-gray-700 truncate max-w-[150px]">{transfer.fileName}</span>
+                                                <span className="text-[9px] text-gray-400 uppercase">{transfer.transport}</span>
                                             </div>
                                             <div className="flex items-center gap-2">
                                                 <span className="text-[10px] text-gray-400">{formatFileSize(transfer.fileSize)}</span>
@@ -424,6 +511,14 @@ const [expandedTimeId, setExpandedTimeId] = useState<string | null>(null);
                                                         onClick={() => onCancelFile(transfer.transferId)}
                                                     >
                                                         ✕
+                                                    </button>
+                                                )}
+                                                {(transfer.status === 'cancelled' || transfer.status === 'rejected') && (
+                                                    <button
+                                                        className="text-[10px] text-indigo-500 hover:text-indigo-600 transition"
+                                                        onClick={() => fileTransferInputRef.current?.click()}
+                                                    >
+                                                        重试
                                                     </button>
                                                 )}
                                             </div>
@@ -440,7 +535,7 @@ const [expandedTimeId, setExpandedTimeId] = useState<string | null>(null);
                                                 {transfer.status === 'accepted' && '已接受，准备传输...'}
                                                 {transfer.status === 'transferring' && `${transfer.progress}%`}
                                                 {transfer.status === 'complete' && '✓ 完成'}
-                                                {transfer.status === 'cancelled' && '已取消'}
+                                                {transfer.status === 'cancelled' && (transfer.error || '已取消')}
                                                 {transfer.status === 'rejected' && '已拒绝'}
                                             </span>
                                             <span className="text-[9px] cursor-pointer hover:text-indigo-500"
@@ -457,7 +552,43 @@ const [expandedTimeId, setExpandedTimeId] = useState<string | null>(null);
                             </div>
                         ) : (
                             <div className="text-[12px] text-gray-400 py-2">
-                                支持拖拽或选择文件发送，不限大小，取决于网络稳定性
+                                HTTP 流适合 100MB 内文件；WSS 分片保留大文件传输能力，网络中断需重试
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Device and privacy settings */}
+                    <div className="bg-gray-50/50 border border-gray-200 rounded-xl p-3.5 mb-3">
+                        <div className="flex items-center justify-between mb-2">
+                            <h3 className="text-[13px] font-medium text-gray-700">设备与安全</h3>
+                            <button className="text-[11px] text-gray-400 hover:text-indigo-500" onClick={() => setShowDevices(!showDevices)}>
+                                {devices.length} 在线
+                            </button>
+                        </div>
+                        <label className="flex items-center justify-between text-[12px] text-gray-600">
+                            <span>私密模式（不写入本机历史）</span>
+                            <input type="checkbox" checked={privateMode} onChange={e => setPrivateMode(e.target.checked)} />
+                        </label>
+                        <label className="mt-2 flex items-center justify-between text-[12px] text-gray-600">
+                            <span>自动接受文件请求</span>
+                            <input type="checkbox" checked={autoAccept} onChange={e => setAutoAccept(e.target.checked)} />
+                        </label>
+                        {showDevices && (
+                            <div className="mt-2 border border-gray-200 rounded-lg bg-white divide-y divide-gray-100">
+                                {devices.map(d => (
+                                    <div key={d.deviceId} className="px-3 py-2 flex items-center justify-between gap-2">
+                                        <div className="min-w-0">
+                                            <div className="text-[12px] text-gray-700 truncate">{d.deviceName}{d.deviceId === currentDeviceId ? '（本机）' : ''}</div>
+                                            <div className="text-[10px] text-gray-400">{new Date(d.connectedAt).toLocaleString('zh-CN')}</div>
+                                        </div>
+                                        {d.deviceId !== currentDeviceId && (
+                                            <button className={`text-[11px] ${trustedDevices.includes(d.deviceId) ? 'text-emerald-600' : 'text-gray-400 hover:text-indigo-500'}`} onClick={() => toggleTrustedDevice(d.deviceId)}>
+                                                {trustedDevices.includes(d.deviceId) ? '可信' : '设为可信'}
+                                            </button>
+                                        )}
+                                    </div>
+                                ))}
+                                {devices.length === 0 && <div className="px-3 py-2 text-[12px] text-gray-400">暂无在线设备</div>}
                             </div>
                         )}
                     </div>
@@ -466,7 +597,7 @@ const [expandedTimeId, setExpandedTimeId] = useState<string | null>(null);
                     {!connected && !connecting && <span className="text-[12px] text-red-400">⚠ 未连接</span>}
                     {connecting && <span className="text-[12px] text-amber-400">🔄 重连中...</span>}
                     <div className="mt-2 px-3 py-2 bg-gray-50 rounded-lg text-[10px] text-gray-400 leading-relaxed">
-                        🔒 数据仅在你的设备间传输，服务端不永久存储。通过 WSS 加密传输，仅同一账号可见。离线设备上线后会自动接收推送。
+                        🔒 数据仅在你的设备间传输，服务端不永久存储。HTTP 文件传输需同账号 token，WSS 用于实时控制与兼容传输。
                     </div>
                 </div>
             </div>
@@ -490,12 +621,13 @@ const [expandedTimeId, setExpandedTimeId] = useState<string | null>(null);
                                     <span className="text-[13px] text-gray-700 truncate max-w-[220px]">{offer.fileName}</span>
                                 </div>
                                 <div className="text-[11px] text-gray-400 mt-1">{formatFileSize(offer.fileSize)}</div>
+                                <div className="text-[11px] text-gray-400 mt-1">来自 {offer.sender || '其他设备'} · {offer.transport.toUpperCase()}</div>
                                 <div className="flex gap-2 mt-2.5">
                                     <button 
                                         className="px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-[12px] font-medium hover:bg-emerald-600 transition active:scale-[0.98] flex items-center gap-1"
                                         onClick={() => handleManualAccept(offer.transferId)}
                                     >
-                                        ✓ 接受{autoAcceptRemaining > 0 && <span className="text-[11px] opacity-80">({autoAcceptRemaining}s)</span>}
+                                        ✓ 接受{(autoAccept || (offer.deviceId && trustedDevices.includes(offer.deviceId))) && autoAcceptRemaining > 0 && <span className="text-[11px] opacity-80">({autoAcceptRemaining}s)</span>}
                                     </button>
                                     <button 
                                         className="px-3 py-1.5 bg-gray-200 text-gray-600 rounded-lg text-[12px] font-medium hover:bg-gray-300 transition active:scale-[0.98]"

@@ -31,6 +31,12 @@ export { PipingRoom } from './durable-objects/piping';
 
 const app = new Hono<{ Bindings: Bindings }>();
 
+async function checkApiRateLimit(request: Request, env: Bindings): Promise<Response | null> {
+    const ip = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || 'unknown';
+    const { success } = await env.GLOBAL_RATE_LIMITER.limit({ key: ip });
+    return success ? null : new Response('Rate limit exceeded', { status: 429 });
+}
+
 // Global rate limiting middleware (100 req/min per IP)
 app.use('/api/*', async (c, next) => {
     const ip = c.req.header('CF-Connecting-IP') || c.req.header('X-Forwarded-For') || 'unknown';
@@ -130,6 +136,8 @@ export default {
 
         // WebSocket upgrade for clipboard sharing
         if (reqUrl.pathname === '/api/clipboard/ws') {
+            const limited = await checkApiRateLimit(request, env);
+            if (limited) return limited;
             const token = reqUrl.searchParams.get('token');
             if (!token) return new Response('Missing token', { status: 401 });
             const payload = await verifyJWT(token, env.JWT_SECRET);
@@ -150,7 +158,16 @@ export default {
         // HTTP piping for file transfer (PUT upload / GET download)
         const pipingMatch = reqUrl.pathname.match(/^\/api\/piping\/(upload|download)\/(.+)$/);
         if (pipingMatch) {
-            const stub = env.PIPING.get(env.PIPING.idFromName(pipingMatch[2]));
+            const limited = await checkApiRateLimit(request, env);
+            if (limited) return limited;
+            const authHeader = request.headers.get('Authorization');
+            const token = authHeader?.startsWith('Bearer ')
+                ? authHeader.substring(7)
+                : reqUrl.searchParams.get('token');
+            if (!token) return new Response('Missing token', { status: 401 });
+            const payload = await verifyJWT(token, env.JWT_SECRET);
+            if (!payload) return new Response('Invalid token', { status: 403 });
+            const stub = env.PIPING.get(env.PIPING.idFromName(`${payload.sub}:${pipingMatch[2]}`));
             const pipingUrl = new URL(request.url);
             return stub.fetch(new Request(pipingUrl.toString(), request));
         }
