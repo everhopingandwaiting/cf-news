@@ -191,12 +191,18 @@ CREATE TABLE IF NOT EXISTS user_preferences (
 CREATE TABLE IF NOT EXISTS ai_call_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     provider TEXT NOT NULL,
+    model TEXT,
     news_id INTEGER,
+    news_title TEXT,
     prompt_length INTEGER,
     response_length INTEGER,
+    response_preview TEXT,
+    duration_ms INTEGER,
     success INTEGER DEFAULT 1,
+    error TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+CREATE INDEX IF NOT EXISTS idx_ai_call_news ON ai_call_log(news_id);
 
 -- Provider 配置表（模型管理）
 CREATE TABLE IF NOT EXISTS providers (
@@ -214,9 +220,6 @@ CREATE TABLE IF NOT EXISTS app_config (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
-
--- 为已有表添加 source_type 列（幂等）
-ALTER TABLE news_sources ADD COLUMN source_type TEXT DEFAULT 'rss';
 
 -- 澎湃新闻（微信公众号版，通过第三方 RSS 桥）
 INSERT OR IGNORE INTO news_sources (name, url, feed_url, category, language, source_type, sort_order)
@@ -287,3 +290,5 @@ CREATE TABLE IF NOT EXISTS stop_words (
     word TEXT PRIMARY KEY,
     source TEXT NOT NULL DEFAULT 'unknown'
 );
+
+INSERT OR REPLACE INTO app_config (key, value) VALUES ('schema_version', '1');

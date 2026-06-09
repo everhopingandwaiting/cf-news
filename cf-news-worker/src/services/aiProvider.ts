@@ -88,26 +88,39 @@ export async function getFailed(env: Bindings): Promise<string[]> {
 }
 
 export async function markFailed(env: Bindings, model: string, _provider: string): Promise<void> {
-    const db = getDb(env);
-    const now = Math.floor(Date.now() / 1000);
-    const row = await db.select({ value: appConfig.value })
-        .from(appConfig)
-        .where(eq(appConfig.key, 'ai_failed_models'))
-        .get();
-    const models: Record<string, number> = {};
-    if (row) {
-        const data = JSON.parse(row.value);
-        if (data.models && typeof data.models === 'object') {
-            Object.assign(models, data.models);
+    try {
+        const db = getDb(env);
+        const now = Math.floor(Date.now() / 1000);
+        const row = await db.select({ value: appConfig.value })
+            .from(appConfig)
+            .where(eq(appConfig.key, 'ai_failed_models'))
+            .get();
+        const models: Record<string, number> = {};
+        if (row) {
+            try {
+                const data = JSON.parse(row.value);
+                if (data.models && typeof data.models === 'object') {
+                    Object.assign(models, data.models);
+                }
+            } catch {}
         }
-    }
-    const ttl = await getConfigInt(env, '', 900);
-    for (const [m, ts] of Object.entries(models)) {
-        if (now - ts >= ttl) delete models[m];
-    }
-    if (!models[model]) {
-        models[model] = now;
-        await db.run(sql`INSERT OR REPLACE INTO app_config (key, value) VALUES ('ai_failed_models', ${JSON.stringify({ models })})`);
+        const ttl = 900;
+        const cutoff = now - ttl;
+        let changed = false;
+        for (const [m, ts] of Object.entries(models)) {
+            if (now - ts >= ttl) { delete models[m]; changed = true; }
+        }
+        if (!models[model]) {
+            models[model] = now;
+            changed = true;
+        }
+        if (changed) {
+            const entries = Object.entries(models).slice(0, 50);
+            const trimmed = Object.fromEntries(entries);
+            await db.run(sql`INSERT OR REPLACE INTO app_config (key, value) VALUES ('ai_failed_models', ${JSON.stringify({ models: trimmed })})`);
+        }
+    } catch (e) {
+        console.error('markFailed error:', e);
     }
 }
 

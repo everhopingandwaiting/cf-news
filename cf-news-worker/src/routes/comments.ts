@@ -65,7 +65,7 @@ comments.delete('/:commentId', async (c) => {
 
         const db = getDb(c.env);
         await db.update(newsComments)
-            .set({ isDeleted: 1, deletedAt: sql`datetime('now', '+8 hours')` })
+            .set({ is_deleted: 1, deleted_at: sql`datetime('now', '+8 hours')` })
             .where(and(
                 eq(newsComments.id, commentId),
                 eq(newsComments.user_id, payload.sub),

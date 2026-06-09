@@ -33,6 +33,11 @@ describe('Favorites API', () => {
     expect(status).toBe(401);
   });
 
+  it('POST /api/user/favorites/:newsId - returns 401 without auth', async () => {
+    const { status } = await request(app, db, '/api/user/favorites/1', { method: 'POST' });
+    expect(status).toBe(401);
+  });
+
   it('POST /api/user/favorites/:newsId - adds a favorite', async () => {
     const { status, body } = await request(app, db, '/api/user/favorites/1', {
       method: 'POST',
@@ -56,6 +61,16 @@ describe('Favorites API', () => {
     expect(body.pagination).toBeDefined();
   });
 
+  it('GET /api/user/favorites/export - exports markdown', async () => {
+    await db.seed('news_summaries', [{ id: 1, news_id: 1, summary: 'AI summary' }]);
+    const { status, body, headers } = await request(app, db, '/api/user/favorites/export', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(status).toBe(200);
+    expect(headers.get('Content-Type')).toContain('text/markdown');
+    expect(body).toContain('# 我的收藏');
+  });
+
   it('DELETE /api/user/favorites/:newsId - removes favorite', async () => {
     const { status, body } = await request(app, db, '/api/user/favorites/1', {
       method: 'DELETE',
@@ -63,6 +78,11 @@ describe('Favorites API', () => {
     });
     expect(status).toBe(200);
     expect(body.message).toBeTruthy();
+  });
+
+  it('DELETE /api/user/favorites/:newsId - returns 401 without auth', async () => {
+    const { status } = await request(app, db, '/api/user/favorites/1', { method: 'DELETE' });
+    expect(status).toBe(401);
   });
 
   it('GET /api/user/favorites - returns empty after removal', async () => {

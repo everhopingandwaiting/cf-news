@@ -160,6 +160,8 @@ JWT_SECRET=any-random-string-for-jwt-signing
 OPENROUTER_API_KEY=your-openrouter-key
 NVIDIA_API_KEY=your-nvidia-key
 MANGO_API_KEY=your-mango-key
+GROQ_API_KEY=your-groq-key
+FREEMODEL_API_KEY=your-freemodel-key
 TURNSTILE_SECRET=your-turnstile-secret    # from dashboard
 TURNSTILE_SITE_KEY=0x4AAAA...            # from dashboard
 ```
@@ -182,6 +184,7 @@ The project includes a GitHub Actions workflow for automatic deployment. To use 
 | Secret Name | Description |
 |-------------|-------------|
 | `CF_API_TOKEN` | Cloudflare API Token (from Step 2) |
+| `D1_DATABASE_ID` | D1 database ID |
 | `KV_NAMESPACE_ID` | KV namespace ID |
 | `ZONE_ID` | Cloudflare Zone ID |
 | `ROUTE_PATTERN` | Your domain route (e.g., `yourdomain.com/*`) |
@@ -189,7 +192,10 @@ The project includes a GitHub Actions workflow for automatic deployment. To use 
 | `OPENROUTER_API_KEY` | OpenRouter API key |
 | `NVIDIA_API_KEY` | NVIDIA API key |
 | `MANGO_API_KEY` | Mango API key |
+| `GROQ_API_KEY` | Groq API key |
+| `FREEMODEL_API_KEY` | Freemodel API key |
 | `TURNSTILE_SECRET` | Turnstile secret key (bot protection) |
+| `TURNSTILE_SITE_KEY` | Turnstile site key |
 
 Secrets are automatically pushed to Cloudflare Secrets (`wrangler secret put`) during the workflow run.
 
@@ -220,6 +226,7 @@ cd ..
 The deploy script automatically:
 - Generates `wrangler.toml` from `.env`
 - Builds the frontend (Docker)
+- Applies pending D1 migrations
 - Copies assets to worker
 - Deploys to Cloudflare
 
@@ -241,6 +248,8 @@ docker run --rm --env-file .env \
   cf-news-worker npx wrangler d1 execute news-db --remote --file=./src/db/stopwords-import.sql
 cd ..
 ```
+
+After the first initialization, use `cf-news-worker/scripts/migrate.sh` or `./deploy.sh` to apply incremental D1 schema changes. `deploy.sh` runs pending migrations automatically.
 
 ## Project Structure
 

@@ -118,7 +118,10 @@ export class MockD1 {
         try {
           this._db.exec(ddl);
         } catch (e: any) {
-          // Ignore DDL errors (e.g., FTS5 not available, duplicate columns from ALTER)
+          if (/CREATE\s+VIRTUAL\s+TABLE\s+IF\s+NOT\s+EXISTS\s+news_fts/i.test(ddl)) {
+            this._db.exec('CREATE TABLE IF NOT EXISTS news_fts (title TEXT, description TEXT)');
+          }
+          // Ignore other DDL errors (e.g., duplicate columns from ALTER)
         }
       }
     });
@@ -131,7 +134,8 @@ export class MockD1 {
   async batch(stmts: any[]): Promise<any[]> {
     const results: any[] = [];
     for (const stmt of stmts) {
-      results.push(await stmt.all());
+      const result = await stmt.all();
+      results.push(Array.isArray(result) ? { results: result } : result);
     }
     return results;
   }

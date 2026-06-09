@@ -7,6 +7,30 @@ import { eq, sql, isNull, and } from 'drizzle-orm';
 import { getDb } from '../db';
 import { appConfig, newsItems, newsSummaries, newsAiTake } from '../db/schema';
 
+type NewsRow = { id: number; title: string; description: string | null; content: string | null };
+
+async function loadSummarizeItemsByIds(db: ReturnType<typeof getDb>, ids: number[]): Promise<NewsRow[]> {
+    const rows = await Promise.all(
+        ids.map(async (id) => {
+            const item = await db.select({
+                id: newsItems.id,
+                title: newsItems.title,
+                description: newsItems.description,
+                content: newsItems.content,
+            }).from(newsItems).where(eq(newsItems.id, id)).get();
+            if (!item) return null;
+
+            const existing = await db.select({ id: newsSummaries.id })
+                .from(newsSummaries).where(eq(newsSummaries.news_id, id)).get();
+            if (existing) return null;
+
+            return item;
+        })
+    );
+
+    return rows.filter((row): row is NewsRow => row !== null);
+}
+
 const operations = new Hono<{ Bindings: Bindings }>();
 
 operations.post('/fetch', async (c) => {
@@ -33,16 +57,13 @@ operations.post('/summarize', async (c) => {
     const db = getDb(c.env);
     try {
         const body = await c.req.json().catch(() => ({}));
-        const ids = body?.ids as number[] | undefined;
+        const ids = Array.isArray(body?.ids)
+            ? body.ids.map((id: unknown) => Number(id)).filter((id: number) => Number.isInteger(id) && id > 0)
+            : undefined;
 
-        let items: { id: number; title: string; description: string | null; content: string | null }[];
+        let items: NewsRow[];
         if (ids && ids.length > 0) {
-            items = await Promise.all(
-                ids.map(id => db.select({
-                    id: newsItems.id, title: newsItems.title,
-                    description: newsItems.description, content: newsItems.content,
-                }).from(newsItems).where(eq(newsItems.id, id)).get().then(r => r!))
-            );
+            items = await loadSummarizeItemsByIds(db, ids);
         } else {
             items = await db.select({
                 id: newsItems.id, title: newsItems.title,
@@ -50,13 +71,30 @@ operations.post('/summarize', async (c) => {
             })
                 .from(newsItems)
                 .leftJoin(newsSummaries, eq(newsSummaries.news_id, newsItems.id))
-                .where(and(isNull(newsSummaries.id), sql`${newsItems.description} IS NOT NULL OR ${newsItems.content} IS NOT NULL`))
+                .where(and(
+                    isNull(newsSummaries.id),
+                    sql`LENGTH(COALESCE(${newsItems.title}, '') || '. ' || substr(COALESCE(${newsItems.content}, ${newsItems.description}, ''), 1, 1500)) >= 60`
+                ))
                 .limit(10)
                 .all() as any[];
         }
 
+        if (items.length === 0) {
+            return c.json({ success: true, generated: 0, total: 0, skipped: 0 });
+        }
+
         const done = await generateBatchSummariesForNews(c.env, items as any);
-        return c.json({ success: true, generated: done, total: items.length });
+        return c.json({ success: true, generated: done, total: items.length, skipped: items.length - done });
+    } catch (error) {
+        return c.json({ success: false, error: String(error) }, 500);
+    }
+});
+
+operations.post('/summarize/clear', async (c) => {
+    const db = getDb(c.env);
+    try {
+        await db.delete(newsSummaries);
+        return c.json({ success: true, message: '所有摘要已清空' });
     } catch (error) {
         return c.json({ success: false, error: String(error) }, 500);
     }
@@ -97,16 +135,6 @@ operations.post('/take/:newsId', async (c) => {
         const row = await db.select({ take: newsAiTake.take })
             .from(newsAiTake).where(eq(newsAiTake.news_id, newsId)).get();
         return c.json({ success: true, take: row?.take || null });
-    } catch (error) {
-        return c.json({ success: false, error: String(error) }, 500);
-    }
-});
-
-operations.post('/summarize/clear', async (c) => {
-    const db = getDb(c.env);
-    try {
-        await db.delete(newsSummaries);
-        return c.json({ success: true, message: '所有摘要已清空' });
     } catch (error) {
         return c.json({ success: false, error: String(error) }, 500);
     }

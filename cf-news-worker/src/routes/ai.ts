@@ -146,28 +146,32 @@ router.get('/related/:id', async (c) => {
                 .slice(0, 3);
             if (keywords.length > 0) {
                 const ftsQuery = keywords.map(k => `"${k.replace(/"/g, '')}"`).join(' OR ');
-                const ftsIds = await db.all<{ rowid: number }>(
-                    sql`SELECT rowid FROM news_fts WHERE news_fts MATCH ${ftsQuery} LIMIT 20`
-                );
-                if (ftsIds.length > 0) {
-                    const matchedIds = ftsIds.map(r => r.rowid).filter(rid => rid !== id);
-                    if (matchedIds.length > 0) {
-                        related = await db.select({
-                            id: newsItems.id, title: newsItems.title,
-                            description: newsItems.description, image_url: newsItems.image_url,
-                            published_at: newsItems.published_at,
-                        }).from(newsItems)
-                            .where(and(
-                                sql`${newsItems.id} IN (${sql.join(matchedIds.map(i => sql`${i}`))})`,
-                                eq(newsItems.is_deleted, 0),
-                            ))
-                            .orderBy(
-                                sql`CASE WHEN category = ${item.category} THEN 0 ELSE 1 END`,
-                                desc(newsItems.created_at)
-                            )
-                            .limit(5)
-                            .all();
+                try {
+                    const ftsIds = await db.all<{ rowid: number }>(
+                        sql`SELECT rowid FROM news_fts WHERE news_fts MATCH ${ftsQuery} LIMIT 20`
+                    );
+                    if (ftsIds.length > 0) {
+                        const matchedIds = ftsIds.map(r => r.rowid).filter(rid => rid !== id);
+                        if (matchedIds.length > 0) {
+                            related = await db.select({
+                                id: newsItems.id, title: newsItems.title,
+                                description: newsItems.description, image_url: newsItems.image_url,
+                                published_at: newsItems.published_at,
+                            }).from(newsItems)
+                                .where(and(
+                                    sql`${newsItems.id} IN (${sql.join(matchedIds.map(i => sql`${i}`))})`,
+                                    eq(newsItems.is_deleted, 0),
+                                ))
+                                .orderBy(
+                                    sql`CASE WHEN category = ${item.category} THEN 0 ELSE 1 END`,
+                                    desc(newsItems.created_at)
+                                )
+                                .limit(5)
+                                .all();
+                        }
                     }
+                } catch (e) {
+                    console.error('related FTS fallback error:', e);
                 }
             }
         }

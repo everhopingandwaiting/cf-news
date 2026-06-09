@@ -77,7 +77,6 @@ export async function generateSummary(env: Bindings, item: { id?: number; title:
         if (models.length === 0) continue;
 
         let caller = PROVIDER_MAP[provider];
-        if (!caller) continue;
 
         if (provider !== 'cloudflare') {
             const p = provider;

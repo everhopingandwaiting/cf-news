@@ -27,6 +27,11 @@ describe('User Settings API', () => {
     expect(status).toBe(401);
   });
 
+  it('GET /api/user/recommendations - requires auth', async () => {
+    const { status } = await request(app, db, '/api/user/recommendations');
+    expect(status).toBe(401);
+  });
+
   it('GET /api/user/profile - returns user profile with stats', async () => {
     const { status, body } = await request(app, db, '/api/user/profile', {
       headers: { Authorization: `Bearer ${token}` },
@@ -55,6 +60,11 @@ describe('User Settings API', () => {
     expect(body).toHaveProperty('receive_digest');
   });
 
+  it('GET /api/user/digest - returns 401 without auth', async () => {
+    const { status } = await request(app, db, '/api/user/digest');
+    expect(status).toBe(401);
+  });
+
   it('POST /api/user/push/subscribe - subscribes to push', async () => {
     const { status, body } = await request(app, db, '/api/user/push/subscribe', {
       method: 'POST',
@@ -72,5 +82,24 @@ describe('User Settings API', () => {
       body: {},
     });
     expect(status).toBe(400);
+  });
+
+  it('DELETE /api/user/push/unsubscribe - removes a subscription', async () => {
+    await db.seed('push_subscriptions', [
+      { id: 2, user_id: 1, endpoint: 'https://push/remove', p256dh_key: 'k', auth_key: 'a' },
+    ]);
+
+    const { status, body } = await request(app, db, '/api/user/push/unsubscribe', {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+      body: { endpoint: 'https://push/remove' },
+    });
+    expect(status).toBe(200);
+    expect(body.success).toBe(true);
+  });
+
+  it('DELETE /api/user/push/unsubscribe - returns 401 without auth', async () => {
+    const { status } = await request(app, db, '/api/user/push/unsubscribe', { method: 'DELETE', body: {} });
+    expect(status).toBe(401);
   });
 });

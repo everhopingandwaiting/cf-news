@@ -99,4 +99,43 @@ describe('News API', () => {
     expect(body.pagination.total).toBe(0);
   });
 
+  it('GET /api/news - filters by source, language, and summary state', async () => {
+    await db.seed('news_sources', [
+      { id: 10, name: 'English Source', feed_url: 'https://en/rss', category: 'tech', language: 'en', sort_order: 10 },
+      { id: 11, name: 'Chinese Source', feed_url: 'https://zh/rss', category: 'tech', language: 'zh', sort_order: 11 },
+    ]);
+    await db.seed('news_items', [
+      { id: 20, source_id: 10, title: 'English with summary', url: 'https://filter/en-summary', category: 'tech', is_deleted: 0 },
+      { id: 21, source_id: 11, title: 'Chinese without summary', url: 'https://filter/zh-no-summary', category: 'tech', is_deleted: 0 },
+    ]);
+    await db.seed('news_summaries', [{ id: 20, news_id: 20, summary: 'summary' }]);
+
+    const { status, body } = await request(app, db, '/api/news?source_id=10&lang=en&has_summary=1');
+    expect(status).toBe(200);
+    expect(body.news.map((item: any) => item.id)).toContain(20);
+    expect(body.news.map((item: any) => item.id)).not.toContain(21);
+  });
+
+  it('GET /api/news/:id/content - returns cached long content', async () => {
+    const longContent = 'x'.repeat(501);
+    await db.seed('news_items', [
+      { id: 30, source_id: 1, title: 'Long content', url: 'https://content/long', content: longContent, description: 'fallback', category: 'tech', is_deleted: 0 },
+    ]);
+
+    const { status, body } = await request(app, db, '/api/news/30/content');
+    expect(status).toBe(200);
+    expect(body.content).toBe(longContent);
+  });
+
+  it('GET /api/news/:id/content - returns 404 for missing item', async () => {
+    const { status } = await request(app, db, '/api/news/999999/content');
+    expect(status).toBe(404);
+  });
+
+  it('GET /api/news/:id/perspectives - returns 404 when unavailable', async () => {
+    const { status, body } = await request(app, db, '/api/news/999999/perspectives');
+    expect(status).toBe(404);
+    expect(body.error).toBeTruthy();
+  });
+
 });

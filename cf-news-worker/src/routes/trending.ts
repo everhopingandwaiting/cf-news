@@ -96,7 +96,7 @@ trending.get('/trending', async (c) => {
                 `);
             });
             try {
-                const batchResults = await db.batch(stmts as any);
+                const batchResults = await Promise.all(stmts);
                 topKeywords.forEach((kw, i) => {
                     const sources = (batchResults[i] || []) as { name: string; count: number }[];
                     sourceResults.set(kw, sources);

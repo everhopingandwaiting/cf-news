@@ -151,6 +151,8 @@ JWT_SECRET=任意随机字符串用于JWT签名
 OPENROUTER_API_KEY=你的OpenRouter密钥
 NVIDIA_API_KEY=你的NVIDIA密钥
 MANGO_API_KEY=你的Mango密钥
+GROQ_API_KEY=你的Groq密钥
+FREEMODEL_API_KEY=你的Freemodel密钥
 TURNSTILE_SECRET=你的Turnstile密钥       # 从 CF 面板获取
 TURNSTILE_SITE_KEY=0x4AAAA...             # 从 CF 面板获取
 ```
@@ -173,6 +175,7 @@ TURNSTILE_SITE_KEY=0x4AAAA...             # 从 CF 面板获取
 | Secret 名称 | 说明 |
 |-------------|------|
 | `CF_API_TOKEN` | Cloudflare API Token |
+| `D1_DATABASE_ID` | D1 数据库 ID |
 | `KV_NAMESPACE_ID` | KV 命名空间 ID |
 | `ZONE_ID` | Cloudflare Zone ID |
 | `ROUTE_PATTERN` | 域名路由（如 `yourdomain.com/*`） |
@@ -180,7 +183,10 @@ TURNSTILE_SITE_KEY=0x4AAAA...             # 从 CF 面板获取
 | `OPENROUTER_API_KEY` | OpenRouter API Key |
 | `NVIDIA_API_KEY` | NVIDIA API Key |
 | `MANGO_API_KEY` | Mango API Key |
+| `GROQ_API_KEY` | Groq API Key |
+| `FREEMODEL_API_KEY` | Freemodel API Key |
 | `TURNSTILE_SECRET` | Turnstile 验证码密钥 |
+| `TURNSTILE_SITE_KEY` | Turnstile 站点 Key |
 
 工作流运行时会自动将这些值推到 Cloudflare Secrets（`wrangler secret put`），不会明文存储。
 
@@ -211,6 +217,7 @@ cd ..
 部署脚本自动完成：
 - 从 `.env` 生成 `wrangler.toml`
 - 构建前端（Docker 内）
+- 执行待应用的 D1 migrations
 - 复制静态资源到 worker
 - 部署到 Cloudflare
 
@@ -232,6 +239,8 @@ docker run --rm --env-file .env \
   cf-news-worker npx wrangler d1 execute news-db --remote --file=./src/db/stopwords-import.sql
 cd ..
 ```
+
+首次初始化后，使用 `cf-news-worker/scripts/migrate.sh` 或 `./deploy.sh` 应用增量 D1 schema 变更。`deploy.sh` 会自动执行待应用的 migrations。
 
 ## 项目结构
 

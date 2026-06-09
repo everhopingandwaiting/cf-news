@@ -60,8 +60,41 @@ describe('Comments API', () => {
     expect(body.success).toBe(true);
   });
 
+  it('POST /api/comments/1 - rejects empty content', async () => {
+    const { status } = await request(app, db, '/api/comments/1', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: { content: '   ' },
+    });
+    expect(status).toBe(400);
+  });
+
   it('DELETE /api/comments/:commentId - requires auth', async () => {
     const { status } = await request(app, db, '/api/comments/1', { method: 'DELETE' });
     expect(status).toBe(401);
+  });
+
+  it('DELETE /api/comments/:commentId - deletes own comment only', async () => {
+    await db.seed('news_comments', [
+      { id: 10, news_id: 1, user_id: 1, content: 'Mine', is_deleted: 0 },
+      { id: 11, news_id: 1, user_id: 2, content: 'Other', is_deleted: 0 },
+    ]);
+
+    const own = await request(app, db, '/api/comments/10', {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(own.status).toBe(200);
+
+    const other = await request(app, db, '/api/comments/11', {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(other.status).toBe(200);
+
+    const ownRow = await db.prepare('SELECT is_deleted FROM news_comments WHERE id = 10').first<any>();
+    const otherRow = await db.prepare('SELECT is_deleted FROM news_comments WHERE id = 11').first<any>();
+    expect(ownRow?.is_deleted).toBe(1);
+    expect(otherRow?.is_deleted).toBe(0);
   });
 });
