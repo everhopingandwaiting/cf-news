@@ -70,6 +70,43 @@ describe('Trending API - keywords', () => {
   });
 });
 
+describe('Trending API - themes', () => {
+  it('GET /api/news/trending/themes - returns empty when no data', async () => {
+    const { status, body } = await request(app, db, '/api/news/trending/themes');
+    expect(status).toBe(200);
+    expect(body.themes).toEqual([]);
+  });
+
+  it('GET /api/news/trending/themes - returns theme clusters with articles', async () => {
+    await db.seed('news_sources', [{ id: 1, name: 'TechCrunch', feed_url: 'https://tc/rss', category: 'tech', language: 'en' }]);
+    await db.seed('trending_topics', [
+      { keyword: 'AI', date_hour: shanghaiDateHour(4), count: 2 },
+      { keyword: 'AI', date_hour: shanghaiDateHour(1), count: 8 },
+      { keyword: 'AI_model', date_hour: shanghaiDateHour(1), count: 4 },
+    ]);
+    await db.seed('news_items', [
+      { id: 20, source_id: 1, title: 'AI model launches today', url: 'https://ai', description: 'AI model news', category: 'tech', created_at: utcDateTime(1), is_deleted: 0 },
+    ]);
+    const { status, body } = await request(app, db, '/api/news/trending/themes?hours=48');
+    expect(status).toBe(200);
+    expect(body.themes.length).toBeGreaterThan(0);
+    expect(body.themes[0]).toHaveProperty('label');
+    expect(body.themes[0]).toHaveProperty('status');
+    expect(Array.isArray(body.themes[0].keywords)).toBe(true);
+    expect(Array.isArray(body.themes[0].articles)).toBe(true);
+  });
+
+  it('GET /api/news/trending/themes - falls back to default hours for invalid input', async () => {
+    await db.seed('trending_topics', [
+      { keyword: 'Cloudflare', date_hour: shanghaiDateHour(1), count: 5 },
+    ]);
+    const { status, body } = await request(app, db, '/api/news/trending/themes?hours=bad');
+    expect(status).toBe(200);
+    expect(body.themes.length).toBe(1);
+    expect(body.themes[0].label).toBe('Cloudflare');
+  });
+});
+
 describe('Trending API - categories', () => {
   it('GET /api/news/trending/categories - returns empty when no data', async () => {
     const { status, body } = await request(app, db, '/api/news/trending/categories');

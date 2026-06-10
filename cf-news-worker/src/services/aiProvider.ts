@@ -17,7 +17,9 @@ export async function getConfig(env: Bindings, key: string): Promise<string | nu
 
 export async function getConfigInt(env: Bindings, key: string, def: number): Promise<number> {
     const v = await getConfig(env, key);
-    return v ? parseInt(v) : def;
+    if (!v) return def;
+    const parsed = parseInt(v, 10);
+    return Number.isFinite(parsed) ? parsed : def;
 }
 
 export async function getProviderOrder(env: Bindings): Promise<string[]> {
@@ -146,6 +148,11 @@ export async function logAICall(env: Bindings, data: {
     } catch (e) { console.error('Log insert error:', e); }
 }
 
+async function getMaxModelsPerProvider(env: Bindings): Promise<number> {
+    const configured = await getConfigInt(env, 'ai_max_models_per_provider', 2);
+    return Math.min(Math.max(configured, 1), 5);
+}
+
 export async function doOpenAICompat(
     env: Bindings, provider: string, baseUrl: string, apiKey: string,
     model: string, messages: { role: string; content: string }[],
@@ -164,7 +171,11 @@ export async function doOpenAICompat(
         });
         if (!res.ok) {
             const errText = await res.text().catch(() => '');
+            const error = `HTTP ${res.status}: ${errText.substring(0, 500)}`;
             console.error(`${provider}/${model} error ${res.status}: ${errText}`);
+            await logAICall(env, { provider, model, news_id: options?.news_id, news_title: options?.news_title,
+                prompt_length: JSON.stringify(messages).length, response_length: 0, response_preview: errText,
+                duration_ms: Date.now() - start, success: false, error });
             await markFailed(env, model, provider);
             return null;
         }
@@ -222,10 +233,11 @@ export async function callAI(env: Bindings, prompt: string, options?: AIOptions)
         : [{ role: 'user', content: prompt }];
 
     const order = await getProviderOrder(env);
+    const maxModels = await getMaxModelsPerProvider(env);
 
     for (const provider of order) {
         if (provider === 'cloudflare') {
-            const models = await getModels(env, 'cloudflare');
+            const models = (await getModels(env, 'cloudflare')).slice(0, maxModels);
             for (const model of models) {
                 const result = await doCF(env, model, messages, options);
                 if (result) return result;
@@ -233,7 +245,7 @@ export async function callAI(env: Bindings, prompt: string, options?: AIOptions)
         } else {
             const info = await getProviderInfo(env, provider);
             if (!info) continue;
-            const models = await getModels(env, provider);
+            const models = (await getModels(env, provider)).slice(0, maxModels);
             for (const model of models) {
                 const result = await doOpenAICompat(env, provider, info.base_url, info.api_key, model, messages, options);
                 if (result) return result;

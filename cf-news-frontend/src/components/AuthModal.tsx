@@ -63,8 +63,8 @@ export default function AuthModal({ visible, onClose, onLoginSuccess }: Props) {
 
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="bg-white rounded-2xl p-8 w-full max-w-sm border border-gray-200 shadow-xl animate-[slideUp_0.25s_ease]">
-        <h2 className="text-xl font-semibold mb-6 text-center text-gray-900">{mode === 'login' ? '◈ 用户登录' : '✦ 用户注册'}</h2>
+      <div className="bg-white rounded-lg p-8 w-full max-w-sm border border-gray-200 shadow-xl animate-[slideUp_0.25s_ease]">
+        <h2 className="text-xl font-semibold mb-6 text-center text-gray-900">{mode === 'login' ? '用户登录' : '用户注册'}</h2>
         <form onSubmit={handleSubmit}>
           {mode === 'register' && (
             <div className="mb-4">

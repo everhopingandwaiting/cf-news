@@ -7,12 +7,13 @@ interface Props { newsId: number; token: string | null; }
 export default function Comments({ newsId, token }: Props) {
   const [comments, setComments] = useState<NewsComment[]>([]);
   const [text, setText] = useState('');
+  const [error, setError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   // Load initial comments via REST for unauthenticated users (read-only, no polling)
   useEffect(() => {
     if (!token) {
-      getComments(newsId).then(setComments).catch(() => {});
+      getComments(newsId).then(data => { setComments(data); setError(null); }).catch(() => setError('评论加载失败'));
     }
   }, [newsId, token]);
 
@@ -72,12 +73,22 @@ export default function Comments({ newsId, token }: Props) {
       await postComment(newsId, content);
       const updated = await getComments(newsId);
       setComments(updated);
-    } catch {}
+      setError(null);
+    } catch {
+      setText(content);
+      setError('评论发送失败，请稍后重试');
+    }
   }, [text, newsId]);
 
   return (
     <div className="mt-3.5 pt-3.5 border-t border-gray-200">
       <h4 className="mb-2.5 text-[13px] text-gray-400 font-medium">⌨ 评论 ({comments.length})</h4>
+      {error && (
+        <div className="mb-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-600 flex items-center justify-between gap-2">
+          <span>{error}</span>
+          <button className="text-red-400 hover:text-red-600" onClick={() => setError(null)}>关闭</button>
+        </div>
+      )}
       <div className="space-y-1.5">
         {comments.map(c => (
           <div key={c.id} className="bg-gray-50 px-3 py-2.5 rounded-lg border border-gray-200">

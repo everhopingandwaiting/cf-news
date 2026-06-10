@@ -14,6 +14,7 @@ import aiRoutes from '../routes/ai';
 
 export const MOCK_ENV: Record<string, any> = {
   JWT_SECRET: 'test-jwt-secret',
+  OPENROUTER_API_KEY: 'test-openrouter-key',
   TURNSTILE_SECRET: '1x0000000000000000000000000000000AA',
   KV: { get: async () => null, put: async () => {}, delete: async () => {} },
   GLOBAL_RATE_LIMITER: { limit: async () => ({ success: true }) },

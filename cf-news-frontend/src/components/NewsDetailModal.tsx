@@ -6,9 +6,9 @@ import RelatedArticles from './RelatedArticles';
 import { stripHtml, estimateReadingTime, sanitizeHtml, formatTime } from '../utils/newsFormat';
 
 const CAT_NAMES: Record<string, string> = {
-  ai: '⟡ AI', tech: '⚙ 科技', news: '◇ 新闻', finance: '₿ 财经',
-  entertainment: '✦ 娱乐', stocks: '📈 股票', funds: '💰 基金', energy: '⚡ 新能源',
-  general: '◇ 综合',
+  ai: 'AI', tech: '科技', news: '新闻', finance: '财经',
+  entertainment: '娱乐', stocks: '股票', funds: '基金', energy: '新能源',
+  general: '综合',
 };
 const CAT_COLORS: Record<string, string> = {
   ai: 'bg-purple-100 text-purple-600', tech: 'bg-emerald-100 text-emerald-600',
@@ -43,9 +43,10 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
   const [sourceView, setSourceView] = useState<'iframe' | null>(null);
   const [screenshotUrl, setScreenshotUrl] = useState<string | null>(null);
   const [screenshotLoading, setScreenshotLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const shareRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { setCurrentItem(item); setTranslated(null); setTakeError(false); setReaderContent(null); setSourceView(null); if (screenshotUrl) { URL.revokeObjectURL(screenshotUrl); setScreenshotUrl(null); } }, [item]);
+  useEffect(() => { setCurrentItem(item); setTranslated(null); setTakeError(false); setError(null); setReaderContent(null); setSourceView(null); if (screenshotUrl) { URL.revokeObjectURL(screenshotUrl); setScreenshotUrl(null); } }, [item]);
 
   // Share dropdown: click outside to close
   useEffect(() => {
@@ -73,6 +74,7 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
       }
     } catch {
       setTakeError(true);
+      setError('AI 小编生成失败，请稍后重试');
     }
     setTaking(false);
   }
@@ -85,7 +87,9 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
       const updated = await getNewsItem(itemId);
       if (updated) setCurrentItem(updated);
       onSummaryGenerated();
-    } catch {}
+    } catch {
+      setError('AI 摘要生成失败，请稍后重试');
+    }
     setSummarizing(false);
   }
 
@@ -97,7 +101,9 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
         document.title = `${item.title} - News`;
         window.history.replaceState({}, '', `/share/${newsId}`);
       }
-    } catch {}
+    } catch {
+      setError('相关推荐加载失败');
+    }
   }
 
   async function handleTranslate() {
@@ -113,8 +119,12 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
       const data = await res.json();
       if (data.translated) {
         setTranslated({ title: currentItem.title, description: data.translated });
+      } else {
+        setError('翻译失败，请稍后重试');
       }
-    } catch {}
+    } catch {
+      setError('翻译失败，请稍后重试');
+    }
     setTranslating(false);
   }
 
@@ -145,8 +155,14 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
     try {
       const res = await fetch(`/api/news/${currentItem.id}/content`);
       const data = await res.json();
-      if (data.content) setReaderContent(data.content);
-    } catch {}
+      if (res.ok && data.content) {
+        setReaderContent(data.content);
+      } else {
+        setError(data.error || '阅读全文加载失败');
+      }
+    } catch {
+      setError('阅读全文加载失败');
+    }
     setReaderLoading(false);
   }
 
@@ -159,8 +175,12 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
       if (res.ok) {
         const blob = await res.blob();
         setScreenshotUrl(URL.createObjectURL(blob));
+      } else {
+        setError('截图失败，请稍后重试');
       }
-    } catch {}
+    } catch {
+      setError('截图失败，请稍后重试');
+    }
     setScreenshotLoading(false);
   }
 
@@ -169,7 +189,9 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
       await navigator.clipboard.writeText(shareUrl);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch {}
+    } catch {
+      setError('复制失败，请检查浏览器权限');
+    }
   }
 
   if (!currentItem) return null;
@@ -182,7 +204,7 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
 
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal-content bg-white rounded-2xl p-8 w-full max-w-[640px] max-h-[85vh] border border-gray-200 shadow-xl animate-[slideUp_0.25s_ease] relative overflow-y-auto">
+      <div className="modal-content bg-white rounded-lg p-8 w-full max-w-[640px] max-h-[85vh] border border-gray-200 shadow-xl animate-[slideUp_0.25s_ease] relative overflow-y-auto">
         <button className="absolute top-4 right-4 w-9 h-9 rounded-full bg-gray-100 border border-gray-200 text-gray-400 cursor-pointer text-base flex items-center justify-center hover:bg-gray-200 hover:text-gray-600 transition" onClick={onClose}>✕</button>
 
         <div className="flex gap-2.5 items-center mb-4">
@@ -193,10 +215,10 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
         <h2 className="text-[22px] font-bold leading-snug mb-3 text-gray-900">{currentItem.title}</h2>
 
         <div className="flex gap-4 text-[13px] text-gray-400 mb-5 items-center">
-          <span>◷ {date}</span>
-          <span>◈ {currentItem.source_lang === 'zh' ? '中文' : '英文'}</span>
+          <span>{date}</span>
+          <span>{currentItem.source_lang === 'zh' ? '中文' : '英文'}</span>
           <button className="hover:text-indigo-500 transition cursor-pointer" onClick={handlePlay}>
-            {playing ? '■ 停止' : '♫ 播报'}
+            {playing ? '停止播报' : '播报'}
           </button>
           <select className="text-[11px] bg-transparent border border-gray-200 rounded px-1 py-0.5 cursor-pointer" value={ttsSpeed} onChange={e => setTtsSpeed(Number(e.target.value))}>
             <option value={0.5}>0.5x</option>
@@ -207,42 +229,49 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
           </select>
         </div>
 
+        {error && (
+          <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[13px] text-red-600 flex items-center justify-between gap-3">
+            <span>{error}</span>
+            <button className="text-red-400 hover:text-red-600" onClick={() => setError(null)}>关闭</button>
+          </div>
+        )}
+
         <style>{`@keyframes fsi{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}.fi{animation:fsi .2s ease-out}`}</style>
         <div key={currentItem.id} className="fi">
         {currentItem.ai_summary ? (
           <div className="bg-gradient-to-r from-indigo-50 to-purple-50 px-5 py-4 rounded-lg mb-5 border-l-[3px] border-indigo-500">
-            <div className="font-semibold text-[13px] text-indigo-500 mb-2">⟡ AI 摘要</div>
+            <div className="font-semibold text-[13px] text-indigo-500 mb-2">AI 摘要</div>
             <p className="text-sm text-gray-600 leading-relaxed">{stripHtml(currentItem.ai_summary)}</p>
           </div>
         ) : (
           <button type="button" className="mb-4 px-4 py-2 rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 hover:border-indigo-500 hover:text-indigo-500 transition disabled:opacity-40" onClick={handleSummarize} disabled={summarizing}>
-            {summarizing ? '⟡ 生成中...' : '⟡ 生成 AI 摘要'}
+            {summarizing ? '生成中...' : '生成 AI 摘要'}
           </button>
         )}
 
         {currentItem.ai_take ? (
           <div className="bg-gradient-to-r from-amber-50 to-orange-50 px-5 py-4 rounded-lg mb-5 border-l-[3px] border-amber-400">
-            <div className="font-semibold text-[13px] text-amber-600 mb-2">✎ AI 小编</div>
+            <div className="font-semibold text-[13px] text-amber-600 mb-2">AI 小编</div>
             <p className="text-sm text-amber-700 italic">{currentItem.ai_take}</p>
           </div>
         ) : currentItem.ai_summary ? (
           <div className="mb-4">
-            {takeError && <p className="text-[12px] text-red-400 mb-1">⏱ 生成失败，可重试</p>}
+            {takeError && <p className="text-[12px] text-red-400 mb-1">生成失败，可重试</p>}
             <button type="button" className="px-4 py-2 rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 hover:border-amber-500 hover:text-amber-500 transition disabled:opacity-40" onClick={handleTake} disabled={taking}>
-              {taking ? '✎ AI 思考中...' : '✎ 生成 AI 吐槽'}
+              {taking ? 'AI 思考中...' : '生成 AI 吐槽'}
             </button>
           </div>
         ) : null}
 
         {currentItem.source_lang !== 'zh' && (
           <button type="button" className="mb-4 ml-2 px-4 py-2 rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 hover:border-emerald-500 hover:text-emerald-500 transition disabled:opacity-40" onClick={handleTranslate} disabled={translating}>
-            {translating ? '🌐 翻译中...' : '🌐 翻译为中文'}
+            {translating ? '翻译中...' : '翻译为中文'}
           </button>
         )}
 
         {translated && (
           <div className="bg-gradient-to-r from-emerald-50 to-teal-50 px-5 py-4 rounded-lg mb-5 border-l-[3px] border-emerald-500">
-            <div className="font-semibold text-[13px] text-emerald-600 mb-2">🌐 中文翻译</div>
+            <div className="font-semibold text-[13px] text-emerald-600 mb-2">中文翻译</div>
             <p className="text-sm text-gray-600 leading-relaxed">{translated.description}</p>
           </div>
         )}
@@ -252,10 +281,10 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
         {readerContent && (
           <div className={`${readerDark ? 'bg-gray-900 text-gray-100 reader-dark' : 'bg-white text-gray-900'} rounded-xl p-8 my-4 mx-auto border ${readerDark ? 'border-gray-700' : 'border-gray-100'}`}>
             <div className="flex items-center justify-between mb-4">
-              <span className="text-sm text-gray-400">⏱ {estimateReadingTime(readerContent)} 分钟阅读</span>
+              <span className="text-sm text-gray-400">{estimateReadingTime(readerContent)} 分钟阅读</span>
               <div className="flex gap-2">
                 <button className="text-xs px-2 py-1 rounded bg-gray-100 text-gray-600 hover:bg-gray-200 cursor-pointer" onClick={() => setReaderDark(!readerDark)}>
-                  {readerDark ? '☀ 白天' : '🌙 夜间'}
+                  {readerDark ? '白天' : '夜间'}
                 </button>
                 <button className="text-xs px-2 py-1 rounded bg-gray-100 text-gray-600 hover:bg-gray-200 cursor-pointer" onClick={() => setReaderContent(null)}>✕ 关闭</button>
               </div>
@@ -276,7 +305,7 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
             <div className="flex items-center justify-between px-4 py-2 bg-gray-50 border-b border-gray-200">
               <span className="text-xs text-gray-500 truncate max-w-[50%]">{currentItem!.url}</span>
               <div className="flex gap-2">
-                <button className="text-xs px-2 py-1 rounded bg-white border border-gray-200 text-gray-600 hover:bg-gray-100 cursor-pointer" onClick={handleScreenshot} disabled={screenshotLoading}>{screenshotLoading ? '截图中...' : '📷 截图'}</button>
+                <button className="text-xs px-2 py-1 rounded bg-white border border-gray-200 text-gray-600 hover:bg-gray-100 cursor-pointer" onClick={handleScreenshot} disabled={screenshotLoading}>{screenshotLoading ? '截图中...' : '截图'}</button>
                 <button className="text-xs px-2 py-1 rounded bg-white border border-gray-200 text-gray-600 hover:bg-gray-100 cursor-pointer" onClick={() => onOpenUrl(currentItem!.url)}>新标签打开</button>
                 <button className="text-xs px-2 py-1 rounded bg-white border border-gray-200 text-gray-600 hover:bg-gray-100 cursor-pointer" onClick={() => { if (screenshotUrl) { URL.revokeObjectURL(screenshotUrl); setScreenshotUrl(null); } setSourceView(null); }}>✕ 关闭</button>
               </div>
@@ -299,10 +328,10 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
 
         <div className="flex gap-3 mt-4 flex-wrap">
           <button className="px-5 py-2.5 bg-indigo-500 text-white rounded-lg text-[13px] font-medium hover:bg-indigo-600 transition" onClick={() => { setSourceView(sourceView ? null : 'iframe'); setReaderContent(null); }}>
-            {sourceView ? '✕ 关闭原站' : '◈ 原站浏览'}
+            {sourceView ? '关闭原站' : '原站浏览'}
           </button>
           <button className="px-5 py-2.5 rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 hover:border-indigo-500 hover:text-indigo-500 transition disabled:opacity-40" onClick={handleReadFull} disabled={readerLoading}>
-            {readerLoading ? '⏳ 加载中...' : readerContent ? '✕ 关闭阅读' : '📖 阅读全文'}
+            {readerLoading ? '加载中...' : readerContent ? '关闭阅读' : '阅读全文'}
           </button>
           <button className="px-5 py-2.5 rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 transition" onClick={copyLink}>
             {copied ? '✓ 已复制' : '⇋ 复制链接'}
@@ -313,8 +342,8 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
               <div className="absolute bottom-full left-0 mb-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[140px] z-10 animate-[slideUp_0.15s_ease]">
                 <a href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(currentItem!.title)}&url=${encodeURIComponent(shareUrl)}`} target="_blank" rel="noopener noreferrer" className="block px-4 py-2 text-[13px] text-gray-700 hover:bg-gray-50" onClick={() => setShowShare(false)}>𝕏 Twitter</a>
                 <a href={`https://t.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(currentItem!.title)}`} target="_blank" rel="noopener noreferrer" className="block px-4 py-2 text-[13px] text-gray-700 hover:bg-gray-50" onClick={() => setShowShare(false)}>✈ Telegram</a>
-                <a href={`https://wa.me/?text=${encodeURIComponent(currentItem!.title + ' ' + shareUrl)}`} target="_blank" rel="noopener noreferrer" className="block px-4 py-2 text-[13px] text-gray-700 hover:bg-gray-50" onClick={() => setShowShare(false)}>💬 WhatsApp</a>
-                <button onClick={() => { copyLink(); setShowShare(false); }} className="block w-full text-left px-4 py-2 text-[13px] text-gray-700 hover:bg-gray-50">🔗 复制链接</button>
+                <a href={`https://wa.me/?text=${encodeURIComponent(currentItem!.title + ' ' + shareUrl)}`} target="_blank" rel="noopener noreferrer" className="block px-4 py-2 text-[13px] text-gray-700 hover:bg-gray-50" onClick={() => setShowShare(false)}>WhatsApp</a>
+                <button onClick={() => { copyLink(); setShowShare(false); }} className="block w-full text-left px-4 py-2 text-[13px] text-gray-700 hover:bg-gray-50">复制链接</button>
               </div>
             )}
           </div>

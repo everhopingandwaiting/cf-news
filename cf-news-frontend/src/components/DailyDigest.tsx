@@ -74,13 +74,12 @@ export default function DailyDigest({ digest, loading, collapsed, regenerating, 
   if (!digest) return null;
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 shadow-sm mb-5 overflow-hidden">
+    <div className="bg-white rounded-lg border border-gray-200 shadow-sm mb-5 overflow-hidden">
       <button
         className="w-full flex items-center justify-between px-5 py-3.5 bg-gradient-to-r from-indigo-50 to-purple-50 hover:from-indigo-100 hover:to-purple-100 transition cursor-pointer"
         onClick={onToggle}
       >
         <div className="flex items-center gap-2.5">
-          <span className="text-lg">⟡</span>
           <span className="font-semibold text-[14px] text-gray-800">今日要闻</span>
           <span className="text-[12px] text-gray-400 font-normal">{digest.date}</span>
         </div>
@@ -90,7 +89,7 @@ export default function DailyDigest({ digest, loading, collapsed, regenerating, 
               className="text-[13px] text-gray-300 hover:text-indigo-500 cursor-pointer transition px-1"
               onClick={e => { e.stopPropagation(); setShowDates(!showDates); }}
               title="查看历史要闻"
-            >📅</span>
+            >历史</span>
             {showDates && dates.length > 0 && (
               <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[120px] z-10 animate-[slideUp_0.15s_ease]">
                 {dates.map(d => (
@@ -131,7 +130,7 @@ export default function DailyDigest({ digest, loading, collapsed, regenerating, 
               onClick={onRegenerate}
               disabled={regenerating}
             >
-              {regenerating ? '⟡ 生成中...' : '⟳ 重新生成'}
+              {regenerating ? '生成中...' : '重新生成'}
             </button>
           </div>
         </div>

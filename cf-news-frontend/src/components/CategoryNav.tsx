@@ -1,5 +1,5 @@
 interface Props {
-  categories: { key: string; label: string; emoji: string }[];
+  categories: { key: string; label: string }[];
   active: string;
   onSelect: (key: string) => void;
 }
@@ -17,7 +17,7 @@ export default function CategoryNav({ categories, active, onSelect }: Props) {
           }`}
           onClick={() => onSelect(cat.key)}
         >
-          {cat.emoji} {cat.label}
+          {cat.label}
         </button>
       ))}
     </nav>

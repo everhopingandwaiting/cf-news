@@ -37,7 +37,7 @@ export default function RelatedArticles({ newsId, onSelect }: Props) {
 
   return (
     <div className="mt-5 pt-4 border-t border-gray-200">
-      <div className="font-semibold text-[13px] text-gray-500 mb-3">⟡ 相关推荐</div>
+      <div className="font-semibold text-[13px] text-gray-500 mb-3">相关推荐</div>
       <div className="space-y-1.5">
         {articles.map((article, i) => (
           <button

@@ -60,6 +60,17 @@ interface HourlySource {
 interface HourlyCat {
     hour: string; category: string; count: number;
 }
+
+interface TrendTheme {
+    label: string;
+    total: number;
+    latest: number;
+    previous: number;
+    change_pct: number;
+    status: 'rising' | 'falling' | 'steady';
+    keywords: string[];
+    articles: NewsItem[];
+}
 const PERIODS = [
     { key: 6, label: '6h' },
     { key: 12, label: '12h' },
@@ -87,7 +98,7 @@ function Skeleton({ className }: { className?: string }) {
 }
 
 export default function TrendingPanel({ visible, onClose, onSearch, onSelectArticle }: { visible: boolean; onClose: () => void; onSearch: (keyword: string) => void; onSelectArticle?: (item: NewsItem) => void }) {
-    const [tab, setTab] = useState<'hot' | 'rise' | 'chart' | 'sources' | 'cats'>('hot');
+    const [tab, setTab] = useState<'themes' | 'hot' | 'rise' | 'chart' | 'sources' | 'cats'>('themes');
     const [period, setPeriod] = useState(24);
     const [keywords, setKeywords] = useState<TrendingWord[]>([]);
     const [topics, setTopics] = useState<Topic[]>([]);
@@ -115,6 +126,8 @@ export default function TrendingPanel({ visible, onClose, onSearch, onSelectArti
     const [hourlyCat, setHourlyCat] = useState<HourlyCat[]>([]);
     const [hourlyLoading, setHourlyLoading] = useState(false);
     const [kwFetchController, setKwFetchController] = useState<AbortController | null>(null);
+    const [themes, setThemes] = useState<TrendTheme[]>([]);
+    const [themeLoading, setThemeLoading] = useState(false);
 
     useEffect(() => {
         if (!visible) return;
@@ -122,7 +135,14 @@ export default function TrendingPanel({ visible, onClose, onSearch, onSelectArti
         setKwLoading(true);
         setTpLoading(true);
         setCatLoading(true);
+        setThemeLoading(true);
         setKwArticles(null);
+
+        fetch(`/api/news/trending/themes?hours=${period}`)
+            .then(r => r.json())
+            .then(data => { if (data.themes) setThemes(data.themes); })
+            .catch(() => {})
+            .finally(() => setThemeLoading(false));
 
         fetch(`/api/news/trending?hours=${period}`)
             .then(r => r.json())
@@ -242,10 +262,11 @@ export default function TrendingPanel({ visible, onClose, onSearch, onSelectArti
     return (
         <div className="fixed inset-0 z-50 flex justify-end">
             <div className="absolute inset-0 bg-black/30 animate-fadeIn" onClick={onClose} />
-            <div className="relative w-full max-w-md bg-white shadow-2xl h-full overflow-y-auto animate-slideIn">
+            <div className="relative w-full max-w-lg bg-white shadow-2xl h-full overflow-y-auto animate-slideIn">
                 <div className="sticky top-0 bg-white/95 backdrop-blur-sm z-10 border-b border-gray-200">
                     <div className="flex items-center justify-between px-5 py-3">
                         <div className="flex gap-1.5 overflow-x-auto scrollbar-none flex-nowrap">
+                            <button className={`shrink-0 px-3 py-1.5 rounded-lg text-[13px] font-medium transition cursor-pointer ${tab === 'themes' ? 'bg-indigo-500 text-white shadow-sm' : 'text-gray-700 hover:bg-gray-100'}`} onClick={() => setTab('themes')} aria-label="趋势主题">主题</button>
                             <button className={`shrink-0 px-3 py-1.5 rounded-lg text-[13px] font-medium transition cursor-pointer ${tab === 'hot' ? 'bg-indigo-500 text-white shadow-sm' : 'text-gray-700 hover:bg-gray-100'}`} onClick={() => setTab('hot')} aria-label="热门关键词">热词</button>
                             <button className={`shrink-0 px-3 py-1.5 rounded-lg text-[13px] font-medium transition cursor-pointer ${tab === 'rise' ? 'bg-indigo-500 text-white shadow-sm' : 'text-gray-700 hover:bg-gray-100'}`} onClick={() => setTab('rise')} aria-label="上升趋势">上升</button>
                             <button className={`shrink-0 px-3 py-1.5 rounded-lg text-[13px] font-medium transition cursor-pointer ${tab === 'chart' ? 'bg-indigo-500 text-white shadow-sm' : 'text-gray-700 hover:bg-gray-100'}`} onClick={() => setTab('chart')} aria-label="关键词对比">对比</button>
@@ -277,6 +298,76 @@ export default function TrendingPanel({ visible, onClose, onSearch, onSelectArti
                     </div>
                 )}
 
+                {tab === 'themes' && (
+                    themeLoading ? (
+                        <div className="space-y-3 py-3">
+                            {Array.from({ length: 5 }).map((_, i) => (
+                                <div key={i} className="border border-gray-200 rounded-lg p-3">
+                                    <Skeleton className="h-5 w-40 mb-3" />
+                                    <Skeleton className="h-4 w-full mb-2" />
+                                    <Skeleton className="h-4 w-3/4" />
+                                </div>
+                            ))}
+                        </div>
+                    ) : themes.length === 0 ? (
+                        <div className="text-center py-12 text-gray-400 text-sm">暂无趋势主题</div>
+                    ) : (
+                        <div className="space-y-3">
+                            {themes.map((theme, index) => (
+                                <div key={theme.label} className="border border-gray-200 rounded-lg p-3.5 bg-white hover:border-indigo-200 hover:shadow-sm transition">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-[11px] text-gray-400 w-5">{index + 1}</span>
+                                                <h3 className="text-sm font-semibold text-gray-900 truncate">{displayWord(theme.label)}</h3>
+                                            </div>
+                                            <div className="mt-1 flex flex-wrap gap-1.5">
+                                                {theme.keywords.map(keyword => (
+                                                    <button key={keyword} className="px-2 py-0.5 rounded-full bg-gray-100 text-[11px] text-gray-600 hover:bg-indigo-50 hover:text-indigo-600"
+                                                        onClick={() => fetchKeywordArticles(keyword)}>
+                                                        {displayWord(keyword)}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                        <div className="shrink-0 text-right">
+                                            <div className={`text-[12px] font-semibold ${theme.status === 'rising' ? 'text-red-500' : theme.status === 'falling' ? 'text-emerald-600' : 'text-gray-500'}`}>
+                                                {theme.status === 'rising' ? '上升' : theme.status === 'falling' ? '回落' : '平稳'} {theme.change_pct > 0 ? '+' : ''}{theme.change_pct}%
+                                            </div>
+                                            <div className="text-[10px] text-gray-400">{theme.total} 热度</div>
+                                        </div>
+                                    </div>
+                                    {theme.articles.length > 0 && (
+                                        <div className="mt-3 space-y-1.5">
+                                            {theme.articles.slice(0, 3).map(article => (
+                                                <button key={article.id}
+                                                    className="w-full text-left px-2.5 py-2 rounded-lg bg-gray-50 hover:bg-indigo-50 transition"
+                                                    onClick={() => { if (onSelectArticle) { onSelectArticle(article); onClose(); } }}>
+                                                    <div className="text-[12px] font-medium text-gray-800 line-clamp-2">{article.title}</div>
+                                                    <div className="mt-0.5 flex items-center gap-2 text-[10px] text-gray-400">
+                                                        <span>{article.source_name || '未知来源'}</span>
+                                                        {article.category && <span>{article.category}</span>}
+                                                    </div>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
+                                    <div className="mt-3 flex gap-2">
+                                        <button className="px-2.5 py-1.5 rounded-lg bg-indigo-500 text-white text-[12px] hover:bg-indigo-600"
+                                            onClick={() => { onSearch(theme.label); onClose(); }}>
+                                            搜索主题
+                                        </button>
+                                        <button className="px-2.5 py-1.5 rounded-lg bg-gray-100 text-gray-600 text-[12px] hover:bg-gray-200"
+                                            onClick={() => fetchInsight(theme.label)}>
+                                            AI 解读
+                                        </button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )
+                )}
+
                 {tab === 'hot' && (
                     kwLoading ? (
                         <div className="flex flex-wrap gap-2.5 justify-center py-4">
@@ -303,7 +394,7 @@ export default function TrendingPanel({ visible, onClose, onSearch, onSelectArti
                                             {isBigram(kw.word) && <span className="text-[9px] opacity-50 font-normal mr-0.5">词组</span>}
                                             {displayWord(kw.word)}
                                             {kw.is_new && <span className="absolute -top-2 -left-2 text-[10px] bg-emerald-500 text-white px-1 rounded-full font-bold animate-bounce">新</span>}
-                                            {kw.burst && <span className="absolute -top-2 -right-2 text-[14px] animate-pulse">🔥</span>}
+                                            {kw.burst && <span className="absolute -top-2 -right-2 text-[9px] bg-red-500 text-white px-1 rounded-full font-bold">爆</span>}
                                             {kw.change_pct !== undefined && kw.change_pct !== 0 && (
                                                 <span className={`text-[10px] ml-1 font-semibold ${kw.change_pct > 0 ? 'text-red-500' : 'text-green-500'}`}>
                                                     {kw.change_pct > 0 ? '↑' : '↓'}{Math.abs(kw.change_pct)}%
@@ -321,19 +412,19 @@ export default function TrendingPanel({ visible, onClose, onSearch, onSelectArti
                                                 className="text-[10px] text-gray-400 hover:text-gray-600 cursor-pointer leading-none"
                                                 onClick={(e) => { e.stopPropagation(); onSearch(kw.word); onClose(); }}
                                                 title="搜索此关键词">
-                                                🔍
+                                                搜
                                             </button>
                                             <button
                                                 className="text-[10px] text-indigo-400 hover:text-indigo-600 cursor-pointer leading-none"
                                                 onClick={(e) => { e.stopPropagation(); fetchInsight(kw.word); }}
                                                 title="AI 解读">
-                                                💡
+                                                AI
                                             </button>
                                             <button
                                                 className={`text-[10px] cursor-pointer leading-none ${compareKws.includes(kw.word) ? 'text-indigo-500 font-bold' : 'text-gray-300 hover:text-gray-500'}`}
                                                 onClick={(e) => { e.stopPropagation(); toggleCompareKw(kw.word); }}
                                                 title={compareKws.includes(kw.word) ? '取消对比' : '加入对比'}>
-                                                {compareKws.includes(kw.word) ? '📊✓' : '📊'}
+                                                {compareKws.includes(kw.word) ? '对比✓' : '对比'}
                                             </button>
                                         </div>
                                     </div>
@@ -350,7 +441,7 @@ export default function TrendingPanel({ visible, onClose, onSearch, onSelectArti
                 {tab === 'hot' && kwArticles && (
                     <div className="mt-4 pt-3 border-t border-gray-100">
                         <div className="flex items-center justify-between mb-2">
-                            <div className="text-[12px] text-gray-500 font-medium">📰 "{displayWord(kwArticles.keyword)}" 相关文章</div>
+                            <div className="text-[12px] text-gray-500 font-medium">"{displayWord(kwArticles.keyword)}" 相关文章</div>
                             <button className="text-[11px] text-gray-400 hover:text-gray-600 cursor-pointer"
                                 onClick={() => setKwArticles(null)}>关闭</button>
                         </div>
@@ -389,7 +480,7 @@ export default function TrendingPanel({ visible, onClose, onSearch, onSelectArti
 
                 {tab === 'hot' && dropped.length > 0 && (
                     <div className="mt-4 pt-3 border-t border-gray-100">
-                        <div className="text-[11px] text-gray-400 mb-2 font-medium">📉 已掉出热词榜</div>
+                        <div className="text-[11px] text-gray-400 mb-2 font-medium">已回落热词</div>
                         <div className="flex flex-wrap gap-1.5">
                             {dropped.slice(0, MAX_DROPPED_DISPLAY).map((w, i) => (
                                 <span key={w} className={`text-[11px] px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full ${i < 3 ? 'line-through decoration-gray-300' : ''}`}>
@@ -423,7 +514,7 @@ export default function TrendingPanel({ visible, onClose, onSearch, onSelectArti
                                             <span className="text-sm text-gray-800 font-medium truncate">{r.keyword}</span>
                                             <span className="flex items-center gap-0.5 shrink-0">
                                                 {keywords.find(k => k.word === r.keyword)?.is_new && <span className="text-[9px] bg-emerald-500 text-white px-1 rounded-full font-bold">新</span>}
-                                                {r.burst && <span className="text-[12px]">🔥</span>}
+                                                {r.burst && <span className="text-[9px] bg-red-500 text-white px-1 rounded-full font-bold">爆</span>}
                                             </span>
                                         </div>
                                         <div className="flex items-center gap-2 shrink-0">

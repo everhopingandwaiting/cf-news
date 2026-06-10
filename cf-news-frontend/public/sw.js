@@ -1,7 +1,20 @@
 self.addEventListener('install', () => self.skipWaiting());
-self.addEventListener('activate', () => self.clients.claim());
+self.addEventListener('activate', (event) => {
+    event.waitUntil((async () => {
+        const keys = await caches.keys();
+        await Promise.all(keys.map(key => caches.delete(key)));
+        await self.clients.claim();
+    })());
+});
 
-self.addEventListener('push', (event: any) => {
+self.addEventListener('fetch', (event) => {
+    const url = new URL(event.request.url);
+    if (url.origin === location.origin && url.pathname.startsWith('/api/')) {
+        event.respondWith(fetch(event.request));
+    }
+});
+
+self.addEventListener('push', (event) => {
     const data = event.data?.json() || {};
     const title = data.title || 'CF News';
     const options = {
@@ -13,7 +26,7 @@ self.addEventListener('push', (event: any) => {
     event.waitUntil(self.registration.showNotification(title, options));
 });
 
-self.addEventListener('notificationclick', (event: any) => {
+self.addEventListener('notificationclick', (event) => {
     event.notification.close();
     const url = event.notification.data?.url || '/';
     event.waitUntil(self.clients.openWindow(url));

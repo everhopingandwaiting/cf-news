@@ -3,7 +3,7 @@ import type { NewsItem, NewsSource, NewsComment, Pagination, User } from '../typ
 
 const API_BASE = '';
 
-const api = axios.create({ baseURL: API_BASE });
+const api = axios.create({ baseURL: API_BASE, timeout: 15000 });
 
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token');

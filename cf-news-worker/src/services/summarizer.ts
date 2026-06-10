@@ -66,6 +66,7 @@ export async function generateSummary(env: Bindings, item: { id?: number; title:
     const prompt = tmpl.replace('{{TEXT}}', combined);
 
     const order = await getProviderOrder(env);
+    const maxModels = await getMaxModelsPerProvider(env);
 
     for (const provider of order) {
         if (provider !== 'cloudflare') {
@@ -73,7 +74,7 @@ export async function generateSummary(env: Bindings, item: { id?: number; title:
             if (!info) continue;
         }
 
-        const models = await getModels(env, provider);
+        const models = (await getModels(env, provider)).slice(0, maxModels);
         if (models.length === 0) continue;
 
         let caller = PROVIDER_MAP[provider];
@@ -102,6 +103,12 @@ export async function generateSummaryForNews(env: Bindings, newsId: number, item
 }
 
 const SUMMARY_BATCH_SIZE = 10;
+const BATCH_FALLBACK_LIMIT = 3;
+
+async function getMaxModelsPerProvider(env: Bindings): Promise<number> {
+    const configured = await getConfigInt(env, 'ai_max_models_per_provider', 2);
+    return Math.min(Math.max(configured, 1), 5);
+}
 
 export async function generateBatchSummariesForNews(
     env: Bindings,
@@ -168,7 +175,7 @@ Return: [{"summary":"<article1 summary>"},{"summary":"<article2 summary>"},...]`
     }
 
     let count = 0;
-    for (const item of items) {
+    for (const item of items.slice(0, BATCH_FALLBACK_LIMIT)) {
         if (await generateSummaryForNews(env, item.id, item)) count++;
     }
     return count;
@@ -208,8 +215,9 @@ export async function generateAITake(env: Bindings, newsId: number, item: { titl
             const info = await getProviderInfo(env, provider);
             if (!info) continue;
         }
-        const models = await getModels(env, provider);
-        if (models.length === 0) continue;
+            const maxModels = await getMaxModelsPerProvider(env);
+            const models = (await getModels(env, provider)).slice(0, maxModels);
+            if (models.length === 0) continue;
 
         for (const model of models) {
             let text: string | null = null;
@@ -290,8 +298,9 @@ export async function generatePerspectives(env: Bindings, newsId: number): Promi
                 const info = await getProviderInfo(env, provider);
                 if (!info) continue;
             }
-            const models = await getModels(env, provider);
-            if (models.length === 0) continue;
+        const maxModels = await getMaxModelsPerProvider(env);
+        const models = (await getModels(env, provider)).slice(0, maxModels);
+        if (models.length === 0) continue;
 
             let caller: any;
             if (provider !== 'cloudflare') {

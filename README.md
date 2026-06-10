@@ -38,7 +38,7 @@ AI-generated summary of today's top news, sorted by time with language markers (
 - **AI Q&A** — Ask natural language questions about news
 - **Daily digest** — Auto-generated daily news summary with history browser
 - **Related articles** — Keyword-matched related articles with one-click navigation
-- **Trending keywords** — Real-time trending panel with word cloud, burst detection, new keyword badges, dropped keywords, AI insights, and hourly source/category distribution
+- **Trending themes** — Real-time trend panel with topic clusters, representative articles, word cloud, burst detection, AI insights, and hourly source/category distribution
 - **Reader mode** — Full article content extraction with dark/light themes, reading time estimate, and rich typography
 - **In-app source browsing** — Browse original article in an iframe, or take a screenshot via Cloudflare Browser Rendering
 - **TTS speed control** — Adjustable playback speed (0.5x–1.5x) for voice narration
@@ -283,6 +283,7 @@ cf-news/
 | GET | `/api/news/:id` | Get news detail |
 | GET | `/api/news/sources/list` | List RSS sources |
 | GET | `/api/news/trending?hours=24` | Trending keywords (sources, burst, change, is_new, dropped) |
+| GET | `/api/news/trending/themes?hours=24` | Trending topic clusters with representative articles |
 | GET | `/api/news/trending/topics?hours=24` | Trending topics time series |
 | GET | `/api/news/trending/categories?hours=24` | Category distribution of trending content |
 | GET | `/api/news/trending/compare?keywords=a,b,c&hours=48` | Multi-keyword time series comparison |

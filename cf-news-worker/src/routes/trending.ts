@@ -7,6 +7,51 @@ import { trendingTopics, newsItems, newsSources } from '../db/schema';
 
 const trending = new Hono<{ Bindings: Bindings }>();
 
+interface ThemeKeyword {
+    keyword: string;
+    total: number;
+    latest: number;
+    previous: number;
+}
+
+function escapeThemeLike(value: string): string {
+    return value.replace(/_/g, ' ').replace(/[%_\\]/g, '\\$&');
+}
+
+function normalizeThemeKeyword(keyword: string): string {
+    return keyword.replace(/_/g, ' ').trim().toLowerCase();
+}
+
+function parseThemeHours(value: string | undefined): number {
+    const hours = parseInt(value || '24', 10);
+    return Number.isFinite(hours) && hours >= 1 && hours <= 168 ? hours : 24;
+}
+
+function buildThemeClusters(keywords: ThemeKeyword[]) {
+    const clusters: { label: string; keywords: ThemeKeyword[]; total: number; latest: number; previous: number }[] = [];
+    for (const kw of keywords) {
+        const normalized = normalizeThemeKeyword(kw.keyword);
+        let cluster = clusters.find(c => {
+            const label = normalizeThemeKeyword(c.label);
+            return label.includes(normalized) || normalized.includes(label)
+                || c.keywords.some(existing => {
+                    const e = normalizeThemeKeyword(existing.keyword);
+                    return e.includes(normalized) || normalized.includes(e);
+                });
+        });
+        if (!cluster) {
+            cluster = { label: kw.keyword, keywords: [], total: 0, latest: 0, previous: 0 };
+            clusters.push(cluster);
+        }
+        cluster.keywords.push(kw);
+        cluster.total += kw.total;
+        cluster.latest += kw.latest;
+        cluster.previous += kw.previous;
+        cluster.label = cluster.keywords.slice().sort((a, b) => b.total - a.total)[0].keyword;
+    }
+    return clusters.sort((a, b) => b.total - a.total);
+}
+
 // GET /trending/topics — Time series of trending topics (from AI-populated table)
 trending.get('/trending/topics', async (c) => {
     const hours = parseInt(c.req.query('hours') || '', 10);
@@ -161,6 +206,87 @@ trending.get('/trending', async (c) => {
     } catch (error) {
         console.error('trending error:', error);
         return c.json({ trending: [] });
+    }
+});
+
+// GET /trending/themes — Topic clusters with representative news
+trending.get('/trending/themes', async (c) => {
+    const hours = parseThemeHours(c.req.query('hours'));
+    const db = getDb(c.env);
+    try {
+        const cutoff = shanghaiCutoff(hours);
+        const rows = await db.select({
+            keyword: trendingTopics.keyword,
+            date_hour: trendingTopics.date_hour,
+            count: trendingTopics.count,
+        }).from(trendingTopics)
+            .where(gte(trendingTopics.date_hour, cutoff))
+            .orderBy(desc(trendingTopics.date_hour), desc(trendingTopics.count))
+            .limit(1000)
+            .all();
+
+        if (rows.length === 0) return c.json({ themes: [] });
+
+        const byKeyword = new Map<string, { date_hour: string; count: number }[]>();
+        for (const row of rows) {
+            if (!byKeyword.has(row.keyword)) byKeyword.set(row.keyword, []);
+            byKeyword.get(row.keyword)!.push({ date_hour: row.date_hour, count: row.count ?? 0 });
+        }
+
+        const keywordStats: ThemeKeyword[] = Array.from(byKeyword.entries())
+            .map(([keyword, points]) => {
+                const sorted = points.sort((a, b) => a.date_hour.localeCompare(b.date_hour));
+                const mid = Math.max(1, Math.floor(sorted.length / 2));
+                const previous = sorted.slice(0, mid).reduce((s, p) => s + p.count, 0);
+                const latest = sorted.slice(mid).reduce((s, p) => s + p.count, 0);
+                return { keyword, total: previous + latest, latest, previous };
+            })
+            .sort((a, b) => b.total - a.total)
+            .slice(0, 30);
+
+        const clusters = buildThemeClusters(keywordStats).slice(0, 8);
+        const themes = [];
+
+        for (const cluster of clusters) {
+            const topKeywords = cluster.keywords.slice(0, 4).map(k => k.keyword);
+            const likeConditions = topKeywords.map(kw => {
+                const escaped = escapeThemeLike(kw);
+                return sql`(n.title LIKE ${'%' + escaped + '%'} ESCAPE '\\' OR n.description LIKE ${'%' + escaped + '%'} ESCAPE '\\')`;
+            });
+            const matchCondition = sql.join(likeConditions, sql` OR `);
+            const articles = await db.all<any>(sql`
+                SELECT n.id, n.source_id, n.title, n.url, n.description, n.image_url, n.category,
+                       n.published_at, n.created_at, s.name as source_name, s.language as source_lang,
+                       ns.summary as ai_summary, nt.take as ai_take
+                FROM news_items n
+                LEFT JOIN news_sources s ON n.source_id = s.id
+                LEFT JOIN news_summaries ns ON ns.news_id = n.id
+                LEFT JOIN news_ai_take nt ON nt.news_id = n.id
+                WHERE n.is_deleted = 0
+                  AND n.created_at >= datetime('now', '-' || ${hours} || ' hours')
+                  AND (${matchCondition})
+                ORDER BY COALESCE(n.published_at, n.created_at) DESC
+                LIMIT 5
+            `);
+            const changePct = cluster.previous > 0
+                ? Math.round(((cluster.latest - cluster.previous) / cluster.previous) * 100)
+                : (cluster.latest > 0 ? 100 : 0);
+            themes.push({
+                label: cluster.label,
+                total: cluster.total,
+                latest: cluster.latest,
+                previous: cluster.previous,
+                change_pct: changePct,
+                status: changePct >= 50 ? 'rising' : changePct <= -30 ? 'falling' : 'steady',
+                keywords: topKeywords,
+                articles,
+            });
+        }
+
+        return c.json({ themes });
+    } catch (error) {
+        console.error('trending/themes error:', error);
+        return c.json({ themes: [] });
     }
 });
 

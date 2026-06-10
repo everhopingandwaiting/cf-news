@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, uniqueIndex, primaryKey } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, uniqueIndex, primaryKey, index } from 'drizzle-orm/sqlite-core';
 
 export const users = sqliteTable('users', {
     id: integer('id').primaryKey(),
@@ -129,7 +129,7 @@ export const aiCallLog = sqliteTable('ai_call_log', {
     error: text('error'),
     created_at: text('created_at').default('CURRENT_TIMESTAMP'),
 }, (table) => ({
-    newsIdx: uniqueIndex('idx_ai_call_news').on(table.news_id),
+    newsIdx: index('idx_ai_call_news').on(table.news_id),
 }));
 
 export const providers = sqliteTable('providers', {

@@ -18,20 +18,20 @@ const DailyDigest = lazy(() => import('../components/DailyDigest'));
 const NewsQA = lazy(() => import('../components/NewsQA'));
 
 const CATEGORIES = [
-  { key: 'all', label: '全部', emoji: '✦' },
-  { key: 'ai', label: 'AI 动态', emoji: '⟡' },
-  { key: 'tech', label: '科技', emoji: '⚙' },
-  { key: 'energy', label: '新能源', emoji: '⚡' },
-  { key: 'stocks', label: '股票', emoji: '📈' },
-  { key: 'funds', label: '基金', emoji: '💰' },
-  { key: 'science', label: '科学', emoji: '🔬' },
-  { key: 'health', label: '健康', emoji: '🏥' },
-  { key: 'news', label: '新闻', emoji: '◇' },
-  { key: 'finance', label: '财经', emoji: '₿' },
-  { key: 'auto', label: '汽车', emoji: '🚗' },
-  { key: 'sports', label: '体育', emoji: '⚽' },
-  { key: 'military', label: '军事', emoji: '⚔' },
-  { key: 'entertainment', label: '娱乐', emoji: '✦' },
+  { key: 'all', label: '全部' },
+  { key: 'ai', label: 'AI 动态' },
+  { key: 'tech', label: '科技' },
+  { key: 'energy', label: '新能源' },
+  { key: 'stocks', label: '股票' },
+  { key: 'funds', label: '基金' },
+  { key: 'science', label: '科学' },
+  { key: 'health', label: '健康' },
+  { key: 'news', label: '新闻' },
+  { key: 'finance', label: '财经' },
+  { key: 'auto', label: '汽车' },
+  { key: 'sports', label: '体育' },
+  { key: 'military', label: '军事' },
+  { key: 'entertainment', label: '娱乐' },
 ];
 
 export default function Home() {
@@ -172,7 +172,18 @@ export default function Home() {
     try {
       const data = await getNews({ category: category === 'all' ? undefined : category, source_id: sourceId ?? undefined, search: search || undefined, lang, has_summary: filterSummary, page: pg || page, limit: 20 });
       setNews(data.news); setPagination(data.pagination); return data.news;
-    } catch { showToast('加载新闻失败', 'error'); return []; } finally { setLoading(false); }
+    } catch (err: any) {
+      const status = err?.response?.status;
+      const message = status === 429
+        ? '请求过快，请稍后再试'
+        : status
+          ? `加载新闻失败 (${status})`
+          : err?.code === 'ECONNABORTED'
+            ? '加载新闻超时'
+            : '加载新闻失败，请刷新重试';
+      showToast(message, 'error');
+      return [];
+    } finally { setLoading(false); }
   }, [category, sourceId, search, filterSummary, page, lang]);
 
   useEffect(() => {
@@ -308,13 +319,13 @@ export default function Home() {
         clipboardHasNew={clipboard.hasNewData}
         onClearClipboardFlag={clipboard.clearNewDataFlag}
       />
-      {hasNewNews && <div className="bg-gradient-to-r from-indigo-500 to-purple-500 text-white px-5 py-3 rounded-lg mb-4 cursor-pointer font-medium text-sm text-center shadow animate-pulse hover:opacity-95" onClick={() => { setHasNewNews(false); setPage(1); loadNews(1); }}>⟡ 有新新闻，点击刷新</div>}
+      {hasNewNews && <div className="bg-indigo-500 text-white px-5 py-3 rounded-lg mb-4 cursor-pointer font-medium text-sm text-center shadow animate-pulse hover:bg-indigo-600" onClick={() => { setHasNewNews(false); setPage(1); loadNews(1); }}>有新新闻，点击刷新</div>}
       <Suspense fallback={null}><DailyDigest digest={digestData} loading={digestLoading} collapsed={digestCollapsed} regenerating={digestRegenerating} dates={digestDates} onToggle={() => setDigestCollapsed(!digestCollapsed)} onRegenerate={handleRegenerateDigest} onDateChange={handleDigestDateChange} /></Suspense>
       <CategoryNav categories={CATEGORIES} active={category} onSelect={k => { setCategory(k); setPage(1); }} />
       <div className="flex gap-2.5 mb-5 items-center flex-wrap">
-        <button className="px-4 py-2.5 rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 hover:border-indigo-500 hover:text-indigo-500 transition disabled:opacity-40 disabled:cursor-not-allowed" onClick={handleSummarize} disabled={summarizing}>{summarizing ? '⟡ 生成中...' : '⟡ AI 摘要'}</button>
-        <button className={`px-4 py-2.5 rounded-lg text-[13px] font-medium border transition ${filterSummary ? 'bg-indigo-500 text-white border-transparent' : 'bg-transparent text-gray-600 border-gray-200 hover:bg-gray-50'}`} onClick={() => { setFilterSummary(filterSummary ? undefined : '1'); setPage(1); }}>⟡ 有摘要</button>
-        <button className="px-4 py-2.5 rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 hover:border-orange-400 hover:text-orange-500 transition" onClick={() => setShowTrending(true)}>⟡ 趋势</button>
+        <button className="px-4 py-2.5 rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 hover:border-indigo-500 hover:text-indigo-500 transition disabled:opacity-40 disabled:cursor-not-allowed" onClick={handleSummarize} disabled={summarizing}>{summarizing ? '生成中...' : 'AI 摘要'}</button>
+        <button className={`px-4 py-2.5 rounded-lg text-[13px] font-medium border transition ${filterSummary ? 'bg-indigo-500 text-white border-transparent' : 'bg-transparent text-gray-600 border-gray-200 hover:bg-gray-50'}`} onClick={() => { setFilterSummary(filterSummary ? undefined : '1'); setPage(1); }}>有摘要</button>
+        <button className="px-4 py-2.5 rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 hover:border-orange-400 hover:text-orange-500 transition" onClick={() => setShowTrending(true)}>趋势</button>
       </div>
       {showManager && token && <SourceManager token={token} onClose={() => setShowManager(false)} />}
       {showClipboard && token && <Suspense fallback={null}><ClipboardShare
@@ -363,8 +374,8 @@ export default function Home() {
       <NewsDetailModal item={selectedNews} token={token} onClose={closeNews} onOpenUrl={url => window.open(url, '_blank')} onSummaryGenerated={() => { loadNews(); }} />
       <Footer />
       {toast && <div className={`fixed bottom-5 right-5 px-5 py-3 rounded-lg text-[13px] shadow-lg z-50 animate-[slideIn_0.2s_ease] ${toast.type === 'success' ? 'bg-white border border-emerald-500 text-gray-900' : 'bg-white border border-red-500 text-gray-900'}`}>{toast.msg}</div>}
-      {loginToast && <div className="fixed top-4 right-4 px-4 py-2.5 rounded-lg text-[13px] shadow-lg z-50 animate-[slideIn_0.2s_ease] bg-white border border-amber-400 text-amber-700 flex items-center gap-2">
-        <span>📋</span> {loginToast}
+      {loginToast && <div className="fixed top-4 right-4 px-4 py-2.5 rounded-lg text-[13px] shadow-lg z-50 animate-[slideIn_0.2s_ease] bg-white border border-amber-400 text-amber-700">
+        {loginToast}
       </div>}
     </div>
   );

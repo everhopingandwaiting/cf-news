@@ -30,7 +30,7 @@
 - **AI 问答** — 自然语言提问，AI 基于当日新闻回答
 - **今日要闻** — AI 每日自动汇总，按时间排序，携带语言标记和发布时间，支持历史浏览
 - **相关推荐** — 标题关键词匹配，点击一键跳转
-- **趋势热词** — 趋势面板含词云、突发检测、新词标注、已掉出热词榜、AI 解读，支持多关键词对比、来源/分类每小时分布
+- **趋势主题** — 趋势面板含主题聚合、代表新闻、词云、突发检测、AI 解读，支持多关键词对比、来源/分类每小时分布
 - **阅读模式** — 全文提取，深/浅色主题，阅读时间估算，完善的排版（标题、图片、表格、代码块）
 - **站内浏览** — 内嵌 iframe 查看原文，或通过 Browser Rendering 截图查看
 - **语音速度** — 播报速度可调（0.5x–1.5x）
@@ -274,6 +274,7 @@ cf-news/
 | GET | `/api/news/:id` | 获取新闻详情 |
 | GET | `/api/news/sources/list` | 获取 RSS 源列表 |
 | GET | `/api/news/trending?hours=24` | 趋势热词（含来源/突发/变化/新词/掉出榜） |
+| GET | `/api/news/trending/themes?hours=24` | 趋势主题聚合与代表新闻 |
 | GET | `/api/news/trending/topics?hours=24` | 热点追踪时间序列 |
 | GET | `/api/news/trending/categories?hours=24` | 分类分布 |
 | GET | `/api/news/trending/compare?keywords=a,b,c&hours=48` | 多关键词时间序列对比 |
