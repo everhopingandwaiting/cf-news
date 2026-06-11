@@ -49,6 +49,8 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
   const [perspectives, setPerspectives] = useState<PerspectiveReport | null>(null);
   const [perspectiveLoading, setPerspectiveLoading] = useState(false);
   const [savedLater, setSavedLater] = useState(false);
+  const [ttsLoading, setTtsLoading] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const shareRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { setCurrentItem(item); setTranslated(null); setTakeError(false); setError(null); setReaderContent(null); setSourceView(null); setCredibility(null); setPerspectives(null); setSavedLater(false); if (screenshotUrl) { URL.revokeObjectURL(screenshotUrl); setScreenshotUrl(null); } }, [item]);
@@ -133,9 +135,15 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
     setTranslating(false);
   }
 
-  async function handlePlay() {
+  function handlePlay() {
     if (!currentItem) return;
-    if (speechSynthesis.speaking) {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+      setPlaying(false);
+      return;
+    }
+    if ('speechSynthesis' in window && speechSynthesis.speaking) {
       speechSynthesis.cancel();
       setPlaying(false);
       return;
@@ -143,13 +151,49 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
     const text = readerContent
       ? stripHtml(readerContent)
       : stripHtml(currentItem.ai_summary || currentItem.title);
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = currentItem.source_lang === 'zh' ? 'zh-CN' : 'en-US';
-    utterance.rate = ttsSpeed;
-    utterance.onend = () => setPlaying(false);
-    utterance.onerror = () => setPlaying(false);
-    setPlaying(true);
-    speechSynthesis.speak(utterance);
+    if (!text.trim()) {
+      setError('没有可播报的内容，请先生成 AI 摘要');
+      return;
+    }
+    if ('speechSynthesis' in window) {
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = currentItem.source_lang === 'zh' ? 'zh-CN' : 'en-US';
+      utterance.rate = ttsSpeed;
+      utterance.onend = () => setPlaying(false);
+      utterance.onerror = () => {
+        setPlaying(false);
+        playTtsApi(text);
+      };
+      try {
+        setPlaying(true);
+        speechSynthesis.speak(utterance);
+        return;
+      } catch {
+        speechSynthesis.cancel();
+      }
+    }
+    playTtsApi(text);
+  }
+
+  async function playTtsApi(text: string) {
+    try {
+      setTtsLoading(true);
+      setPlaying(true);
+      const res = await fetch(`/api/tts?text=${encodeURIComponent(text.slice(0, 500))}`);
+      if (!res.ok) throw new Error('TTS failed');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      audio.onended = () => { setPlaying(false); audioRef.current = null; URL.revokeObjectURL(url); };
+      audio.onerror = () => { setPlaying(false); audioRef.current = null; URL.revokeObjectURL(url); setError('语音播报出错'); };
+      await audio.play();
+    } catch {
+      setPlaying(false);
+      setError('语音播报失败');
+    } finally {
+      setTtsLoading(false);
+    }
   }
 
   async function handleReadFull() {
@@ -257,8 +301,8 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
         <div className="flex gap-4 text-[13px] text-gray-400 mb-5 items-center">
           <span>{date}</span>
           <span>{currentItem.source_lang === 'zh' ? '中文' : '英文'}</span>
-          <button className="hover:text-indigo-500 transition cursor-pointer" onClick={handlePlay}>
-            {playing ? '停止播报' : '播报'}
+          <button className="hover:text-indigo-500 transition cursor-pointer disabled:opacity-40" onClick={handlePlay} disabled={ttsLoading}>
+            {ttsLoading ? '加载中...' : playing ? '停止播报' : '播报'}
           </button>
           <select className="text-[11px] bg-transparent border border-gray-200 rounded px-1 py-0.5 cursor-pointer" value={ttsSpeed} onChange={e => setTtsSpeed(Number(e.target.value))}>
             <option value={0.5}>0.5x</option>

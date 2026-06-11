@@ -86,6 +86,9 @@ app.route('/api/admin', adminRoutes);
 app.route('/api/ai', aiRoutes);
 app.route('/api', operationRoutes);
 
+import ttsRoutes from './routes/tts';
+app.route('/api', ttsRoutes);
+
 app.get('/api/health', (c) => {
     return c.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
