@@ -12,6 +12,12 @@ interface Message {
   content: string;
 }
 
+const QUICK_QUESTIONS = [
+  '今天 AI 圈有什么大事？',
+  '今天有哪些值得关注的国际新闻？',
+  '今天科技和财经有什么交集？',
+];
+
 export default function NewsQA({ visible, onClose, token }: Props) {
   const [messages, setMessages] = useState<Message[]>([
     { role: 'ai', content: '你好！我是 AI 新闻助手，你可以问我关于新闻的任何问题。' },
@@ -33,8 +39,8 @@ export default function NewsQA({ visible, onClose, token }: Props) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, streaming]);
 
-  async function handleSend() {
-    const q = input.trim();
+  async function handleSend(nextQuestion?: string) {
+    const q = (nextQuestion ?? input).trim();
     if (!q || loading || streaming) return;
 
     if (!token) {
@@ -168,6 +174,18 @@ export default function NewsQA({ visible, onClose, token }: Props) {
 
         {/* Input */}
         <div className="px-5 py-3 border-t border-gray-100 shrink-0">
+          <div className="mb-2 flex gap-1.5 overflow-x-auto">
+            {QUICK_QUESTIONS.map(question => (
+              <button
+                key={question}
+                className="shrink-0 rounded-full border border-gray-200 bg-white px-2.5 py-1 text-[11px] text-gray-500 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-600"
+                onClick={() => handleSend(question)}
+                disabled={loading || streaming}
+              >
+                {question}
+              </button>
+            ))}
+          </div>
           <div className="flex gap-2">
             <input
               ref={inputRef}
@@ -181,7 +199,7 @@ export default function NewsQA({ visible, onClose, token }: Props) {
             />
             <button
               className="px-5 py-2.5 bg-indigo-500 text-white rounded-lg text-[13px] font-medium hover:bg-indigo-600 transition disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-              onClick={handleSend}
+              onClick={() => handleSend()}
               disabled={loading || streaming || !input.trim()}
             >
               {loading ? '...' : '发送'}

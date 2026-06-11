@@ -69,3 +69,38 @@ export interface RelatedArticle {
   score: number;
   item?: { metadata?: { description?: string; image_url?: string } };
 }
+
+export interface TimelineEvent extends NewsItem {
+  time: string;
+  stage: 'first' | 'update' | 'latest';
+}
+
+export interface NewsRegion {
+  code: string;
+  name: string;
+  count: number;
+  articles: NewsItem[];
+}
+
+export interface CredibilityReport {
+  score: number;
+  level: 'strong' | 'medium' | 'weak';
+  source_count: number;
+  related_count: number;
+  languages: string[];
+  signals: string[];
+  articles: NewsItem[];
+}
+
+export interface RadarAlert {
+  id: number;
+  keyword: string;
+  created_at: string;
+  count: number;
+  articles: NewsItem[];
+}
+
+export interface PerspectiveReport {
+  related: { id: number; source: string; title: string }[];
+  perspective: string;
+}

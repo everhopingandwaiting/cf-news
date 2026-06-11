@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import type { NewsItem } from '../types';
-import { triggerSummarizeOne, getNewsItem, triggerTake } from '../api/client';
+import type { CredibilityReport, NewsItem, PerspectiveReport } from '../types';
+import { addReadLater, getCredibility, getPerspectives, triggerSummarizeOne, getNewsItem, triggerTake } from '../api/client';
 import Comments from './Comments';
 import RelatedArticles from './RelatedArticles';
 import { stripHtml, estimateReadingTime, sanitizeHtml, formatTime } from '../utils/newsFormat';
@@ -44,9 +44,14 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
   const [screenshotUrl, setScreenshotUrl] = useState<string | null>(null);
   const [screenshotLoading, setScreenshotLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [credibility, setCredibility] = useState<CredibilityReport | null>(null);
+  const [credLoading, setCredLoading] = useState(false);
+  const [perspectives, setPerspectives] = useState<PerspectiveReport | null>(null);
+  const [perspectiveLoading, setPerspectiveLoading] = useState(false);
+  const [savedLater, setSavedLater] = useState(false);
   const shareRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { setCurrentItem(item); setTranslated(null); setTakeError(false); setError(null); setReaderContent(null); setSourceView(null); if (screenshotUrl) { URL.revokeObjectURL(screenshotUrl); setScreenshotUrl(null); } }, [item]);
+  useEffect(() => { setCurrentItem(item); setTranslated(null); setTakeError(false); setError(null); setReaderContent(null); setSourceView(null); setCredibility(null); setPerspectives(null); setSavedLater(false); if (screenshotUrl) { URL.revokeObjectURL(screenshotUrl); setScreenshotUrl(null); } }, [item]);
 
   // Share dropdown: click outside to close
   useEffect(() => {
@@ -194,6 +199,41 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
     }
   }
 
+  async function handleCredibility() {
+    if (!currentItem) return;
+    if (credibility) { setCredibility(null); return; }
+    setCredLoading(true);
+    try {
+      setCredibility(await getCredibility(currentItem.id));
+    } catch {
+      setError('可信度分析加载失败');
+    }
+    setCredLoading(false);
+  }
+
+  async function handlePerspectives() {
+    if (!currentItem) return;
+    if (perspectives) { setPerspectives(null); return; }
+    setPerspectiveLoading(true);
+    try {
+      setPerspectives(await getPerspectives(currentItem.id));
+    } catch {
+      setError('观点光谱生成失败，可能缺少同事件多来源报道');
+    }
+    setPerspectiveLoading(false);
+  }
+
+  async function handleSaveLater() {
+    if (!currentItem) return;
+    if (!token) { setError('请先登录以使用稍后读'); return; }
+    try {
+      await addReadLater(currentItem.id);
+      setSavedLater(true);
+    } catch {
+      setError('加入稍后读失败');
+    }
+  }
+
   if (!currentItem) return null;
 
   const itemId = currentItem.id;
@@ -203,7 +243,7 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
   const shareUrl = `${window.location.origin}/share/${itemId}`;
 
   return (
-    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center" onClick={e => e.target === e.currentTarget && onClose()}>
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[60] flex items-center justify-center" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal-content bg-white rounded-lg p-8 w-full max-w-[640px] max-h-[85vh] border border-gray-200 shadow-xl animate-[slideUp_0.25s_ease] relative overflow-y-auto">
         <button className="absolute top-4 right-4 w-9 h-9 rounded-full bg-gray-100 border border-gray-200 text-gray-400 cursor-pointer text-base flex items-center justify-center hover:bg-gray-200 hover:text-gray-600 transition" onClick={onClose}>✕</button>
 
@@ -276,6 +316,46 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
           </div>
         )}
 
+        {credibility && (
+          <div className="mb-5 rounded-lg border border-emerald-200 bg-emerald-50 px-5 py-4">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <div className="text-[13px] font-semibold text-emerald-700">可信度参考</div>
+              <div className="text-[12px] font-semibold text-emerald-700">{credibility.score}/100</div>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {credibility.signals.map(signal => (
+                <span key={signal} className="rounded-full bg-white px-2 py-0.5 text-[11px] text-emerald-700 ring-1 ring-emerald-100">{signal}</span>
+              ))}
+            </div>
+            {credibility.articles.length > 0 && (
+              <div className="mt-3 space-y-1.5">
+                {credibility.articles.slice(0, 3).map(article => (
+                  <button key={article.id} className="block w-full rounded-md bg-white px-2.5 py-2 text-left text-[12px] text-gray-700 hover:bg-emerald-100" onClick={() => handleRelatedSelect(article.id)}>
+                    <span className="line-clamp-1">{article.title}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {perspectives && (
+          <div className="mb-5 rounded-lg border border-indigo-200 bg-indigo-50 px-5 py-4">
+            <div className="mb-2 text-[13px] font-semibold text-indigo-700">观点光谱</div>
+            <p className="text-sm leading-relaxed text-gray-700">{stripHtml(perspectives.perspective)}</p>
+            {perspectives.related.length > 0 && (
+              <div className="mt-3 space-y-1.5">
+                {perspectives.related.slice(0, 4).map(article => (
+                  <button key={article.id} className="block w-full rounded-md bg-white px-2.5 py-2 text-left text-[12px] text-gray-700 hover:bg-indigo-100" onClick={() => handleRelatedSelect(article.id)}>
+                    <span className="mr-2 text-gray-400">{article.source || '未知来源'}</span>
+                    <span className="line-clamp-1">{article.title}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {currentItem!.description && !readerContent && <div className="text-sm text-gray-600 leading-relaxed mb-4 news-content" dangerouslySetInnerHTML={{ __html: sanitizeHtml(currentItem!.description) }} />}
 
         {readerContent && (
@@ -335,6 +415,15 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
           </button>
           <button className="px-5 py-2.5 rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 transition" onClick={copyLink}>
             {copied ? '✓ 已复制' : '⇋ 复制链接'}
+          </button>
+          <button className="px-5 py-2.5 rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 transition disabled:opacity-40" onClick={handleCredibility} disabled={credLoading}>
+            {credLoading ? '分析中...' : credibility ? '关闭可信度' : '可信度'}
+          </button>
+          <button className="px-5 py-2.5 rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 transition disabled:opacity-40" onClick={handlePerspectives} disabled={perspectiveLoading}>
+            {perspectiveLoading ? '生成中...' : perspectives ? '关闭观点' : '观点光谱'}
+          </button>
+          <button className={`px-5 py-2.5 rounded-lg text-[13px] font-medium border transition ${savedLater ? 'border-indigo-200 bg-indigo-50 text-indigo-600' : 'border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50'}`} onClick={handleSaveLater}>
+            {savedLater ? '已稍后读' : '稍后读'}
           </button>
           <div className="relative" ref={shareRef}>
             <button className="px-5 py-2.5 rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 transition" onClick={() => setShowShare(!showShare)}>↗ 分享到</button>

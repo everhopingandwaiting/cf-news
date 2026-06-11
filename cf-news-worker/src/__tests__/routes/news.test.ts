@@ -138,4 +138,61 @@ describe('News API', () => {
     expect(body.error).toBeTruthy();
   });
 
+  it('GET /api/news/timeline - returns ordered events for a keyword', async () => {
+    await db.seed('news_sources', [{ id: 30, name: 'Timeline Source', feed_url: 'https://timeline/rss', category: 'news', language: 'en' }]);
+    await db.seed('news_items', [
+      { id: 101, source_id: 30, title: 'AI regulation first update', url: 'https://timeline/1', description: 'AI regulation in US', category: 'news', published_at: new Date(Date.now() - 2 * 3600000).toISOString(), created_at: new Date().toISOString().substring(0, 19).replace('T', ' '), is_deleted: 0 },
+      { id: 102, source_id: 30, title: 'AI regulation latest update', url: 'https://timeline/2', description: 'AI regulation in US', category: 'news', published_at: new Date(Date.now() - 1 * 3600000).toISOString(), created_at: new Date().toISOString().substring(0, 19).replace('T', ' '), is_deleted: 0 },
+      { id: 103, source_id: 30, title: 'AI regulation old update', url: 'https://timeline/3', description: 'AI regulation in US', category: 'news', published_at: new Date(Date.now() - 7 * 24 * 3600000).toISOString(), created_at: new Date().toISOString().substring(0, 19).replace('T', ' '), is_deleted: 0 },
+    ]);
+
+    const { status, body } = await request(app, db, '/api/news/timeline?keyword=AI%20regulation&hours=48');
+    expect(status).toBe(200);
+    expect(body.keyword).toBe('AI regulation');
+    expect(body.events.map((event: any) => event.id)).toEqual([102, 101]);
+    expect(body.events[0].stage).toBe('latest');
+    expect(body.events[1].stage).toBe('first');
+  });
+
+  it('GET /api/news/map - groups articles by inferred region', async () => {
+    await db.seed('news_sources', [{ id: 31, name: 'Map Source', feed_url: 'https://map/rss', category: 'news', language: 'zh' }]);
+    await db.seed('news_items', [
+      { id: 111, source_id: 31, title: '北京发布 AI 政策', url: 'https://map/1', description: '中国科技新闻', category: 'tech', created_at: new Date().toISOString().substring(0, 19).replace('T', ' '), is_deleted: 0 },
+    ]);
+
+    const { status, body } = await request(app, db, '/api/news/map?hours=48');
+    expect(status).toBe(200);
+    expect(body.regions.some((r: any) => r.code === 'CN')).toBe(true);
+  });
+
+  it('GET /api/news/fresh-view - excludes requested categories', async () => {
+    await db.seed('news_sources', [{ id: 32, name: 'Fresh Source', feed_url: 'https://fresh/rss', category: 'health', language: 'zh' }]);
+    await db.seed('news_items', [
+      { id: 121, source_id: 32, title: 'Health update', url: 'https://fresh/1', description: 'Health', category: 'health', created_at: new Date().toISOString().substring(0, 19).replace('T', ' '), is_deleted: 0 },
+      { id: 122, source_id: 32, title: 'Tech update', url: 'https://fresh/2', description: 'Tech', category: 'tech', created_at: new Date().toISOString().substring(0, 19).replace('T', ' '), is_deleted: 0 },
+    ]);
+
+    const { status, body } = await request(app, db, '/api/news/fresh-view?exclude=tech&limit=5');
+    expect(status).toBe(200);
+    expect(body.recommendations.length).toBeGreaterThan(0);
+    expect(body.recommendations.every((item: any) => item.category !== 'tech')).toBe(true);
+  });
+
+  it('GET /api/news/:id/credibility - returns corroboration signals', async () => {
+    await db.seed('news_sources', [
+      { id: 33, name: 'Cred Source A', feed_url: 'https://cred/a', category: 'news', language: 'en' },
+      { id: 34, name: 'Cred Source B', feed_url: 'https://cred/b', category: 'news', language: 'zh' },
+    ]);
+    await db.seed('news_items', [
+      { id: 131, source_id: 33, title: 'NVIDIA announces AI chip', url: 'https://cred/1', description: 'AI chip launch', category: 'tech', created_at: new Date().toISOString().substring(0, 19).replace('T', ' '), is_deleted: 0 },
+      { id: 132, source_id: 34, title: 'NVIDIA AI chip released', url: 'https://cred/2', description: 'AI chip related report', category: 'tech', created_at: new Date().toISOString().substring(0, 19).replace('T', ' '), is_deleted: 0 },
+    ]);
+
+    const { status, body } = await request(app, db, '/api/news/131/credibility');
+    expect(status).toBe(200);
+    expect(typeof body.score).toBe('number');
+    expect(body.related_count).toBeGreaterThan(0);
+    expect(Array.isArray(body.signals)).toBe(true);
+  });
+
 });

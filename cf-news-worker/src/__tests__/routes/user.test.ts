@@ -102,4 +102,62 @@ describe('User Settings API', () => {
     const { status } = await request(app, db, '/api/user/push/unsubscribe', { method: 'DELETE', body: {} });
     expect(status).toBe(401);
   });
+
+  it('read-later endpoints require auth and manage saved items', async () => {
+    await db.seed('news_sources', [{ id: 50, name: 'Later Source', feed_url: 'https://later/rss', category: 'tech', language: 'en' }]);
+    await db.seed('news_items', [{ id: 501, source_id: 50, title: 'Read later story', url: 'https://later/1', category: 'tech', is_deleted: 0 }]);
+
+    const unauth = await request(app, db, '/api/user/read-later');
+    expect(unauth.status).toBe(401);
+
+    const added = await request(app, db, '/api/user/read-later/501', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(added.status).toBe(201);
+
+    const listed = await request(app, db, '/api/user/read-later', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(listed.status).toBe(200);
+    expect(listed.body.items.some((item: any) => item.id === 501)).toBe(true);
+
+    const removed = await request(app, db, '/api/user/read-later/501', {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(removed.status).toBe(200);
+  });
+
+  it('radar endpoints manage keywords and matching articles', async () => {
+    await db.seed('news_sources', [{ id: 51, name: 'Radar Source', feed_url: 'https://radar/rss', category: 'tech', language: 'en' }]);
+    await db.seed('news_items', [{ id: 511, source_id: 51, title: 'Cloudflare launches new AI tool', url: 'https://radar/1', description: 'Cloudflare AI', category: 'tech', created_at: new Date().toISOString().substring(0, 19).replace('T', ' '), is_deleted: 0 }]);
+
+    const invalid = await request(app, db, '/api/user/radar', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: { keyword: 'A' },
+    });
+    expect(invalid.status).toBe(400);
+
+    const added = await request(app, db, '/api/user/radar', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: { keyword: 'Cloudflare' },
+    });
+    expect(added.status).toBe(201);
+
+    const listed = await request(app, db, '/api/user/radar?hours=48', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(listed.status).toBe(200);
+    expect(listed.body.keywords.some((kw: any) => kw.keyword === 'Cloudflare')).toBe(true);
+    expect(listed.body.alerts.some((alert: any) => alert.keyword === 'Cloudflare' && alert.count > 0)).toBe(true);
+
+    const removed = await request(app, db, '/api/user/radar/Cloudflare', {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(removed.status).toBe(200);
+  });
 });

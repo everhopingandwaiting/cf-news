@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { NewsItem } from '../types';
-import { addFavorite, removeFavorite } from '../api/client';
+import { addFavorite, addReadLater, removeFavorite } from '../api/client';
 import Comments from './Comments';
 
 function stripHtml(text: string): string {
@@ -40,6 +40,7 @@ interface Props {
 export default function NewsCard({ item, token, onAuthRequired, onSelect }: Props) {
   const [favorited, setFavorited] = useState(item.favorited || false);
   const [favCount, setFavCount] = useState(item.favorites_count || 0);
+  const [savedLater, setSavedLater] = useState(false);
   const [showComments, setShowComments] = useState(false);
 
   const cat = item.category || 'general';
@@ -52,6 +53,15 @@ export default function NewsCard({ item, token, onAuthRequired, onSelect }: Prop
     try {
       if (favorited) { await removeFavorite(item.id); setFavorited(false); setFavCount(c => Math.max(0, c - 1)); }
       else { await addFavorite(item.id); setFavorited(true); setFavCount(c => c + 1); }
+    } catch {}
+  }
+
+  async function saveLater(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!token) { onAuthRequired(); return; }
+    try {
+      await addReadLater(item.id);
+      setSavedLater(true);
     } catch {}
   }
 
@@ -74,6 +84,7 @@ export default function NewsCard({ item, token, onAuthRequired, onSelect }: Prop
         <span className="opacity-70">抓取 {fetchDate || '-'}</span>
         <span className="flex gap-2">
           <button className={`flex items-center gap-1 text-[12px] px-1.5 py-1 rounded-md hover:bg-gray-100 hover:text-gray-600 transition ${favorited ? 'text-amber-500' : ''}`} onClick={toggleFav}>收藏 {favCount}</button>
+          <button className={`flex items-center gap-1 text-[12px] px-1.5 py-1 rounded-md hover:bg-gray-100 hover:text-gray-600 transition ${savedLater ? 'text-indigo-500' : ''}`} onClick={saveLater}>{savedLater ? '已稍后读' : '稍后读'}</button>
           <button className="flex items-center gap-1 text-[12px] px-1.5 py-1 rounded-md hover:bg-gray-100 hover:text-gray-600 transition" onClick={e => { e.stopPropagation(); setShowComments(!showComments); }}>评论 {item.comments_count || 0}</button>
         </span>
       </div>

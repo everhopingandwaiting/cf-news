@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { NewsItem, NewsSource, NewsComment, Pagination, User } from '../types';
+import type { NewsItem, NewsSource, NewsComment, Pagination, User, TimelineEvent, NewsRegion, CredibilityReport, RadarAlert, PerspectiveReport } from '../types';
 
 const API_BASE = '';
 
@@ -132,6 +132,57 @@ export async function getDigestDates(): Promise<string[]> {
 export async function getRelatedArticles(newsId: number): Promise<{ related: import('../types').RelatedArticle[] }> {
   const { data } = await api.get(`/api/ai/related/${newsId}`);
   return data;
+}
+
+export async function getTimeline(keyword?: string, hours = 168): Promise<{ keyword: string | null; events: TimelineEvent[] }> {
+  const { data } = await api.get('/api/news/timeline', { params: { keyword, hours } });
+  return data;
+}
+
+export async function getNewsMap(hours = 24): Promise<{ regions: NewsRegion[] }> {
+  const { data } = await api.get('/api/news/map', { params: { hours } });
+  return data;
+}
+
+export async function getFreshView(exclude?: string[], limit = 6): Promise<{ recommendations: NewsItem[] }> {
+  const { data } = await api.get('/api/news/fresh-view', { params: { exclude: exclude?.join(','), limit } });
+  return data;
+}
+
+export async function getCredibility(newsId: number): Promise<CredibilityReport> {
+  const { data } = await api.get(`/api/news/${newsId}/credibility`);
+  return data;
+}
+
+export async function getPerspectives(newsId: number): Promise<PerspectiveReport> {
+  const { data } = await api.get(`/api/news/${newsId}/perspectives`);
+  return data;
+}
+
+export async function getReadLater(): Promise<NewsItem[]> {
+  const { data } = await api.get('/api/user/read-later');
+  return data.items || [];
+}
+
+export async function addReadLater(newsId: number): Promise<void> {
+  await api.post(`/api/user/read-later/${newsId}`);
+}
+
+export async function removeReadLater(newsId: number): Promise<void> {
+  await api.delete(`/api/user/read-later/${newsId}`);
+}
+
+export async function getRadar(hours = 24): Promise<{ keywords: { id: number; keyword: string; created_at: string }[]; alerts: RadarAlert[] }> {
+  const { data } = await api.get('/api/user/radar', { params: { hours } });
+  return data;
+}
+
+export async function addRadarKeyword(keyword: string): Promise<void> {
+  await api.post('/api/user/radar', { keyword });
+}
+
+export async function removeRadarKeyword(keyword: string): Promise<void> {
+  await api.delete(`/api/user/radar/${encodeURIComponent(keyword)}`);
 }
 
 export default api;

@@ -66,6 +66,24 @@ describe('AI API - Digest', () => {
     expect(status).toBe(200);
     expect(body.success).toBe(true);
   });
+
+  it('POST /api/ai/digest/generate - translates English titles to Chinese text', async () => {
+    await db.seed('news_sources', [
+      { id: 20, name: 'English Digest Source', feed_url: 'https://digest-en/rss', category: 'tech', language: 'en' },
+    ]);
+    await db.seed('news_items', [
+      { id: 9200, source_id: 20, title: 'OpenAI releases a new model', url: 'https://digest/en-1', description: 'English digest item.', category: 'tech', published_at: new Date().toISOString(), is_deleted: 0 },
+    ]);
+
+    const { status, body } = await request(app, db, '/api/ai/digest/generate', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(status).toBe(200);
+    expect(body.success).toBe(true);
+    expect(body.digest.content).toContain('[EN]');
+    expect(body.digest.content).toContain('translated:OpenAI releases a new model');
+  });
 });
 
 describe('AI API - Q&A', () => {

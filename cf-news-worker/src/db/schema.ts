@@ -76,6 +76,26 @@ export const userReadHistory = sqliteTable('user_read_history', {
     unq: uniqueIndex('unq_user_read').on(table.user_id, table.news_id),
 }));
 
+export const userReadLater = sqliteTable('user_read_later', {
+    id: integer('id').primaryKey(),
+    user_id: integer('user_id').notNull(),
+    news_id: integer('news_id').notNull(),
+    created_at: text('created_at').default('CURRENT_TIMESTAMP'),
+}, (table) => ({
+    userIdx: index('idx_user_read_later_user').on(table.user_id),
+    unq: uniqueIndex('unq_user_read_later').on(table.user_id, table.news_id),
+}));
+
+export const userAlertKeywords = sqliteTable('user_alert_keywords', {
+    id: integer('id').primaryKey(),
+    user_id: integer('user_id').notNull(),
+    keyword: text('keyword').notNull(),
+    created_at: text('created_at').default('CURRENT_TIMESTAMP'),
+}, (table) => ({
+    userIdx: index('idx_user_alert_keywords_user').on(table.user_id),
+    unq: uniqueIndex('unq_user_alert_keyword').on(table.user_id, table.keyword),
+}));
+
 export const newsComments = sqliteTable('news_comments', {
     id: integer('id').primaryKey(),
     news_id: integer('news_id').notNull(),

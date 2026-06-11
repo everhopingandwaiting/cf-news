@@ -2,6 +2,7 @@ import { Bindings } from '../types';
 import { eq, sql, desc, and } from 'drizzle-orm';
 import { getDb } from '../db';
 import { newsItems, newsSources, dailyDigests } from '../db/schema';
+import { translateText } from './translator';
 
 interface AISearchChunk {
     id: string;
@@ -210,11 +211,25 @@ export async function generateDailyDigest(env: Bindings): Promise<DigestResult |
 
     const instance = getSearchInstance(env);
 
-    const enItems = news.filter(n => n.lang !== 'zh').map((n, i) => ({ idx: news.indexOf(n), title: n.title }));
+    const enItems = news
+        .map((n, idx) => ({ idx, title: n.title, lang: n.lang }))
+        .filter(n => n.lang !== 'zh')
+        .slice(0, 20);
     const enTranslations = new Map<number, string>();
 
-    if (enItems.length > 0 && instance) {
-        const translatePrompt = `将以下英文新闻标题翻译为中文，只返回翻译结果，每行一条:\n${enItems.map((n, i) => `${i + 1}. ${n.title}`).join('\n')}`;
+    if (enItems.length > 0) {
+        const translated = await Promise.all(enItems.map(async item => {
+            const text = await translateText(env, item.title, 'zh').catch(() => null);
+            return { idx: item.idx, text: text?.trim() || null };
+        }));
+        for (const item of translated) {
+            if (item.text) enTranslations.set(item.idx, item.text);
+        }
+    }
+
+    if (enItems.length > 0 && enTranslations.size < enItems.length && instance) {
+        const missingItems = enItems.filter(item => !enTranslations.has(item.idx));
+        const translatePrompt = `将以下英文新闻标题翻译为中文，只返回翻译结果，每行一条:\n${missingItems.map((n, i) => `${i + 1}. ${n.title}`).join('\n')}`;
         try {
             const resp = await instance.chatCompletions({
                 messages: [
@@ -225,7 +240,7 @@ export async function generateDailyDigest(env: Bindings): Promise<DigestResult |
             });
             const text = resp.choices?.[0]?.message?.content || '';
             text.trim().split('\n').filter((l: string) => l.trim()).forEach((line: string, i: number) => {
-                if (i < enItems.length) enTranslations.set(enItems[i].idx, line.replace(/^\d+[\.\s]+/, '').trim());
+                if (i < missingItems.length) enTranslations.set(missingItems[i].idx, line.replace(/^\d+[\.\s]+/, '').trim());
             });
         } catch {}
     }

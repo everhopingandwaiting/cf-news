@@ -78,6 +78,27 @@ CREATE TABLE IF NOT EXISTS user_read_history (
     UNIQUE(user_id, news_id)
 );
 
+-- 用户稍后读表
+CREATE TABLE IF NOT EXISTS user_read_later (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    news_id INTEGER NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (news_id) REFERENCES news_items(id),
+    UNIQUE(user_id, news_id)
+);
+
+-- 用户新闻雷达关键词
+CREATE TABLE IF NOT EXISTS user_alert_keywords (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    keyword TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    UNIQUE(user_id, keyword)
+);
+
 -- 新闻评论表
 CREATE TABLE IF NOT EXISTS news_comments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -128,6 +149,8 @@ CREATE INDEX IF NOT EXISTS idx_news_items_cat_created ON news_items(is_deleted, 
 CREATE INDEX IF NOT EXISTS idx_news_items_src_created ON news_items(is_deleted, source_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_user_favorites_user ON user_favorites(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_read_history_user ON user_read_history(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_read_later_user ON user_read_later(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_alert_keywords_user ON user_alert_keywords(user_id);
 CREATE INDEX IF NOT EXISTS idx_news_comments_news ON news_comments(news_id);
 CREATE INDEX IF NOT EXISTS idx_news_comments_user ON news_comments(user_id);
 

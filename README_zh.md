@@ -31,12 +31,14 @@
 - **今日要闻** — AI 每日自动汇总，按时间排序，携带语言标记和发布时间，支持历史浏览
 - **相关推荐** — 标题关键词匹配，点击一键跳转
 - **趋势主题** — 趋势面板含主题聚合、代表新闻、词云、突发检测、AI 解读，支持多关键词对比、来源/分类每小时分布
+- **新闻探索** — 事件时间线、观点光谱、新闻地图、可信度参考、关键词雷达、稍后读和反信息茧房推荐
 - **阅读模式** — 全文提取，深/浅色主题，阅读时间估算，完善的排版（标题、图片、表格、代码块）
 - **站内浏览** — 内嵌 iframe 查看原文，或通过 Browser Rendering 截图查看
 - **语音速度** — 播报速度可调（0.5x–1.5x）
 - **推送通知** — 订阅浏览器推送，接收最新消息通知
 - **用户系统** — 注册、登录、JWT 认证
 - **收藏与历史** — 收藏文章、记录阅读历史
+- **稍后读与雷达** — 保存待读文章，设置关键词并查看最新命中
 - **评论系统** — WebSocket 实时评论，支持多设备同步
 - **源管理** — 后台管理面板，增删改排 RSS 源
 - **邮件摘要** — 订阅每日新闻邮件
@@ -279,6 +281,11 @@ cf-news/
 | GET | `/api/news/trending/categories?hours=24` | 分类分布 |
 | GET | `/api/news/trending/compare?keywords=a,b,c&hours=48` | 多关键词时间序列对比 |
 | GET | `/api/news/trending/hourly?hours=24` | 每小时来源与分类分布 |
+| GET | `/api/news/timeline?keyword=AI&hours=168` | 关键词事件时间线 |
+| GET | `/api/news/map?hours=48` | 基于近期新闻推断地区分布 |
+| GET | `/api/news/fresh-view?exclude=tech,ai` | 反信息茧房推荐 |
+| GET | `/api/news/:id/credibility` | 来源多样性与交叉验证参考 |
+| GET | `/api/news/:id/perspectives` | 基于相关文章生成观点光谱 |
 | GET | `/api/news/:id/content` | 获取文章全文 |
 | GET | `/api/comments/:newsId` | 获取新闻评论 |
 | POST | `/api/auth/register` | 用户注册 |
@@ -304,6 +311,12 @@ cf-news/
 | DELETE | `/api/user/favorites/:id` | 取消收藏 |
 | GET | `/api/user/history` | 获取阅读历史 |
 | POST | `/api/user/history/:id` | 标记已读 |
+| GET | `/api/user/read-later` | 获取稍后读列表 |
+| POST | `/api/user/read-later/:id` | 加入稍后读 |
+| DELETE | `/api/user/read-later/:id` | 移出稍后读 |
+| GET | `/api/user/radar?hours=48` | 获取雷达关键词与命中文章 |
+| POST | `/api/user/radar` | 添加雷达关键词 |
+| DELETE | `/api/user/radar/:keyword` | 删除雷达关键词 |
 | POST | `/api/ai/ask` | AI 问答（支持流式响应） |
 | POST | `/api/ai/digest/generate` | 强制重新生成要闻（管理） |
 | POST | `/api/ai/trending/insight` | AI 趋势解读 |

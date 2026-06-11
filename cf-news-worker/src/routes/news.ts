@@ -7,6 +7,38 @@ import { newsItems, newsSources, newsSummaries, newsAiTake, newsComments, newsFt
 
 const news = new Hono<{ Bindings: Bindings }>();
 
+const REGION_HINTS: { code: string; name: string; terms: string[] }[] = [
+    { code: 'CN', name: '中国', terms: ['中国', '北京', '上海', '深圳', '香港', '台湾', 'China', 'Beijing', 'Shanghai', 'Hong Kong', 'Taiwan'] },
+    { code: 'US', name: '美国', terms: ['美国', '华盛顿', '纽约', '硅谷', 'United States', 'US ', 'U.S.', 'America', 'Washington', 'New York', 'Silicon Valley'] },
+    { code: 'JP', name: '日本', terms: ['日本', '东京', 'Japan', 'Tokyo'] },
+    { code: 'KR', name: '韩国', terms: ['韩国', '首尔', 'Korea', 'Seoul'] },
+    { code: 'GB', name: '英国', terms: ['英国', '伦敦', 'UK', 'Britain', 'London'] },
+    { code: 'EU', name: '欧洲', terms: ['欧洲', '欧盟', 'EU', 'Europe', 'Brussels'] },
+    { code: 'RU', name: '俄罗斯', terms: ['俄罗斯', '莫斯科', 'Russia', 'Moscow'] },
+    { code: 'IN', name: '印度', terms: ['印度', 'India', 'Delhi', 'Mumbai'] },
+    { code: 'IL', name: '以色列', terms: ['以色列', 'Israel'] },
+    { code: 'UA', name: '乌克兰', terms: ['乌克兰', 'Ukraine', 'Kyiv'] },
+    { code: 'SG', name: '新加坡', terms: ['新加坡', 'Singapore'] },
+];
+
+function parseHours(value: string | undefined, fallback = 24, max = 168): number {
+    const hours = parseInt(value || String(fallback), 10);
+    return Number.isFinite(hours) && hours > 0 ? Math.min(hours, max) : fallback;
+}
+
+function escapeLike(value: string): string {
+    return value.replace(/[%_\\]/g, '\\$&');
+}
+
+function normalizeKeyword(value: string): string {
+    return value.trim().replace(/\s+/g, ' ').slice(0, 80);
+}
+
+function detectRegions(title = '', description = '') {
+    const haystack = `${title} ${description}`;
+    return REGION_HINTS.filter(region => region.terms.some(term => haystack.includes(term)));
+}
+
 async function searchNewsFTS(env: Bindings, query: string): Promise<number[] | null> {
     const normalized = query.toLowerCase().trim();
     if (!normalized) return null;
@@ -122,6 +154,99 @@ news.get('/', async (c) => {
     }
 });
 
+// GET /timeline — Event timeline for a search term or recent important news
+news.get('/timeline', async (c) => {
+    const keyword = normalizeKeyword(c.req.query('keyword') || '');
+    const hours = parseHours(c.req.query('hours'), keyword ? 168 : 48);
+    const db = getDb(c.env);
+    try {
+        const timelineTime = sql`COALESCE(n.published_at, n.created_at)`;
+        const conds: SQL[] = [sql`n.is_deleted = 0`, sql`${timelineTime} >= datetime('now', '-' || ${hours} || ' hours')`];
+        if (keyword) {
+            const escaped = escapeLike(keyword);
+            conds.push(sql`(n.title LIKE ${'%' + escaped + '%'} ESCAPE '\\' OR n.description LIKE ${'%' + escaped + '%'} ESCAPE '\\')`);
+        }
+        const whereClause = sql.join(conds, sql` AND `);
+        const rows = await db.all<any>(sql`
+            SELECT n.id, n.title, n.url, n.description, n.category, n.image_url,
+                   n.published_at, n.created_at, s.name as source_name, s.language as source_lang,
+                   ns.summary as ai_summary
+            FROM news_items n
+            LEFT JOIN news_sources s ON n.source_id = s.id
+            LEFT JOIN news_summaries ns ON ns.news_id = n.id
+            WHERE ${whereClause}
+            ORDER BY ${timelineTime} DESC
+            LIMIT 40
+        `);
+        const events = rows.map((row: any, index: number) => ({
+            ...row,
+            time: row.published_at || row.created_at,
+            stage: index === 0 ? 'latest' : index === rows.length - 1 ? 'first' : 'update',
+        }));
+        return c.json({ keyword: keyword || null, events });
+    } catch (error) {
+        console.error('timeline error:', error);
+        return c.json({ error: '获取新闻时间线失败' }, 500);
+    }
+});
+
+// GET /map — Region distribution inferred from titles/descriptions
+news.get('/map', async (c) => {
+    const hours = parseHours(c.req.query('hours'), 24);
+    const db = getDb(c.env);
+    try {
+        const rows = await db.all<any>(sql`
+            SELECT n.id, n.title, n.description, n.category, n.published_at, n.created_at,
+                   s.name as source_name, s.language as source_lang
+            FROM news_items n
+            LEFT JOIN news_sources s ON n.source_id = s.id
+            WHERE n.is_deleted = 0 AND n.created_at >= datetime('now', '-' || ${hours} || ' hours')
+            ORDER BY COALESCE(n.published_at, n.created_at) DESC
+            LIMIT 300
+        `);
+        const byRegion = new Map<string, { code: string; name: string; count: number; articles: any[] }>();
+        for (const row of rows) {
+            for (const region of detectRegions(row.title, row.description || '')) {
+                const current = byRegion.get(region.code) || { code: region.code, name: region.name, count: 0, articles: [] };
+                current.count += 1;
+                if (current.articles.length < 5) current.articles.push(row);
+                byRegion.set(region.code, current);
+            }
+        }
+        return c.json({ regions: Array.from(byRegion.values()).sort((a, b) => b.count - a.count) });
+    } catch (error) {
+        console.error('map error:', error);
+        return c.json({ error: '获取新闻地图失败' }, 500);
+    }
+});
+
+// GET /fresh-view — Important articles outside the user's dominant categories
+news.get('/fresh-view', async (c) => {
+    const exclude = (c.req.query('exclude') || '').split(',').map(v => v.trim()).filter(Boolean).slice(0, 8);
+    const limit = Math.min(parseInt(c.req.query('limit') || '6', 10) || 6, 12);
+    const db = getDb(c.env);
+    try {
+        const conds: SQL[] = [sql`n.is_deleted = 0`, sql`n.created_at >= datetime('now', '-72 hours')`];
+        if (exclude.length > 0) conds.push(sql`n.category NOT IN (${sql.join(exclude.map(cat => sql`${cat}`), sql`, `)})`);
+        const rows = await db.all<any>(sql`
+            SELECT n.id, n.source_id, n.title, n.url, n.description, n.image_url, n.category,
+                   n.published_at, n.created_at, s.name as source_name, s.language as source_lang,
+                   ns.summary as ai_summary, nt.take as ai_take
+            FROM news_items n
+            LEFT JOIN news_sources s ON n.source_id = s.id
+            LEFT JOIN news_summaries ns ON ns.news_id = n.id
+            LEFT JOIN news_ai_take nt ON nt.news_id = n.id
+            WHERE ${sql.join(conds, sql` AND `)}
+            ORDER BY CASE WHEN ns.id IS NOT NULL THEN 0 ELSE 1 END, COALESCE(n.published_at, n.created_at) DESC
+            LIMIT ${limit}
+        `);
+        return c.json({ recommendations: rows });
+    } catch (error) {
+        console.error('fresh-view error:', error);
+        return c.json({ error: '获取反信息茧房推荐失败' }, 500);
+    }
+});
+
 news.get('/:id', async (c) => {
     const id = c.req.param('id');
     const db = getDb(c.env);
@@ -154,6 +279,68 @@ news.get('/:id/perspectives', async (c) => {
     } catch (error) {
         console.error('Error generating perspectives:', error);
         return c.json({ error: '生成多视角对比失败' }, 500);
+    }
+});
+
+// GET /:id/credibility — Source diversity and corroboration hints for an article
+news.get('/:id/credibility', async (c) => {
+    const id = parseInt(c.req.param('id'), 10);
+    if (!Number.isFinite(id)) return c.json({ error: 'Invalid id' }, 400);
+    const db = getDb(c.env);
+    try {
+        const item = await db.all<any>(sql`
+            SELECT n.id, n.title, n.description, n.category, n.created_at, s.name as source_name
+            FROM news_items n
+            LEFT JOIN news_sources s ON n.source_id = s.id
+            WHERE n.id = ${id} AND n.is_deleted = 0
+            LIMIT 1
+        `);
+        if (item.length === 0) return c.json({ error: '新闻不存在' }, 404);
+
+        const words = item[0].title
+            .replace(/[^\w\u4e00-\u9fff\s]/g, ' ')
+            .split(/\s+/)
+            .filter((word: string) => word.length >= 2)
+            .slice(0, 5);
+        const conditions = words.length > 0
+            ? sql.join(words.map((word: string) => {
+                const escaped = escapeLike(word);
+                return sql`(n.title LIKE ${'%' + escaped + '%'} ESCAPE '\\' OR n.description LIKE ${'%' + escaped + '%'} ESCAPE '\\')`;
+            }), sql` OR `)
+            : sql`n.category = ${item[0].category}`;
+
+        const matches = await db.all<any>(sql`
+            SELECT n.id, n.title, n.url, n.category, n.published_at, n.created_at,
+                   s.name as source_name, s.language as source_lang
+            FROM news_items n
+            LEFT JOIN news_sources s ON n.source_id = s.id
+            WHERE n.is_deleted = 0
+              AND n.id != ${id}
+              AND n.created_at >= datetime(${item[0].created_at}, '-72 hours')
+              AND n.created_at <= datetime(${item[0].created_at}, '+72 hours')
+              AND (${conditions})
+            ORDER BY COALESCE(n.published_at, n.created_at) DESC
+            LIMIT 20
+        `);
+        const sourceNames = new Set(matches.map((row: any) => row.source_name).filter(Boolean));
+        const languages = new Set(matches.map((row: any) => row.source_lang).filter(Boolean));
+        const score = Math.min(100, 25 + sourceNames.size * 18 + languages.size * 10 + Math.min(matches.length, 8) * 3);
+        return c.json({
+            score,
+            level: score >= 75 ? 'strong' : score >= 50 ? 'medium' : 'weak',
+            source_count: sourceNames.size + (item[0].source_name ? 1 : 0),
+            related_count: matches.length,
+            languages: Array.from(languages),
+            signals: [
+                sourceNames.size >= 2 ? '多来源报道' : '来源较少',
+                languages.size >= 2 ? '跨语言来源' : '单一语言来源',
+                matches.length >= 5 ? '同类报道较多' : '同类报道有限',
+            ],
+            articles: matches.slice(0, 6),
+        });
+    } catch (error) {
+        console.error('credibility error:', error);
+        return c.json({ error: '获取可信度分析失败' }, 500);
     }
 });
 

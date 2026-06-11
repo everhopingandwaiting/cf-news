@@ -39,12 +39,14 @@ AI-generated summary of today's top news, sorted by time with language markers (
 - **Daily digest** — Auto-generated daily news summary with history browser
 - **Related articles** — Keyword-matched related articles with one-click navigation
 - **Trending themes** — Real-time trend panel with topic clusters, representative articles, word cloud, burst detection, AI insights, and hourly source/category distribution
+- **News exploration** — Event timelines, viewpoint spectrum, inferred news map, credibility signals, keyword radar, read-later list, and anti-filter-bubble recommendations
 - **Reader mode** — Full article content extraction with dark/light themes, reading time estimate, and rich typography
 - **In-app source browsing** — Browse original article in an iframe, or take a screenshot via Cloudflare Browser Rendering
 - **TTS speed control** — Adjustable playback speed (0.5x–1.5x) for voice narration
 - **Push notifications** — Subscribe to browser push notifications for breaking news
 - **User system** — Registration, login, JWT authentication
 - **Favorites & history** — Bookmark articles, track read history
+- **Read later & radar** — Save articles for later and monitor custom keywords for fresh matches
 - **Comments** — Real-time WebSocket comments on news articles
 - **Source manager** — Admin panel to add, edit, delete, and reorder RSS sources
 - **Email digest** — Subscribe to daily news summaries
@@ -288,6 +290,11 @@ cf-news/
 | GET | `/api/news/trending/categories?hours=24` | Category distribution of trending content |
 | GET | `/api/news/trending/compare?keywords=a,b,c&hours=48` | Multi-keyword time series comparison |
 | GET | `/api/news/trending/hourly?hours=24` | Hourly source & category distribution |
+| GET | `/api/news/timeline?keyword=AI&hours=168` | Event timeline for a keyword or recent news |
+| GET | `/api/news/map?hours=48` | Region distribution inferred from recent news |
+| GET | `/api/news/fresh-view?exclude=tech,ai` | Anti-filter-bubble recommendations |
+| GET | `/api/news/:id/credibility` | Source diversity and corroboration signals |
+| GET | `/api/news/:id/perspectives` | AI-generated viewpoint spectrum across related reports |
 | GET | `/api/news/:id/content` | Fetch full article content |
 | GET | `/api/comments/:newsId` | Get comments for a news item |
 | POST | `/api/auth/register` | Register |
@@ -313,6 +320,12 @@ cf-news/
 | DELETE | `/api/user/favorites/:id` | Remove favorite |
 | GET | `/api/user/history` | Read history |
 | POST | `/api/user/history/:id` | Mark as read |
+| GET | `/api/user/read-later` | List read-later articles |
+| POST | `/api/user/read-later/:id` | Add an article to read later |
+| DELETE | `/api/user/read-later/:id` | Remove an article from read later |
+| GET | `/api/user/radar?hours=48` | List radar keywords and matching articles |
+| POST | `/api/user/radar` | Add a radar keyword |
+| DELETE | `/api/user/radar/:keyword` | Remove a radar keyword |
 | POST | `/api/ai/ask` | Ask a question about news (supports streaming) |
 | POST | `/api/ai/digest/generate` | Force regenerate digest (admin only) |
 | POST | `/api/ai/trending/insight` | AI-generated insight for trending keyword |

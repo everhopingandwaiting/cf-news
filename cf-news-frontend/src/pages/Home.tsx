@@ -16,6 +16,7 @@ import { getDailyDigest, getDigestDates } from '../api/client';
 const ClipboardShare = lazy(() => import('../components/ClipboardShare'));
 const DailyDigest = lazy(() => import('../components/DailyDigest'));
 const NewsQA = lazy(() => import('../components/NewsQA'));
+const ExplorePanel = lazy(() => import('../components/ExplorePanel'));
 
 const CATEGORIES = [
   { key: 'all', label: '全部' },
@@ -63,6 +64,7 @@ export default function Home() {
   const [digestRegenerating, setDigestRegenerating] = useState(false);
   const [digestDates, setDigestDates] = useState<string[]>([]);
   const [showQA, setShowQA] = useState(false);
+  const [showExplore, setShowExplore] = useState(false);
   const [showTrending, setShowTrending] = useState(false);
   const [loginToast, setLoginToast] = useState<string | null>(null);
   const latestIdRef = useRef(0);
@@ -326,6 +328,7 @@ export default function Home() {
         <button className="px-4 py-2.5 rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 hover:border-indigo-500 hover:text-indigo-500 transition disabled:opacity-40 disabled:cursor-not-allowed" onClick={handleSummarize} disabled={summarizing}>{summarizing ? '生成中...' : 'AI 摘要'}</button>
         <button className={`px-4 py-2.5 rounded-lg text-[13px] font-medium border transition ${filterSummary ? 'bg-indigo-500 text-white border-transparent' : 'bg-transparent text-gray-600 border-gray-200 hover:bg-gray-50'}`} onClick={() => { setFilterSummary(filterSummary ? undefined : '1'); setPage(1); }}>有摘要</button>
         <button className="px-4 py-2.5 rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 hover:border-orange-400 hover:text-orange-500 transition" onClick={() => setShowTrending(true)}>趋势</button>
+        <button className="px-4 py-2.5 rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 hover:border-emerald-500 hover:text-emerald-600 transition" onClick={() => setShowExplore(true)}>探索</button>
       </div>
       {showManager && token && <SourceManager token={token} onClose={() => setShowManager(false)} />}
       {showClipboard && token && <Suspense fallback={null}><ClipboardShare
@@ -370,6 +373,7 @@ export default function Home() {
       )}
       <AuthModal visible={showAuth} onClose={() => setShowAuth(false)} onLoginSuccess={handleLoginSuccess} />
       <Suspense fallback={null}><NewsQA visible={showQA} onClose={() => setShowQA(false)} token={token} /></Suspense>
+      <Suspense fallback={null}><ExplorePanel visible={showExplore} token={token} search={search} activeCategory={category} onClose={() => setShowExplore(false)} onSelectArticle={selectNews} onSearch={keyword => { setSearch(keyword); setPage(1); }} onAuthRequired={() => setShowAuth(true)} /></Suspense>
       <TrendingPanel visible={showTrending} onClose={() => setShowTrending(false)} onSearch={keyword => { setSearch(keyword); setPage(1); }} onSelectArticle={selectNews} />
       <NewsDetailModal item={selectedNews} token={token} onClose={closeNews} onOpenUrl={url => window.open(url, '_blank')} onSummaryGenerated={() => { loadNews(); }} />
       <Footer />
