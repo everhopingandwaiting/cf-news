@@ -202,7 +202,7 @@ INSERT OR IGNORE INTO news_sources (name, url, feed_url, category, language) VAL
     ('MarketWatch', 'https://www.marketwatch.com', 'https://www.marketwatch.com/rss/topstories', 'stocks', 'en'),
     ('Yahoo Finance', 'https://finance.yahoo.com', 'https://finance.yahoo.com/news/rssindex', 'stocks', 'en'),
     ('The Guardian', 'https://www.theguardian.com', 'https://www.theguardian.com/world/rss', 'news', 'en'),
-    ('东方财富 策略研报', 'https://data.eastmoney.com/report/stock/strategy.html', 'https://rss.eastmoney.com/rss_partener.xml', 'funds', 'zh'),
+    ('东方财富 策略研报', 'https://data.eastmoney.com/report/stock/strategy.html', 'https://rss.eastmoney.com/rss_partener.xml', 'stocks', 'zh'),
     ('雪球 今日话题', 'https://xueqiu.com', 'https://xueqiu.com/hots/topic/rss', 'stocks', 'zh');
 CREATE TABLE IF NOT EXISTS user_preferences (
     user_id INTEGER PRIMARY KEY,
