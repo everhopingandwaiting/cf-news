@@ -203,6 +203,7 @@ INSERT OR IGNORE INTO news_sources (name, url, feed_url, category, language) VAL
     ('Yahoo Finance', 'https://finance.yahoo.com', 'https://finance.yahoo.com/news/rssindex', 'stocks', 'en'),
     ('The Guardian', 'https://www.theguardian.com', 'https://www.theguardian.com/world/rss', 'news', 'en'),
     ('东方财富 策略研报', 'https://data.eastmoney.com/report/stock/strategy.html', 'https://rss.eastmoney.com/rss_partener.xml', 'stocks', 'zh'),
+    ('中新网财经', 'https://www.chinanews.com.cn', 'https://www.chinanews.com.cn/rss/finance.xml', 'finance', 'zh'),
     ('雪球 今日话题', 'https://xueqiu.com', 'https://xueqiu.com/hots/topic/rss', 'stocks', 'zh');
 CREATE TABLE IF NOT EXISTS user_preferences (
     user_id INTEGER PRIMARY KEY,
