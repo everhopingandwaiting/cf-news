@@ -145,10 +145,10 @@ async function batchClassifyCategories(
 
 async function fetchFeed(env: Bindings, source: NewsSource): Promise<RSSItem[]> {
     try {
-        if (source.source_type === 'scrape') {
-            console.log(`Scraping ${source.name} via browser...`);
-            const scraper = getScraper(source.feed_url);
-            if (!scraper) { console.error(`No scraper available for ${source.name}`); return []; }
+        // Check if a scraper is available for this source (by feed_url or url)
+        const scraper = getScraper(source.feed_url, source.url);
+        if (scraper) {
+            console.log(`Scraping ${source.name} via scraper...`);
             const scraped = await scraper(env);
             return scraped.map(item => ({ title: item.title, link: item.link, description: item.description, pubDate: item.pubDate }));
         }
