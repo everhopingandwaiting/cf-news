@@ -1,34 +1,8 @@
 import { useState } from 'react';
 import type { NewsItem } from '../types';
 import { addFavorite, addReadLater, removeFavorite } from '../api/client';
+import { stripHtml, formatTime, CAT_NAMES, CAT_COLORS } from '../utils/newsFormat';
 import Comments from './Comments';
-
-function stripHtml(text: string): string {
-  return text.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/\s+/g, ' ').trim();
-}
-
-function formatTime(dateStr: string): string {
-  if (!dateStr) return '';
-  // Normalize: if no timezone info, assume China time (UTC+8) since created_at uses it
-  const normalized = dateStr.includes('T') ? dateStr : dateStr.replace(' ', 'T') + '+08:00';
-  const d = new Date(normalized);
-  if (isNaN(d.getTime())) return dateStr.substring(0, 16);
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  const hours = String(d.getHours()).padStart(2, '0');
-  const minutes = String(d.getMinutes()).padStart(2, '0');
-  return `${year}-${month}-${day} ${hours}:${minutes}`;
-}
-
-const CAT_NAMES: Record<string, string> = { ai: 'AI', tech: '科技', news: '新闻', finance: '财经', entertainment: '娱乐', stocks: '股票', funds: '基金', energy: '新能源', general: '综合' };
-const CAT_COLORS: Record<string, string> = {
-  ai: 'bg-purple-100 text-purple-600', tech: 'bg-emerald-100 text-emerald-600',
-  news: 'bg-blue-100 text-blue-600', finance: 'bg-amber-100 text-amber-600',
-  entertainment: 'bg-pink-100 text-pink-600',
-  stocks: 'bg-rose-100 text-rose-600', funds: 'bg-yellow-100 text-yellow-700',
-  energy: 'bg-green-100 text-green-600',
-};
 
 interface Props {
   item: NewsItem;

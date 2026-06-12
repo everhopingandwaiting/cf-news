@@ -30,6 +30,19 @@ export function sanitizeHtml(html: string): string {
   return safe;
 }
 
+export const CAT_NAMES: Record<string, string> = {
+  ai: 'AI', tech: '科技', news: '新闻', finance: '财经',
+  entertainment: '娱乐', stocks: '股票', funds: '基金', energy: '新能源',
+  general: '综合',
+};
+export const CAT_COLORS: Record<string, string> = {
+  ai: 'bg-purple-100 text-purple-600', tech: 'bg-emerald-100 text-emerald-600',
+  news: 'bg-blue-100 text-blue-600', finance: 'bg-amber-100 text-amber-600',
+  entertainment: 'bg-pink-100 text-pink-600',
+  stocks: 'bg-rose-100 text-rose-600', funds: 'bg-yellow-100 text-yellow-700',
+  energy: 'bg-green-100 text-green-600',
+};
+
 export function formatTime(dateStr: string): string {
   if (!dateStr) return '';
   const normalized = dateStr.includes('T') ? dateStr : dateStr.replace(' ', 'T') + '+08:00';

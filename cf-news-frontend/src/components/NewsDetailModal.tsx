@@ -3,20 +3,8 @@ import type { CredibilityReport, NewsItem, PerspectiveReport } from '../types';
 import { addReadLater, getCredibility, getPerspectives, triggerSummarizeOne, getNewsItem, triggerTake } from '../api/client';
 import Comments from './Comments';
 import RelatedArticles from './RelatedArticles';
-import { stripHtml, estimateReadingTime, sanitizeHtml, formatTime } from '../utils/newsFormat';
+import { stripHtml, estimateReadingTime, sanitizeHtml, formatTime, CAT_NAMES, CAT_COLORS } from '../utils/newsFormat';
 
-const CAT_NAMES: Record<string, string> = {
-  ai: 'AI', tech: '科技', news: '新闻', finance: '财经',
-  entertainment: '娱乐', stocks: '股票', funds: '基金', energy: '新能源',
-  general: '综合',
-};
-const CAT_COLORS: Record<string, string> = {
-  ai: 'bg-purple-100 text-purple-600', tech: 'bg-emerald-100 text-emerald-600',
-  news: 'bg-blue-100 text-blue-600', finance: 'bg-amber-100 text-amber-600',
-  entertainment: 'bg-pink-100 text-pink-600',
-  stocks: 'bg-rose-100 text-rose-600', funds: 'bg-yellow-100 text-yellow-700',
-  energy: 'bg-green-100 text-green-600',
-};
 
 interface Props {
   item: NewsItem | null;
