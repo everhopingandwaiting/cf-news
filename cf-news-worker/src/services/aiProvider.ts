@@ -3,6 +3,8 @@ import { eq, sql } from 'drizzle-orm';
 import { getDb } from '../db';
 import { appConfig, providerModels, providers, aiCallLog } from '../db/schema';
 
+const DEFAULT_FAILED_MODEL_TTL_SECONDS = 900;
+
 export async function getConfig(env: Bindings, key: string): Promise<string | null> {
     const db = getDb(env);
     try {
@@ -70,7 +72,11 @@ export async function getProviderInfo(env: Bindings, name: string): Promise<{ ba
     }
 }
 
-export async function getFailed(env: Bindings): Promise<string[]> {
+function failedModelKey(provider: string, model: string): string {
+    return `${provider}:${model}`;
+}
+
+export async function getFailed(env: Bindings, provider?: string): Promise<string[]> {
     const db = getDb(env);
     try {
         const row = await db.select({ value: appConfig.value })
@@ -82,14 +88,19 @@ export async function getFailed(env: Bindings): Promise<string[]> {
         if (Array.isArray(data)) return [];
         if (!data.models || typeof data.models !== 'object') return [];
         const now = Math.floor(Date.now() / 1000);
-        const ttl = await getConfigInt(env, '', 900);
+        const ttl = await getConfigInt(env, 'ai_failed_model_ttl_seconds', DEFAULT_FAILED_MODEL_TTL_SECONDS);
         return Object.entries(data.models)
             .filter(([, ts]) => now - (ts as number) < ttl)
-            .map(([model]) => model);
+            .map(([key]) => {
+                if (!provider) return key;
+                const prefix = `${provider}:`;
+                return key.startsWith(prefix) ? key.slice(prefix.length) : '';
+            })
+            .filter(Boolean);
     } catch { return []; }
 }
 
-export async function markFailed(env: Bindings, model: string, _provider: string): Promise<void> {
+export async function markFailed(env: Bindings, model: string, provider: string): Promise<void> {
     try {
         const db = getDb(env);
         const now = Math.floor(Date.now() / 1000);
@@ -106,18 +117,20 @@ export async function markFailed(env: Bindings, model: string, _provider: string
                 }
             } catch {}
         }
-        const ttl = 900;
-        const cutoff = now - ttl;
+        const ttl = await getConfigInt(env, 'ai_failed_model_ttl_seconds', DEFAULT_FAILED_MODEL_TTL_SECONDS);
         let changed = false;
         for (const [m, ts] of Object.entries(models)) {
             if (now - ts >= ttl) { delete models[m]; changed = true; }
         }
-        if (!models[model]) {
-            models[model] = now;
+        const key = failedModelKey(provider, model);
+        if (!models[key]) {
+            models[key] = now;
             changed = true;
         }
         if (changed) {
-            const entries = Object.entries(models).slice(0, 50);
+            const entries = Object.entries(models)
+                .sort(([, a], [, b]) => b - a)
+                .slice(0, 50);
             const trimmed = Object.fromEntries(entries);
             await db.run(sql`INSERT OR REPLACE INTO app_config (key, value) VALUES ('ai_failed_models', ${JSON.stringify({ models: trimmed })})`);
         }
@@ -151,6 +164,13 @@ export async function logAICall(env: Bindings, data: {
 async function getMaxModelsPerProvider(env: Bindings): Promise<number> {
     const configured = await getConfigInt(env, 'ai_max_models_per_provider', 2);
     return Math.min(Math.max(configured, 1), 5);
+}
+
+export async function getAvailableModels(env: Bindings, provider: string, limit: number): Promise<string[]> {
+    const failed = new Set(await getFailed(env, provider));
+    return (await getModels(env, provider))
+        .filter(model => !failed.has(model))
+        .slice(0, limit);
 }
 
 export async function doOpenAICompat(
@@ -237,7 +257,7 @@ export async function callAI(env: Bindings, prompt: string, options?: AIOptions)
 
     for (const provider of order) {
         if (provider === 'cloudflare') {
-            const models = (await getModels(env, 'cloudflare')).slice(0, maxModels);
+            const models = await getAvailableModels(env, 'cloudflare', maxModels);
             for (const model of models) {
                 const result = await doCF(env, model, messages, options);
                 if (result) return result;
@@ -245,7 +265,7 @@ export async function callAI(env: Bindings, prompt: string, options?: AIOptions)
         } else {
             const info = await getProviderInfo(env, provider);
             if (!info) continue;
-            const models = (await getModels(env, provider)).slice(0, maxModels);
+            const models = await getAvailableModels(env, provider, maxModels);
             for (const model of models) {
                 const result = await doOpenAICompat(env, provider, info.base_url, info.api_key, model, messages, options);
                 if (result) return result;

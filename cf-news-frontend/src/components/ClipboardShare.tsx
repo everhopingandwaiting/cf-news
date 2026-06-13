@@ -3,7 +3,7 @@ import {
     loadHistory, appendHistory, clearHistory,
     loadRichHistory, appendRichHistory, loadTrustedDevices, saveTrustedDevices,
     loadTransport, saveTransport, loadPrivateMode, savePrivateMode,
-    loadAutoAccept, saveAutoAccept,
+    loadAutoAccept, saveAutoAccept, removeTextHistory,
 } from '../utils/clipboard';
 import { compressImage } from '../utils/image';
 import type { ClipboardTransport } from '../utils/clipboard';
@@ -32,6 +32,7 @@ export default function ClipboardShare({
     const [trustedDevices, setTrustedDevices] = useState<string[]>(() => loadTrustedDevices(userId));
     const [privateMode, setPrivateMode] = useState(() => loadPrivateMode(userId));
     const [autoAccept, setAutoAccept] = useState(() => loadAutoAccept(userId));
+    const [, setHistoryVersion] = useState(0);
     const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [autoAcceptRemaining, setAutoAcceptRemaining] = useState<number>(0);
 
@@ -98,7 +99,6 @@ export default function ClipboardShare({
             reader.onload = () => {
                 const b64 = (reader.result as string).split(',')[1];
                 onSendImage(b64, compressed.type);
-                if (!privateMode) appendRichHistory(userId, { type: 'image', data: b64, mime: compressed.type });
             };
             reader.readAsDataURL(compressed);
         } else {
@@ -106,7 +106,6 @@ export default function ClipboardShare({
             reader.onload = () => {
                 const b64 = (reader.result as string).split(',')[1];
                 onSendImage(b64, blob.type);
-                if (!privateMode) appendRichHistory(userId, { type: 'image', data: b64, mime: blob.type });
             };
             reader.readAsDataURL(blob);
         }
@@ -146,6 +145,7 @@ export default function ClipboardShare({
             if (!privateMode) {
                 appendHistory(userId, text);
                 appendRichHistory(userId, { type: 'text', content: text });
+                setHistoryVersion(v => v + 1);
             }
             setStatus('✅ 已推送到其他设备剪贴板');
             setTimeout(() => setStatus(''), 2000);
@@ -171,13 +171,11 @@ export default function ClipboardShare({
         const files = e.dataTransfer.files;
         if (files.length > 0) {
             onSendFile(files[0], transport);
-            if (!privateMode) appendRichHistory(userId, { type: 'file', fileName: files[0].name, fileSize: files[0].size, mime: files[0].type });
         }
     }
 
     function handleFileTransferSend(file: File) {
         onSendFile(file, transport);
-        if (!privateMode) appendRichHistory(userId, { type: 'file', fileName: file.name, fileSize: file.size, mime: file.type });
     }
 
     function handleCreateTemporaryLink() {
@@ -194,6 +192,23 @@ export default function ClipboardShare({
         navigator.clipboard.writeText(text);
         setStatus('✅ 文本已复制');
         setTimeout(() => setStatus(''), 1500);
+    }
+
+    function handleCopyHistory(content: string) {
+        navigator.clipboard.writeText(content).then(() => {
+            setStatus('✅ 历史已复制');
+            setTimeout(() => setStatus(''), 1500);
+        }).catch(() => {
+            setStatus('复制失败');
+            setTimeout(() => setStatus(''), 2000);
+        });
+    }
+
+    function handleDeleteHistory(content: string) {
+        removeTextHistory(userId, content);
+        setHistoryVersion(v => v + 1);
+        setStatus('历史已删除');
+        setTimeout(() => setStatus(''), 1200);
     }
 
     function handleClearHistory() {
@@ -284,6 +299,8 @@ export default function ClipboardShare({
                         onToggleHistory={() => setShowHistory(!showHistory)}
                         onClearHistory={handleClearHistory}
                         onSelectHistory={(content) => { onSendText(content); setShowHistory(false); }}
+                        onCopyHistory={handleCopyHistory}
+                        onDeleteHistory={handleDeleteHistory}
                     />
 
                     <ImageSharingSection

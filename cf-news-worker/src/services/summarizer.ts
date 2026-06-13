@@ -1,5 +1,5 @@
 import { Bindings } from '../types';
-import { getConfig, getConfigInt, getModels, getProviderInfo, getProviderOrder, getFailed, callAI, doOpenAICompat as aiDoOpenAICompat, doCF as aiDoCF } from './aiProvider';
+import { getConfig, getConfigInt, getAvailableModels, getProviderInfo, getProviderOrder, callAI, doOpenAICompat as aiDoOpenAICompat, doCF as aiDoCF } from './aiProvider';
 import { fetchRichArticleContent } from './contentFetcher';
 import { eq, and, sql, isNull } from 'drizzle-orm';
 import { getDb } from '../db';
@@ -10,13 +10,11 @@ function cleanText(text: string): string {
 }
 
 async function tryModels(
-    env: Bindings, models: string[], provider: string,
+    env: Bindings, models: string[],
     caller: (env: Bindings, model: string, prompt: string, newsId?: number, newsTitle?: string) => Promise<string | null>,
     prompt: string, newsId?: number, newsTitle?: string
 ): Promise<string | null> {
-    const failed = await getFailed(env);
     for (const model of models) {
-        if (failed.includes(model)) continue;
         const result = await caller(env, model, prompt, newsId, newsTitle);
         if (result) return result;
     }
@@ -74,7 +72,7 @@ export async function generateSummary(env: Bindings, item: { id?: number; title:
             if (!info) continue;
         }
 
-        const models = (await getModels(env, provider)).slice(0, maxModels);
+        const models = await getAvailableModels(env, provider, maxModels);
         if (models.length === 0) continue;
 
         let caller = PROVIDER_MAP[provider];
@@ -84,7 +82,7 @@ export async function generateSummary(env: Bindings, item: { id?: number; title:
             caller = (env, model, prompt, newsId, newsTitle) => doGeneric(env, p, model, prompt, newsId, newsTitle);
         }
 
-        const result = await tryModels(env, models, provider, caller, prompt, item.id, item.title);
+        const result = await tryModels(env, models, caller, prompt, item.id, item.title);
         if (result) return result?.trim() || null;
     }
     return null;
@@ -103,8 +101,6 @@ export async function generateSummaryForNews(env: Bindings, newsId: number, item
 }
 
 const SUMMARY_BATCH_SIZE = 10;
-const BATCH_FALLBACK_LIMIT = 3;
-
 async function getMaxModelsPerProvider(env: Bindings): Promise<number> {
     const configured = await getConfigInt(env, 'ai_max_models_per_provider', 2);
     return Math.min(Math.max(configured, 1), 5);
@@ -175,7 +171,7 @@ Return: [{"summary":"<article1 summary>"},{"summary":"<article2 summary>"},...]`
     }
 
     let count = 0;
-    for (const item of items.slice(0, BATCH_FALLBACK_LIMIT)) {
+    for (const item of items) {
         if (await generateSummaryForNews(env, item.id, item)) count++;
     }
     return count;
@@ -215,9 +211,9 @@ export async function generateAITake(env: Bindings, newsId: number, item: { titl
             const info = await getProviderInfo(env, provider);
             if (!info) continue;
         }
-            const maxModels = await getMaxModelsPerProvider(env);
-            const models = (await getModels(env, provider)).slice(0, maxModels);
-            if (models.length === 0) continue;
+        const maxModels = await getMaxModelsPerProvider(env);
+        const models = await getAvailableModels(env, provider, maxModels);
+        if (models.length === 0) continue;
 
         for (const model of models) {
             let text: string | null = null;
@@ -298,9 +294,9 @@ export async function generatePerspectives(env: Bindings, newsId: number): Promi
                 const info = await getProviderInfo(env, provider);
                 if (!info) continue;
             }
-        const maxModels = await getMaxModelsPerProvider(env);
-        const models = (await getModels(env, provider)).slice(0, maxModels);
-        if (models.length === 0) continue;
+            const maxModels = await getMaxModelsPerProvider(env);
+            const models = await getAvailableModels(env, provider, maxModels);
+            if (models.length === 0) continue;
 
             let caller: any;
             if (provider !== 'cloudflare') {

@@ -13,12 +13,27 @@ interface Props {
     onToggleHistory: () => void;
     onClearHistory: () => void;
     onSelectHistory: (content: string) => void;
+    onCopyHistory: (content: string) => void;
+    onDeleteHistory: (content: string) => void;
 }
 
 export default function TextSharingSection({
     text, onTextChange, onPaste, onSync, onCopyText, onTemporaryLink,
-    history, richHistory, showHistory, onToggleHistory, onClearHistory, onSelectHistory,
+    history, richHistory, showHistory, onToggleHistory, onClearHistory, onSelectHistory, onCopyHistory, onDeleteHistory,
 }: Props) {
+    const seen = new Set<string>();
+    const textHistory = [
+        ...richHistory
+            .filter(h => h.type === 'text' && h.content?.trim())
+            .map(h => ({ id: h.id, content: h.content! })),
+        ...history.map((content, i) => ({ id: `legacy-${i}`, content })),
+    ].filter(item => {
+        const content = item.content.trim();
+        if (!content || seen.has(content)) return false;
+        seen.add(content);
+        return true;
+    });
+
     return (
         <div className="bg-gray-50/50 border border-gray-200 rounded-xl p-3.5 mb-3">
             <div className="flex items-center justify-between mb-2.5">
@@ -54,32 +69,46 @@ export default function TextSharingSection({
                         🔗 临时投递
                     </button>
                 )}
-                {(history.length > 0 || richHistory.length > 0) && (
+                {textHistory.length > 0 && (
                     <button
                         className="text-[11px] text-gray-400 hover:text-gray-600 transition"
                         onClick={onToggleHistory}
                     >
-                        📜 历史 ({richHistory.length || history.length})
+                        📜 历史 ({textHistory.length})
                     </button>
                 )}
-                {(history.length > 0 || richHistory.length > 0) && (
+                {textHistory.length > 0 && (
                     <button className="text-[11px] text-gray-400 hover:text-red-500 transition" onClick={onClearHistory}>
                         清除历史
                     </button>
                 )}
             </div>
-            {showHistory && (history.length > 0 || richHistory.length > 0) && (
+            {showHistory && textHistory.length > 0 && (
                 <div className="mt-2 border border-gray-200 rounded-lg bg-white max-h-40 overflow-y-auto">
-                    {(richHistory.length > 0 ? richHistory : history.map((h, i) => ({ id: String(i), type: 'text' as const, content: h, createdAt: Date.now() }))).map((h) => (
-                        <button
-                            key={h.id}
-                            className="w-full text-left px-3 py-2 text-[12px] text-gray-700 hover:bg-gray-50 border-b border-gray-100 last:border-b-0 truncate"
-                            onClick={() => {
-                                if (h.type === 'text' && h.content) onSelectHistory(h.content);
-                            }}
-                        >
-                            {h.type === 'text' ? h.content : h.type === 'file' ? `文件：${h.fileName}` : '图片记录'}
-                        </button>
+                    {textHistory.map((h) => (
+                        <div key={h.id} className="flex items-center gap-2 px-2 py-1.5 border-b border-gray-100 last:border-b-0 hover:bg-gray-50">
+                            <button
+                                className="min-w-0 flex-1 text-left px-1 py-1 text-[12px] text-gray-700 truncate"
+                                onClick={() => onSelectHistory(h.content)}
+                                title={h.content}
+                            >
+                                {h.content}
+                            </button>
+                            <button
+                                className="shrink-0 w-7 h-7 rounded-md text-[11px] text-gray-400 hover:text-indigo-500 hover:bg-indigo-50 transition"
+                                onClick={() => onCopyHistory(h.content)}
+                                title="复制"
+                            >
+                                📄
+                            </button>
+                            <button
+                                className="shrink-0 w-7 h-7 rounded-md text-[14px] text-gray-400 hover:text-red-500 hover:bg-red-50 transition"
+                                onClick={() => onDeleteHistory(h.content)}
+                                title="删除"
+                            >
+                                ×
+                            </button>
+                        </div>
                     ))}
                 </div>
             )}

@@ -34,6 +34,7 @@ Thumbs.db
 .omo/
 thoughts/
 .learnings/
+.mimocode/
 skills/
 AGENTS.md
 PLAN-*.md
@@ -46,7 +47,7 @@ cf-news-worker/AGENTS.md
 # Cloudflare
 .wrangler/
 cf-news-worker/.wrangler/
-cf-news-worker/wrangler.toml
+wrangler.toml
 cf-news-worker/public/
 
 # Python

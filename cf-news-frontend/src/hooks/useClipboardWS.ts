@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { appendHistory, appendRichHistory, loadPrivateMode } from '../utils/clipboard';
 import type { ClipboardTransport } from '../utils/clipboard';
 
 const MAX_CACHED_IMAGES = 10;
@@ -161,6 +162,7 @@ function getDeviceName(): string {
 }
 
 export function useClipboardWS(token: string, panelOpen: boolean) {
+    const userId = useMemo(() => jwtUserId(token), [token]);
     const ukeys = useMemo(() => lsUserKeys(token), [token]);
     const [text, setText] = useState(() => loadLS(ukeys.text, ''));
     const [images, setImages] = useState<{ data: string; mime: string; sender?: string }[]>([]);
@@ -170,6 +172,7 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
     const [incomingOffers, setIncomingOffers] = useState<IncomingFileOffer[]>([]);
     const [fileTransfers, setFileTransfers] = useState<FileTransfer[]>([]);
     const [devices, setDevices] = useState<ClipboardDevice[]>([]);
+    const [, setHistoryVersion] = useState(0);
     const pendingResolve = useRef<Map<string, (success: boolean) => void>>(new Map());
 
     const wsRef = useRef<WebSocket | null>(null);
@@ -310,7 +313,16 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
                     });
                     if (!panelOpenRef.current) setHasNewData(true);
                 } else if (msg.type === 'sync_clipboard' && msg.content) {
-                    navigator.clipboard.writeText(msg.content).catch(() => {});
+                    const content = msg.content;
+                    navigator.clipboard.writeText(content).catch(() => {});
+                    clearDebounce();
+                    setText(content);
+                    if (content.trim() && !loadPrivateMode(userId)) {
+                        appendHistory(userId, content);
+                        appendRichHistory(userId, { type: 'text', content });
+                        setHistoryVersion(v => v + 1);
+                    }
+                    if (!panelOpenRef.current) setHasNewData(true);
                 } else if (msg.type === 'file_offer' && msg.transferId) {
                     setIncomingOffers(prev => [...prev, {
                         transferId: msg.transferId!, fileName: msg.fileName || 'unknown',
@@ -366,7 +378,7 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
         };
         ws.onerror = () => ws.close();
         wsRef.current = ws;
-    }, [token, clearReconnect, clearHeartbeat, clearHeartbeatCheck, clearDebounce, flushQueue, safeSend]);
+    }, [token, userId, ukeys.images, clearReconnect, clearHeartbeat, clearHeartbeatCheck, clearDebounce, flushQueue, safeSend]);
 
     useEffect(() => {
         disposedRef.current = false;

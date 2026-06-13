@@ -51,10 +51,15 @@ export function saveHistory(userId: string, items: string[]) {
     try { localStorage.setItem(historyKey(userId), JSON.stringify(items.slice(0, MAX_HISTORY))); } catch {}
 }
 
+function normalizeHistoryText(text?: string): string {
+    return (text || '').trim();
+}
+
 export function appendHistory(userId: string, text: string) {
-    if (!text.trim()) return;
+    const normalized = normalizeHistoryText(text);
+    if (!normalized) return;
     const history = loadHistory(userId);
-    const filtered = history.filter(h => h !== text);
+    const filtered = history.filter(h => normalizeHistoryText(h) !== normalized);
     filtered.unshift(text);
     saveHistory(userId, filtered);
 }
@@ -73,6 +78,8 @@ export function loadRichHistory(userId: string): ClipboardHistoryItem[] {
 }
 
 export function appendRichHistory(userId: string, item: Omit<ClipboardHistoryItem, 'id' | 'createdAt'>) {
+    const normalizedText = item.type === 'text' ? normalizeHistoryText(item.content) : '';
+    if (item.type === 'text' && !normalizedText) return;
     const history = loadRichHistory(userId);
     const next: ClipboardHistoryItem = {
         ...item,
@@ -80,11 +87,19 @@ export function appendRichHistory(userId: string, item: Omit<ClipboardHistoryIte
         createdAt: Date.now(),
     };
     const deduped = history.filter(h => {
-        if (item.type === 'text') return h.content !== item.content;
+        if (item.type === 'text') return normalizeHistoryText(h.content) !== normalizedText;
         if (item.type === 'file') return h.fileName !== item.fileName || h.fileSize !== item.fileSize;
         return h.data !== item.data;
     });
     try { localStorage.setItem(richHistoryKey(userId), JSON.stringify([next, ...deduped].slice(0, MAX_HISTORY))); } catch {}
+}
+
+export function removeTextHistory(userId: string, text: string) {
+    const normalized = normalizeHistoryText(text);
+    if (!normalized) return;
+    saveHistory(userId, loadHistory(userId).filter(h => normalizeHistoryText(h) !== normalized));
+    const richHistory = loadRichHistory(userId).filter(h => h.type !== 'text' || normalizeHistoryText(h.content) !== normalized);
+    try { localStorage.setItem(richHistoryKey(userId), JSON.stringify(richHistory.slice(0, MAX_HISTORY))); } catch {}
 }
 
 export function loadTrustedDevices(userId: string): string[] {

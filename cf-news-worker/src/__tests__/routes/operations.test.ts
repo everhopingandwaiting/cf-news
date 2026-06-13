@@ -147,6 +147,127 @@ describe('Operations API - Summarize', () => {
     expect(rows.results.map((r: any) => r.model)).toEqual(['model-a', 'model-b']);
   });
 
+  it('POST /api/summarize/:newsId - filters failed models before applying provider limit', async () => {
+    const requestedModels: string[] = [];
+    vi.stubGlobal('fetch', async (_input: any, init?: any) => {
+      const body = JSON.parse(String(init?.body || '{}'));
+      requestedModels.push(body.model);
+      return new Response('no capacity', { status: 503 });
+    });
+    const now = Math.floor(Date.now() / 1000);
+    await db.exec("INSERT OR REPLACE INTO app_config (key, value) VALUES ('provider_order', 'openrouter')");
+    await db.exec(`INSERT OR REPLACE INTO app_config (key, value) VALUES ('ai_failed_models', '${JSON.stringify({ models: { 'openrouter:model-a': now, 'openrouter:model-b': now } })}')`);
+    await db.exec("INSERT OR REPLACE INTO providers (name, base_url, api_key_env, enabled) VALUES ('openrouter', 'https://openrouter.test', 'OPENROUTER_API_KEY', 1)");
+    await db.exec("DELETE FROM provider_models WHERE provider = 'openrouter'");
+    await db.exec("INSERT OR IGNORE INTO provider_models (provider, model_id, score, enabled) VALUES ('openrouter', 'model-a', 100, 1)");
+    await db.exec("INSERT OR IGNORE INTO provider_models (provider, model_id, score, enabled) VALUES ('openrouter', 'model-b', 90, 1)");
+    await db.exec("INSERT OR IGNORE INTO provider_models (provider, model_id, score, enabled) VALUES ('openrouter', 'model-c', 80, 1)");
+    await db.exec("INSERT OR IGNORE INTO provider_models (provider, model_id, score, enabled) VALUES ('openrouter', 'model-d', 70, 1)");
+    await db.seed('news_items', [
+      { id: 111, source_id: 1, title: 'Failed model filter title', url: 'https://sum/filter', description: 'This content is long enough to verify failed models are filtered before limits.', content: 'This content is long enough to verify failed models are filtered before limits.', category: 'tech', is_deleted: 0 },
+    ]);
+
+    const { status, body } = await request(app, db, '/api/summarize/111', { method: 'POST' });
+    expect(status).toBe(200);
+    expect(body.generated).toBe(0);
+    expect(requestedModels).toEqual(['model-c', 'model-d']);
+
+    const rows = await db.prepare("SELECT model FROM ai_call_log WHERE provider = 'openrouter' AND news_id = 111 ORDER BY id ASC").all();
+    expect(rows.results.map((r: any) => r.model)).toEqual(['model-c', 'model-d']);
+  });
+
+  it('POST /api/summarize/:newsId - scopes failed model cache by provider', async () => {
+    const requestedProviders: string[] = [];
+    vi.stubGlobal('fetch', async (input: any, init?: any) => {
+      const body = JSON.parse(String(init?.body || '{}'));
+      const provider = String(input).includes('nvidia.test') ? 'nvidia' : 'openrouter';
+      requestedProviders.push(`${provider}:${body.model}`);
+      if (provider === 'nvidia') {
+        return new Response(JSON.stringify({ choices: [{ message: { content: '这是一段足够长的备用供应商摘要内容。' } }] }), { status: 200 });
+      }
+      return new Response('blocked', { status: 403 });
+    });
+    const now = Math.floor(Date.now() / 1000);
+    await db.exec("INSERT OR REPLACE INTO app_config (key, value) VALUES ('provider_order', 'openrouter,nvidia')");
+    await db.exec(`INSERT OR REPLACE INTO app_config (key, value) VALUES ('ai_failed_models', '${JSON.stringify({ models: { 'openrouter:shared-model': now } })}')`);
+    await db.exec("INSERT OR REPLACE INTO providers (name, base_url, api_key_env, enabled) VALUES ('openrouter', 'https://openrouter.test', 'OPENROUTER_API_KEY', 1)");
+    await db.exec("INSERT OR REPLACE INTO providers (name, base_url, api_key_env, enabled) VALUES ('nvidia', 'https://nvidia.test', 'OPENROUTER_API_KEY', 1)");
+    await db.exec("DELETE FROM provider_models WHERE provider IN ('openrouter', 'nvidia')");
+    await db.exec("INSERT OR IGNORE INTO provider_models (provider, model_id, score, enabled) VALUES ('openrouter', 'shared-model', 100, 1)");
+    await db.exec("INSERT OR IGNORE INTO provider_models (provider, model_id, score, enabled) VALUES ('nvidia', 'shared-model', 100, 1)");
+    await db.seed('news_items', [
+      { id: 112, source_id: 1, title: 'Provider scoped failure title', url: 'https://sum/scoped', description: 'This content is long enough to verify provider scoped failed model cache.', content: 'This content is long enough to verify provider scoped failed model cache.', category: 'tech', is_deleted: 0 },
+    ]);
+
+    const { status, body } = await request(app, db, '/api/summarize/112', { method: 'POST' });
+    expect(status).toBe(200);
+    expect(body.generated).toBe(1);
+    expect(requestedProviders).toEqual(['nvidia:shared-model']);
+
+    const rows = await db.prepare("SELECT provider, model FROM ai_call_log WHERE news_id = 112 ORDER BY id ASC").all();
+    expect(rows.results).toEqual([{ provider: 'nvidia', model: 'shared-model' }]);
+  });
+
+  it('POST /api/summarize - filters failed models before batch provider limit', async () => {
+    const requestedModels: string[] = [];
+    vi.stubGlobal('fetch', async (_input: any, init?: any) => {
+      const body = JSON.parse(String(init?.body || '{}'));
+      requestedModels.push(body.model);
+      if (body.model === 'model-c') {
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: '[{"summary":"第一条足够长的摘要内容。"},{"summary":"第二条足够长的摘要内容。"}]' } }],
+        }), { status: 200 });
+      }
+      return new Response('no capacity', { status: 503 });
+    });
+    const now = Math.floor(Date.now() / 1000);
+    await db.exec("INSERT OR REPLACE INTO app_config (key, value) VALUES ('provider_order', 'openrouter')");
+    await db.exec(`INSERT OR REPLACE INTO app_config (key, value) VALUES ('ai_failed_models', '${JSON.stringify({ models: { 'openrouter:model-a': now, 'openrouter:model-b': now } })}')`);
+    await db.exec("INSERT OR REPLACE INTO providers (name, base_url, api_key_env, enabled) VALUES ('openrouter', 'https://openrouter.test', 'OPENROUTER_API_KEY', 1)");
+    await db.exec("DELETE FROM provider_models WHERE provider = 'openrouter'");
+    await db.exec("INSERT OR IGNORE INTO provider_models (provider, model_id, score, enabled) VALUES ('openrouter', 'model-a', 100, 1)");
+    await db.exec("INSERT OR IGNORE INTO provider_models (provider, model_id, score, enabled) VALUES ('openrouter', 'model-b', 90, 1)");
+    await db.exec("INSERT OR IGNORE INTO provider_models (provider, model_id, score, enabled) VALUES ('openrouter', 'model-c', 80, 1)");
+    await db.seed('news_items', [
+      { id: 124, source_id: 1, title: 'Batch model filter one', url: 'https://sum/batch-filter-1', description: 'This content is long enough to be included in batch model filtering test one.', content: 'This content is long enough to be included in batch model filtering test one.', category: 'tech', is_deleted: 0 },
+      { id: 125, source_id: 1, title: 'Batch model filter two', url: 'https://sum/batch-filter-2', description: 'This content is long enough to be included in batch model filtering test two.', content: 'This content is long enough to be included in batch model filtering test two.', category: 'tech', is_deleted: 0 },
+    ]);
+
+    const { status, body } = await request(app, db, '/api/summarize', {
+      method: 'POST',
+      body: { ids: [124, 125] },
+    });
+    expect(status).toBe(200);
+    expect(body.generated).toBe(2);
+    expect(requestedModels).toEqual(['model-c']);
+
+    const rows = await db.prepare('SELECT COUNT(*) as count FROM news_summaries WHERE news_id IN (124, 125)').all();
+    expect(rows.results[0].count).toBe(2);
+  });
+
+  it('POST /api/summarize - falls back to every article when batch parsing fails', async () => {
+    await db.exec("INSERT OR REPLACE INTO app_config (key, value) VALUES ('provider_order', 'cloudflare')");
+    await db.exec("DELETE FROM app_config WHERE key = 'ai_failed_models'");
+    await db.exec("INSERT OR IGNORE INTO provider_models (provider, model_id, score, enabled) VALUES ('cloudflare', '@cf/test-batch-fallback', 100, 1)");
+    await db.seed('news_items', [
+      { id: 120, source_id: 1, title: 'Batch fallback title one', url: 'https://sum/batch-1', description: 'This content is long enough to need a generated summary for item one.', content: 'This content is long enough to need a generated summary for item one.', category: 'tech', is_deleted: 0 },
+      { id: 121, source_id: 1, title: 'Batch fallback title two', url: 'https://sum/batch-2', description: 'This content is long enough to need a generated summary for item two.', content: 'This content is long enough to need a generated summary for item two.', category: 'tech', is_deleted: 0 },
+      { id: 122, source_id: 1, title: 'Batch fallback title three', url: 'https://sum/batch-3', description: 'This content is long enough to need a generated summary for item three.', content: 'This content is long enough to need a generated summary for item three.', category: 'tech', is_deleted: 0 },
+      { id: 123, source_id: 1, title: 'Batch fallback title four', url: 'https://sum/batch-4', description: 'This content is long enough to need a generated summary for item four.', content: 'This content is long enough to need a generated summary for item four.', category: 'tech', is_deleted: 0 },
+    ]);
+
+    const { status, body } = await request(app, db, '/api/summarize', {
+      method: 'POST',
+      body: { ids: [120, 121, 122, 123] },
+    });
+    expect(status).toBe(200);
+    expect(body.generated).toBe(4);
+    expect(body.skipped).toBe(0);
+
+    const rows = await db.prepare('SELECT COUNT(*) as count FROM news_summaries WHERE news_id IN (120, 121, 122, 123)').all();
+    expect(rows.results[0].count).toBe(4);
+  });
+
   it('POST /api/summarize/clear - clears all summaries', async () => {
     await db.seed('news_summaries', [
       { id: 201, news_id: 201, summary: 'one' },
