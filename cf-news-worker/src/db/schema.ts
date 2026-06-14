@@ -113,6 +113,7 @@ export const newsSummaries = sqliteTable('news_summaries', {
     id: integer('id').primaryKey(),
     news_id: integer('news_id').notNull().unique(),
     summary: text('summary').notNull(),
+    illustration_url: text('illustration_url'),
     created_at: text('created_at').default('CURRENT_TIMESTAMP'),
 });
 
@@ -167,6 +168,7 @@ export const providerModels = sqliteTable('provider_models', {
     model_id: text('model_id').notNull(),
     score: integer('score').default(50),
     enabled: integer('enabled').default(1),
+    type: text('type').default('text'),
 }, (table) => ({
     pk: primaryKey({ columns: [table.provider, table.model_id] }),
 }));

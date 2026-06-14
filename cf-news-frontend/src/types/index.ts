@@ -16,6 +16,7 @@ export interface NewsItem {
   favorites_count?: number;
   ai_summary?: string;
   ai_take?: string;
+  ai_illustration?: string;
 }
 
 export interface NewsSource {

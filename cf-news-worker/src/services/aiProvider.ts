@@ -29,12 +29,15 @@ export async function getProviderOrder(env: Bindings): Promise<string[]> {
     return order ? order.split(',').map(s => s.trim()) : ['groq', 'cloudflare', 'openrouter', 'nvidia', 'mango'];
 }
 
-export async function getModels(env: Bindings, provider: string): Promise<string[]> {
+export async function getModels(env: Bindings, provider: string, type?: string): Promise<string[]> {
     const db = getDb(env);
     try {
+        const cond = type
+            ? sql`provider = ${provider} AND enabled = 1 AND type = ${type}`
+            : sql`provider = ${provider} AND enabled = 1`;
         const rows = await db.select({ model_id: providerModels.model_id })
             .from(providerModels)
-            .where(sql`provider = ${provider} AND enabled = 1`)
+            .where(cond)
             .orderBy(sql`score DESC`)
             .all();
         return rows.map(r => r.model_id);
@@ -166,9 +169,9 @@ async function getMaxModelsPerProvider(env: Bindings): Promise<number> {
     return Math.min(Math.max(configured, 1), 5);
 }
 
-export async function getAvailableModels(env: Bindings, provider: string, limit: number): Promise<string[]> {
+export async function getAvailableModels(env: Bindings, provider: string, limit: number, type?: string): Promise<string[]> {
     const failed = new Set(await getFailed(env, provider));
-    return (await getModels(env, provider))
+    return (await getModels(env, provider, type))
         .filter(model => !failed.has(model))
         .slice(0, limit);
 }

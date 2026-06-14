@@ -127,7 +127,7 @@ news.get('/', async (c) => {
         const newsData = await db.all<any>(sql`
             SELECT n.*, s.name as source_name, s.language as source_lang,
                    (SELECT COUNT(*) FROM news_comments nc WHERE nc.news_id = n.id AND nc.is_deleted = 0) as comments_count,
-                   ns.summary as ai_summary, nt.take as ai_take
+                   ns.summary as ai_summary, ns.illustration_url as ai_illustration, nt.take as ai_take
             FROM news_items n
             LEFT JOIN news_sources s ON n.source_id = s.id
             LEFT JOIN news_summaries ns ON ns.news_id = n.id
@@ -231,7 +231,7 @@ news.get('/fresh-view', async (c) => {
         const rows = await db.all<any>(sql`
             SELECT n.id, n.source_id, n.title, n.url, n.description, n.image_url, n.category,
                    n.published_at, n.created_at, s.name as source_name, s.language as source_lang,
-                   ns.summary as ai_summary, nt.take as ai_take
+                   ns.summary as ai_summary, ns.illustration_url as ai_illustration, nt.take as ai_take
             FROM news_items n
             LEFT JOIN news_sources s ON n.source_id = s.id
             LEFT JOIN news_summaries ns ON ns.news_id = n.id
@@ -253,7 +253,7 @@ news.get('/:id', async (c) => {
     try {
         const item = await db.all<any>(sql`
             SELECT n.*, s.name as source_name, s.language as source_lang,
-                   ns.summary as ai_summary, nt.take as ai_take
+                   ns.summary as ai_summary, ns.illustration_url as ai_illustration, nt.take as ai_take
             FROM news_items n
             LEFT JOIN news_sources s ON n.source_id = s.id
             LEFT JOIN news_summaries ns ON ns.news_id = n.id

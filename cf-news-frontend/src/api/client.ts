@@ -97,6 +97,11 @@ export async function triggerTake(newsId: number): Promise<{ take: string | null
   return data;
 }
 
+export async function triggerIllustration(newsId: number): Promise<{ image_url: string }> {
+  const { data } = await api.post(`/api/illustrate/${newsId}`);
+  return data;
+}
+
 export async function translateText(text: string, lang: string): Promise<string | null> {
   try {
     const { data } = await api.post('/api/translate', { text, lang });

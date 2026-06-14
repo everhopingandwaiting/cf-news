@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import type { CredibilityReport, NewsItem, PerspectiveReport } from '../types';
-import { addReadLater, getCredibility, getPerspectives, triggerSummarizeOne, getNewsItem, triggerTake } from '../api/client';
+import { addReadLater, getCredibility, getPerspectives, triggerSummarizeOne, getNewsItem, triggerTake, triggerIllustration } from '../api/client';
 import Comments from './Comments';
 import RelatedArticles from './RelatedArticles';
 import { stripHtml, estimateReadingTime, sanitizeHtml, formatTime, CAT_NAMES, CAT_COLORS } from '../utils/newsFormat';
@@ -38,10 +38,12 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
   const [perspectiveLoading, setPerspectiveLoading] = useState(false);
   const [savedLater, setSavedLater] = useState(false);
   const [ttsLoading, setTtsLoading] = useState(false);
+  const [illustrating, setIllustrating] = useState(false);
+  const [illustrationUrl, setIllustrationUrl] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const shareRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { setCurrentItem(item); setTranslated(null); setTakeError(false); setError(null); setReaderContent(null); setSourceView(null); setCredibility(null); setPerspectives(null); setSavedLater(false); if (screenshotUrl) { URL.revokeObjectURL(screenshotUrl); setScreenshotUrl(null); } }, [item]);
+  useEffect(() => { setCurrentItem(item); setTranslated(null); setTakeError(false); setError(null); setReaderContent(null); setSourceView(null); setCredibility(null); setPerspectives(null); setSavedLater(false); setIllustrationUrl(item?.ai_illustration || null); if (screenshotUrl) { URL.revokeObjectURL(screenshotUrl); setScreenshotUrl(null); } }, [item]);
 
   // Share dropdown: click outside to close
   useEffect(() => {
@@ -74,6 +76,22 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
     setTaking(false);
   }
 
+  async function handleIllustration() {
+    if (!currentItem || illustrating) return;
+    setIllustrating(true);
+    try {
+      const data = await triggerIllustration(currentItem.id);
+      if (data.image_url) {
+        setIllustrationUrl(data.image_url);
+      } else {
+        setError('AI 插画生成失败');
+      }
+    } catch {
+      setError('AI 插画生成失败，请稍后重试');
+    }
+    setIllustrating(false);
+  }
+
   async function handleSummarize() {
     if (!currentItem) return;
     setSummarizing(true);
@@ -93,6 +111,8 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
       const item = await getNewsItem(newsId);
       if (item) {
         setCurrentItem(item);
+        setIllustrationUrl(item.ai_illustration || null);
+        setIllustrating(false);
         document.title = `${item.title} - News`;
         window.history.replaceState({}, '', `/share/${newsId}`);
       }
@@ -338,6 +358,20 @@ export default function NewsDetailModal({ item, token, onClose, onOpenUrl, onSum
         {currentItem.source_lang !== 'zh' && (
           <button type="button" className="mb-4 ml-2 px-4 py-2 rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 hover:border-emerald-500 hover:text-emerald-500 transition disabled:opacity-40" onClick={handleTranslate} disabled={translating}>
             {translating ? '翻译中...' : '翻译为中文'}
+          </button>
+        )}
+
+        {illustrationUrl ? (
+          <div className="mb-5 rounded-xl overflow-hidden border border-gray-200">
+            <img src={illustrationUrl} alt="AI 插画" className="w-full object-cover max-h-80" />
+            <div className="px-3 py-1.5 text-[11px] text-gray-400 bg-gray-50 flex items-center justify-between">
+              <span>AI 生成插画</span>
+              <button className="hover:text-indigo-500 transition" onClick={() => setIllustrationUrl(null)}>✕ 关闭</button>
+            </div>
+          </div>
+        ) : (
+          <button type="button" className="mb-4 px-4 py-2 rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 hover:border-purple-500 hover:text-purple-500 transition disabled:opacity-40" onClick={handleIllustration} disabled={illustrating}>
+            {illustrating ? '生成中...' : 'AI 插画'}
           </button>
         )}
 

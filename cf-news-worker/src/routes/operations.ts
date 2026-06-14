@@ -5,7 +5,8 @@ import { generateSummaryForNews, generateBatchSummariesForNews, generateAITake }
 import { translateText } from '../services/translator';
 import { eq, sql, isNull, and } from 'drizzle-orm';
 import { getDb } from '../db';
-import { appConfig, newsItems, newsSummaries, newsAiTake } from '../db/schema';
+import { appConfig, newsItems, newsSummaries, newsAiTake, providers, providerModels } from '../db/schema';
+import { getConfig, getProviderOrder } from '../services/aiProvider';
 
 type NewsRow = { id: number; title: string; description: string | null; content: string | null };
 
@@ -135,6 +136,83 @@ operations.post('/take/:newsId', async (c) => {
         const row = await db.select({ take: newsAiTake.take })
             .from(newsAiTake).where(eq(newsAiTake.news_id, newsId)).get();
         return c.json({ success: true, take: row?.take || null });
+    } catch (error) {
+        return c.json({ success: false, error: String(error) }, 500);
+    }
+});
+
+operations.post('/illustrate/:newsId', async (c) => {
+    const newsId = parseInt(c.req.param('newsId'));
+    const db = getDb(c.env);
+    try {
+        const item = await db.select({
+            id: newsItems.id, title: newsItems.title,
+            description: newsItems.description, content: newsItems.content,
+            category: newsItems.category,
+        }).from(newsItems).where(eq(newsItems.id, newsId)).get();
+        if (!item) return c.json({ success: false, error: '新闻不存在' }, 404);
+
+        const existing = await db.select({ illustration_url: newsSummaries.illustration_url })
+            .from(newsSummaries)
+            .where(eq(newsSummaries.news_id, newsId))
+            .get() as { illustration_url: string | null } | undefined;
+        if (existing?.illustration_url) {
+            return c.json({ success: true, image_url: existing.illustration_url, cached: true });
+        }
+
+        const order = await getProviderOrder(c.env);
+        const desc = (item.description || item.content || '').substring(0, 500);
+        const contextText = desc.substring(0, 200);
+        const prompt = `Create a vivid, specific illustration for this news article. The image should directly depict the subject matter described below.
+
+Title: ${item.title}
+Details: ${contextText}
+
+Requirements:
+- Depict the specific people, objects, locations, or actions mentioned
+- Use appropriate visual style matching the subject (modern for tech, professional for business, dynamic for entertainment)
+- Clean composition suitable for a news article header
+- No text overlay or watermarks`;
+
+        let imageUrl: string | null = null;
+        for (const provider of order) {
+            const prov = await db.select({ base_url: providers.base_url, api_key_env: providers.api_key_env })
+                .from(providers)
+                .where(sql`name = ${provider} AND enabled = 1`)
+                .get() as { base_url: string; api_key_env: string } | undefined;
+            if (!prov) continue;
+            const apiKey = (c.env as any)[prov.api_key_env] as string | undefined;
+            if (!apiKey) continue;
+
+            const models = await db.select({ model_id: providerModels.model_id })
+                .from(providerModels)
+                .where(sql`provider = ${provider} AND enabled = 1 AND type = 'image'`)
+                .orderBy(sql`score DESC`)
+                .all() as { model_id: string }[];
+            if (models.length === 0) continue;
+
+            const baseUrl = prov.base_url.replace(/\/+$/, '');
+            for (const m of models) {
+                try {
+                    const resp = await fetch(`${baseUrl}/images/generations`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+                        body: JSON.stringify({ model: m.model_id, prompt, n: 1, size: '1024x1024' }),
+                    });
+                    if (!resp.ok) { console.error(`Illustration fail ${provider}/${m.model_id}: ${resp.status}`); continue; }
+                    const data = await resp.json() as any;
+                    const url = data?.data?.[0]?.url;
+                    if (url) { imageUrl = url; break; }
+                } catch (e) { console.error(`Illustration error ${provider}/${m.model_id}:`, e); continue; }
+            }
+            if (imageUrl) break;
+        }
+
+        if (!imageUrl) return c.json({ success: false, error: '所有供应商的 AI 插画生成均失败' }, 502);
+
+        await db.run(sql`INSERT OR REPLACE INTO news_summaries (news_id, summary, illustration_url)
+            VALUES (${newsId}, '', ${imageUrl})`);
+        return c.json({ success: true, image_url: imageUrl, cached: false });
     } catch (error) {
         return c.json({ success: false, error: String(error) }, 500);
     }
