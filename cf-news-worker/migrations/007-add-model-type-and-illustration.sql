@@ -16,4 +16,4 @@ INSERT OR IGNORE INTO provider_models (provider, model_id, score, enabled, type)
 INSERT OR IGNORE INTO provider_models (provider, model_id, score, enabled, type) VALUES ('agnes', 'agnes-image-2.0-flash', 80, 1, 'image');
 INSERT OR IGNORE INTO provider_models (provider, model_id, score, enabled, type) VALUES ('agnes', 'agnes-video-v2.0', 70, 1, 'image');
 
-INSERT OR IGNORE INTO app_config (key, value) VALUES ('schema_version', '7');
+INSERT OR REPLACE INTO app_config (key, value) VALUES ('schema_version', '7');

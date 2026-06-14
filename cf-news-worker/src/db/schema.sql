@@ -117,7 +117,6 @@ CREATE TABLE IF NOT EXISTS news_summaries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     news_id INTEGER UNIQUE NOT NULL,
     summary TEXT NOT NULL,
-    illustration_url TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (news_id) REFERENCES news_items(id) ON DELETE CASCADE
 );
@@ -264,7 +263,6 @@ CREATE TABLE IF NOT EXISTS provider_models (
     model_id TEXT NOT NULL,
     score INTEGER DEFAULT 50,
     enabled INTEGER DEFAULT 1,
-    type TEXT NOT NULL DEFAULT 'text',
     PRIMARY KEY (provider, model_id)
 );
 

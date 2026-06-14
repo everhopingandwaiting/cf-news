@@ -2,7 +2,7 @@
  * In-memory mock of Cloudflare D1 binding for route-level tests.
  * Backed by sql.js (WebAssembly SQLite) — real SQL engine, no hand-written parser.
  */
-import { readFileSync } from 'fs';
+import { readFileSync, readdirSync } from 'fs';
 import initSqlJs, { Database as SqlJsDatabase, SqlJsStatic } from 'sql.js';
 import { resolve } from 'path';
 
@@ -26,6 +26,33 @@ function loadSchemaDDL(): string[] {
     const stmt = match[0].trim();
     if (stmt && !/^\s*--/.test(stmt)) {
       stmts.push(stmt);
+    }
+  }
+  return stmts;
+}
+
+/** Load all migration SQL statements (sorted by filename) */
+function loadMigrationSQLs(): string[] {
+  const migrationsDir = resolve(__dirname, '../../migrations');
+  let files: string[];
+  try {
+    files = readdirSync(migrationsDir).filter(f => f.endsWith('.sql')).sort();
+  } catch {
+    return [];
+  }
+
+  const stmts: string[] = [];
+  for (const file of files) {
+    if (file === '001-initial.sql') continue; // already applied via schema.sql
+    try {
+      const raw = readFileSync(resolve(migrationsDir, file), 'utf-8');
+      // Split by semicolons to get individual statements, filter empty lines
+      const parts = raw.split(';').map(s => s.trim()).filter(s => s.length > 0);
+      for (const part of parts) {
+        stmts.push(part + ';');
+      }
+    } catch (e) {
+      // skip unreadable migration files
     }
   }
   return stmts;
@@ -122,6 +149,11 @@ export class MockD1 {
           }
           // Ignore other DDL errors (e.g., duplicate columns from ALTER)
         }
+      }
+      // Apply migration SQLs (002+, excluding 001 which is schema.sql)
+      const migrationStmts = loadMigrationSQLs();
+      for (const stmt of migrationStmts) {
+        try { this._db.exec(stmt); } catch (e: any) { /* ignore idempotent errors */ }
       }
     });
   }
