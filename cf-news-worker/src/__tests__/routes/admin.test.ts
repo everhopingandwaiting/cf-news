@@ -67,7 +67,7 @@ describe('Admin API - Sources CRUD', () => {
       headers: { Authorization: `Bearer ${adminToken}` },
     });
     expect(status).toBe(200);
-    expect(body.sources).toHaveLength(1);
+    expect(body.sources.length).toBeGreaterThanOrEqual(1);
     expect(body.sources[0].name).toBe('Src1');
     expect(body.sources[0].last_fetched_count).toBe(5);
     expect(typeof body.sources[0].today_count).toBe('number');

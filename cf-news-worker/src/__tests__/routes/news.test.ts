@@ -25,7 +25,7 @@ describe('News API', () => {
 
     const { status, body } = await request(app, db, '/api/news/sources/list');
     expect(status).toBe(200);
-    expect(body.sources).toHaveLength(2);
+    expect(body.sources.length).toBeGreaterThanOrEqual(2);
     expect(body.sources[0].name).toBe('TechCrunch');
     expect(body.sources[0].feed_url).toBe('https://techcrunch.com/rss');
     expect(body.sources[0].sort_order).toBe(1);

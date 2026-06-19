@@ -18,7 +18,6 @@ interface RSSItem {
     image?: string;
 }
 
-const MAX_CONCURRENCY = 5;
 const CLASSIFY_BATCH = 30;
 
 function parseRSSFeed(xml: string): RSSItem[] {
@@ -45,6 +44,75 @@ function parseRSSFeed(xml: string): RSSItem[] {
         }
     }
     return items;
+}
+
+/** Parse JSON Feed format (https://www.jsonfeed.org/version/1.1/) */
+function parseJSONFeed(jsonStr: string): RSSItem[] {
+    try {
+        const feed = JSON.parse(jsonStr);
+        // Accept both {items: [...]} and plain [...] arrays (Hugo etc.)
+        let items: Record<string, unknown>[];
+        if (Array.isArray(feed)) {
+            items = feed;
+        } else if (feed && Array.isArray(feed.items)) {
+            items = feed.items;
+        } else {
+            return [];
+        }
+        return items.map((item: Record<string, unknown>) => {
+            const id = item.id ? String(item.id) : '';
+            const url = item.url ? String(item.url) : item.link ? String(item.link) : item.external_url ? String(item.external_url) : id || '';
+            const title = item.title ? String(item.title) : '';
+            const contentHtml = item.content_html ? String(item.content_html) : '';
+            const contentText = item.content_text ? String(item.content_text) : '';
+            const summary = item.summary ? String(item.summary) : item.description ? String(item.description) : '';
+            const datePublished = item.date_published ? String(item.date_published) : item.date_modified ? String(item.date_modified) : item.pubDate ? String(item.pubDate) : '';
+            const image = item.image ? String(item.image) : item.banner_image ? String(item.banner_image) : item.thumbnail ? String(item.thumbnail) : '';
+            return {
+                title: title ? stripHTML(title) : (url ? extractTitleFromUrl(url) : ''),
+                link: url,
+                description: (summary || contentText || contentHtml).substring(0, 2000),
+                content: (contentHtml || contentText).substring(0, 8000),
+                pubDate: datePublished || undefined,
+                image: image || undefined,
+            };
+        }).filter((item: RSSItem) => item.title && item.link);
+    } catch (e) {
+        console.error('Failed to parse JSON Feed:', e);
+        return [];
+    }
+}
+
+function stripHTML(html: string): string {
+    return html.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/\s+/g, ' ').trim();
+}
+
+function extractTitleFromUrl(url: string): string {
+    try {
+        const path = new URL(url).pathname.replace(/\/$/, '').split('/').pop() || '';
+        return decodeURIComponent(path).replace(/[-_]/g, ' ').replace(/\.[a-z]+$/, '').trim() || url;
+    } catch {
+        return url;
+    }
+}
+
+function isJSONContentType(contentType: string | null): boolean {
+    if (!contentType) return false;
+    return contentType.startsWith('application/json') || contentType.startsWith('application/feed+json');
+}
+
+function isXMLContentType(contentType: string | null): boolean {
+    if (!contentType) return false;
+    return contentType.startsWith('text/xml') || contentType.startsWith('application/xml')
+        || contentType.startsWith('application/rss+xml') || contentType.startsWith('application/atom+xml');
+}
+
+function parseFeedContent(content: string): RSSItem[] {
+    const trimmed = content.trim();
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        return parseJSONFeed(content);
+    }
+    return parseRSSFeed(content);
 }
 
 function extractTag(xml: string, tag: string): string | undefined {
@@ -153,16 +221,21 @@ async function fetchFeed(env: Bindings, source: NewsSource): Promise<RSSItem[]> 
             return scraped.map(item => ({ title: item.title, link: item.link, description: item.description, pubDate: item.pubDate }));
         }
 
-        let xml: string | null = null;
+        let raw: string | null = null;
         if (needsBrowser(source.feed_url)) {
             console.log(`Using browser rendering for ${source.name}`);
-            xml = await fetchWithBrowser(env, source.feed_url);
-            if (xml) {
-                const rssMatch = xml.match(/<rss[\s\S]*<\/rss>/i) || xml.match(/<feed[\s\S]*<\/feed>/i);
-                if (rssMatch) xml = rssMatch[0];
+            raw = await fetchWithBrowser(env, source.feed_url);
+            if (raw) {
+                const trimmed = raw.trim();
+                if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+                    // JSON Feed - use as-is
+                } else {
+                    const rssMatch = raw.match(/<rss[\s\S]*<\/rss>/i) || raw.match(/<feed[\s\S]*<\/feed>/i);
+                    if (rssMatch) raw = rssMatch[0];
+                }
             }
         }
-        if (!xml) {
+        if (!raw) {
             const response = await fetch(source.feed_url, {
                 headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
                 signal: AbortSignal.timeout(20_000),
@@ -170,21 +243,25 @@ async function fetchFeed(env: Bindings, source: NewsSource): Promise<RSSItem[]> 
             if (!response.ok) {
                 console.error(`Failed to fetch ${source.name}: ${response.status}`);
                 const body = await response.text().catch(() => '');
-                if (body.length > 0 && !/<\?xml|<rss|<feed/i.test(body)) {
+                if (body.length > 0 && !/<\?xml|<rss|<feed/i.test(body) && !body.trim().startsWith('{')) {
                     console.log(`Retrying ${source.name} via browser rendering (HTTP ${response.status})...`);
-                    xml = await fetchWithBrowser(env, source.feed_url);
+                    raw = await fetchWithBrowser(env, source.feed_url);
                 }
-                if (!xml) return [];
+                if (!raw) return [];
             } else {
-                xml = await response.text();
-                if (xml.length > 0 && !/<\?xml|<rss|<feed/i.test(xml)) {
+                const contentType = response.headers.get('content-type') || '';
+                raw = await response.text();
+                if (isJSONContentType(contentType) || isXMLContentType(contentType)) {
+                    // Content-Type confirms it's a feed — use as-is
+                } else if (raw.length > 0 && !/<\?xml|<rss|<feed/i.test(raw) && !raw.trim().startsWith('{')) {
                     console.log(`Direct fetch returned HTML for ${source.name}, retrying via browser...`);
-                    const browserXml = await fetchWithBrowser(env, source.feed_url);
-                    if (browserXml && /<\?xml|<rss|<feed/i.test(browserXml)) xml = browserXml;
+                    const browserRaw = await fetchWithBrowser(env, source.feed_url);
+                    if (browserRaw && (/<\?xml|<rss|<feed/i.test(browserRaw) || browserRaw.trim().startsWith('{'))) raw = browserRaw;
                 }
             }
         }
-        return parseRSSFeed(xml);
+        if (!raw) return [];
+        return parseFeedContent(raw);
     } catch (error) {
         console.error(`Error fetching ${source.name}:`, error);
         return [];
@@ -283,15 +360,11 @@ export async function fetchNews(env: Bindings, skipSummary = false): Promise<voi
         .all() as unknown as NewsSource[];
 
     console.log(`Found ${rows.length} enabled sources`);
-    let totalSaved = 0;
 
-    for (let i = 0; i < rows.length; i += MAX_CONCURRENCY) {
-        const batch = rows.slice(i, i + MAX_CONCURRENCY);
-        console.log(`Batch ${Math.floor(i / MAX_CONCURRENCY) + 1}: ${batch.map(s => s.name).join(', ')}`);
-        const results = await Promise.allSettled(batch.map(source => processSource(env, source, skipSummary)));
-        for (const r of results) {
-            if (r.status === 'fulfilled') totalSaved += r.value;
-        }
+    const results = await Promise.allSettled(rows.map(source => processSource(env, source, skipSummary)));
+    let totalSaved = 0;
+    for (const r of results) {
+        if (r.status === 'fulfilled') totalSaved += r.value;
     }
 
     console.log(`News fetch complete. Total saved: ${totalSaved}`);
