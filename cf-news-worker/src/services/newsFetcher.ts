@@ -164,11 +164,25 @@ async function fetchFeed(env: Bindings, source: NewsSource): Promise<RSSItem[]> 
         }
         if (!xml) {
             const response = await fetch(source.feed_url, {
-                headers: { 'User-Agent': 'Mozilla/5.0 (compatible; CFNewsWorker/1.0)' },
-                signal: AbortSignal.timeout(15_000),
+                headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+                signal: AbortSignal.timeout(20_000),
             });
-            if (!response.ok) { console.error(`Failed to fetch ${source.name}: ${response.status}`); return []; }
-            xml = await response.text();
+            if (!response.ok) {
+                console.error(`Failed to fetch ${source.name}: ${response.status}`);
+                const body = await response.text().catch(() => '');
+                if (body.length > 0 && !/<\?xml|<rss|<feed/i.test(body)) {
+                    console.log(`Retrying ${source.name} via browser rendering (HTTP ${response.status})...`);
+                    xml = await fetchWithBrowser(env, source.feed_url);
+                }
+                if (!xml) return [];
+            } else {
+                xml = await response.text();
+                if (xml.length > 0 && !/<\?xml|<rss|<feed/i.test(xml)) {
+                    console.log(`Direct fetch returned HTML for ${source.name}, retrying via browser...`);
+                    const browserXml = await fetchWithBrowser(env, source.feed_url);
+                    if (browserXml && /<\?xml|<rss|<feed/i.test(browserXml)) xml = browserXml;
+                }
+            }
         }
         return parseRSSFeed(xml);
     } catch (error) {
