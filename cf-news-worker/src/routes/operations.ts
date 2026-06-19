@@ -46,8 +46,16 @@ operations.post('/fetch', async (c) => {
     }
     try {
         await fetchNews(c.env, true);
-        await db.insert(appConfig).values({ key: 'last_fetch_time', value: String(now) })
-            .onConflictDoUpdate({ target: appConfig.key, set: { value: String(now) } });
+        // Best-effort cooldown update (Drizzle ORM ON CONFLICT not fully compatible with D1)
+        try {
+            const existing = await db.select({ value: appConfig.value })
+                .from(appConfig).where(eq(appConfig.key, 'last_fetch_time')).get();
+            if (existing) {
+                await db.update(appConfig).set({ value: String(now) }).where(eq(appConfig.key, 'last_fetch_time'));
+            } else {
+                await db.insert(appConfig).values({ key: 'last_fetch_time', value: String(now) });
+            }
+        } catch (_) { /* cooldown is non-critical */ }
         return c.json({ success: true, message: 'News fetch triggered' });
     } catch (error) {
         return c.json({ success: false, error: String(error) }, 500);
