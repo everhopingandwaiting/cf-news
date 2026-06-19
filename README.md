@@ -31,7 +31,7 @@ AI-generated summary of today's top news, sorted by time with language markers (
 
 ## Features
 
-- **Multi-source RSS aggregation** — 30+ built-in sources (36氪, Hacker News, TechCrunch, The Verge, BBC, 世纪新能源网, etc.)
+- **Multi-source feed aggregation** — 30+ built-in RSS/JSON Feed sources (36氪, Hacker News, TechCrunch, The Verge, BBC, Daring Fireball, CNBC, etc.)
 - **Category filtering** — Tech, AI, New Energy, News, Finance, Entertainment
 - **Full-text search** — D1 FTS5 powered search with KV hot cache
 - **AI summaries** — OpenRouter, NVIDIA, Mango APIs with automatic fallback
