@@ -43,15 +43,21 @@ export const CAT_COLORS: Record<string, string> = {
   energy: 'bg-green-100 text-green-600',
 };
 
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
+import timezone from 'dayjs/plugin/timezone';
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
+const TZ = 'Asia/Shanghai';
+
 export function formatTime(dateStr: string): string {
   if (!dateStr) return '';
-  const normalized = dateStr.includes('T') ? dateStr : dateStr.replace(' ', 'T') + '+08:00';
-  const d = new Date(normalized);
-  if (isNaN(d.getTime())) return dateStr.substring(0, 16);
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  const hours = String(d.getHours()).padStart(2, '0');
-  const minutes = String(d.getMinutes()).padStart(2, '0');
-  return `${year}-${month}-${day} ${hours}:${minutes}`;
+  if (dateStr.includes('T') || dateStr.includes('Z')) {
+    const d = dayjs.utc(dateStr);
+    if (d.isValid()) return d.tz(TZ).format('YYYY-MM-DD HH:mm');
+  }
+  const d = dayjs.tz(dateStr, TZ);
+  if (d.isValid()) return d.format('YYYY-MM-DD HH:mm');
+  return dateStr.substring(0, 16).replace('T', ' ');
 }
