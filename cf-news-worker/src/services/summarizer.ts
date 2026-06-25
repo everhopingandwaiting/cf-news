@@ -92,8 +92,18 @@ export async function generateSummaryForNews(env: Bindings, newsId: number, item
     const summary = await generateSummary(env, { ...item, id: newsId });
     if (!summary || summary.length < 10) return false;
     const db = getDb(env);
-    // Use raw SQL for INSERT OR REPLACE (Drizzle doesn't have a direct "or replace" for sqlite)
-    await db.run(sql`INSERT OR REPLACE INTO news_summaries (news_id, summary) VALUES (${newsId}, ${summary.substring(0, 500)})`);
+    const existing = await db.select({ id: newsSummaries.id })
+        .from(newsSummaries)
+        .where(eq(newsSummaries.news_id, newsId))
+        .get();
+    if (existing) {
+        await db.update(newsSummaries)
+            .set({ summary: summary.substring(0, 500) })
+            .where(eq(newsSummaries.news_id, newsId));
+    } else {
+        await db.insert(newsSummaries)
+            .values({ news_id: newsId, summary: summary.substring(0, 500) });
+    }
 
     generateAITake(env, newsId, item).catch(() => {});
 
@@ -225,7 +235,15 @@ export async function generateAITake(env: Bindings, newsId: number, item: { titl
                 text = await doOpenAICompat(env, provider, info.base_url, info.api_key, model, prompt);
             }
             if (text && text.length > 3 && text.length < 200) {
-                await db.run(sql`INSERT OR REPLACE INTO news_ai_take (news_id, take) VALUES (${newsId}, ${text})`);
+                const existing = await db.select({ news_id: newsAiTake.news_id })
+                    .from(newsAiTake)
+                    .where(eq(newsAiTake.news_id, newsId))
+                    .get();
+                if (existing) {
+                    await db.update(newsAiTake).set({ take: text }).where(eq(newsAiTake.news_id, newsId));
+                } else {
+                    await db.insert(newsAiTake).values({ news_id: newsId, take: text });
+                }
                 return;
             }
         }
