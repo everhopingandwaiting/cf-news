@@ -18,7 +18,7 @@ export const MOCK_ENV: Record<string, any> = {
   TURNSTILE_SECRET: '1x0000000000000000000000000000000AA',
   KV: { get: async () => null, put: async () => {}, delete: async () => {} },
   GLOBAL_RATE_LIMITER: { limit: async () => ({ success: true }) },
-  QUEUE: { send: async () => {} },
+  NEWS_QUEUE: { send: async () => {} },
   BROWSER: { fetch: async () => new Response('mock', { status: 200 }) },
   AI: {
     run: async (_model: string, input?: any) => {

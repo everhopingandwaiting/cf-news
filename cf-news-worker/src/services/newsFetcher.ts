@@ -7,7 +7,7 @@ import { fetchWithBrowser, needsBrowser } from './browserFetcher';
 import { getScraper } from './scraper';
 import { eq, sql } from 'drizzle-orm';
 import { getDb } from '../db';
-import { newsItems, newsSources } from '../db/schema';
+import { newsSources } from '../db/schema';
 
 interface RSSItem {
     title: string;
@@ -19,6 +19,51 @@ interface RSSItem {
 }
 
 const CLASSIFY_BATCH = 30;
+const CST_OFFSET_MS = 8 * 3600 * 1000;
+const GMT_AS_LOCAL_FEED_HOSTS = new Set([
+    'www.infoq.cn',
+    'infoq.cn',
+    'www.ithome.com',
+    'ithome.com',
+]);
+
+function hasExplicitTimezone(dateStr: string): boolean {
+    return /[+-]\d{2}:?\d{2}\s*$|Z\s*$|GMT|UTC/i.test(dateStr.trim());
+}
+
+function shouldTreatGMTAsLocal(source: Pick<NewsSource, 'feed_url' | 'url'>): boolean {
+    for (const url of [source.feed_url, source.url]) {
+        if (!url) continue;
+        try {
+            if (GMT_AS_LOCAL_FEED_HOSTS.has(new URL(url).hostname.toLowerCase())) return true;
+        } catch {
+            continue;
+        }
+    }
+    return false;
+}
+
+export function normalizePublishedAt(pubDate: string | undefined, source: Pick<NewsSource, 'feed_url' | 'url' | 'language'>): string | null {
+    if (!pubDate) return null;
+    const d = new Date(pubDate);
+    if (isNaN(d.getTime())) return null;
+
+    const pubStr = pubDate.trim();
+    const isGMT = /GMT|UTC/i.test(pubStr);
+    // Only confirmed feeds get this correction. Some Chinese feeds label Beijing-local
+    // wall-clock times as GMT, but many Chinese-language feeds use real UTC/GMT.
+    if (isGMT && shouldTreatGMTAsLocal(source)) {
+        return new Date(d.getTime() - CST_OFFSET_MS).toISOString();
+    }
+
+    // For timezone-less Chinese feeds, treat the wall-clock as China Standard Time.
+    // For non-Chinese feeds, keep the runtime parse result instead of assuming CST.
+    if (!hasExplicitTimezone(pubStr) && source.language === 'zh') {
+        return new Date(d.getTime() - CST_OFFSET_MS).toISOString();
+    }
+
+    return d.toISOString();
+}
 
 function parseRSSFeed(xml: string): RSSItem[] {
     const items: RSSItem[] = [];
@@ -183,7 +228,6 @@ async function batchClassifyCategories(
         if (uncached.length === 0) continue;
 
         try {
-            const titles = uncached.map(j => `${j + 1}. ${(batch[j].title || '').slice(0, 200)}`);
             const prompt = `Classify each news title into exactly one category: tech, ai, news, finance, entertainment, stocks, funds\n\n...`;
             const result = await env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
                 prompt, max_tokens: uncached.length * 4, temperature: 0.1,
@@ -282,16 +326,16 @@ async function saveNewsItems(
             if (isDup) continue;
 
             const category = categories[i] || source.category;
-            const publishedAt = item.pubDate ? new Date(item.pubDate).toISOString() : null;
+            const publishedAt = normalizePublishedAt(item.pubDate, source);
 
             const result = await db.run(sql`
                 INSERT INTO news_items 
                 (source_id, title, url, description, content, image_url, category, published_at, created_at)
-                VALUES (${source.id}, ${item.title}, ${item.link}, ${item.description || null}, ${item.content || null}, ${item.image || null}, ${category}, ${publishedAt}, datetime('now', '+8 hours'))
+                VALUES (${source.id}, ${item.title}, ${item.link}, ${item.description || null}, ${item.content || null}, ${item.image || null}, ${category}, ${publishedAt}, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                 ON CONFLICT(url) DO UPDATE SET
                     title = excluded.title, description = excluded.description,
                     content = excluded.content, image_url = excluded.image_url,
-                    category = excluded.category, published_at = excluded.published_at
+                    category = excluded.category, published_at = COALESCE(excluded.published_at, news_items.published_at)
             `);
 
             const row = await db.get<{ id: number }>(sql`SELECT id FROM news_items WHERE url = ${item.link}`);
@@ -331,7 +375,7 @@ async function processSource(env: Bindings, source: NewsSource, skipSummary: boo
         console.log(`[${Date.now() - t0}ms] Saved ${saved} new items from ${source.name}`);
 
         await db.update(newsSources)
-            .set({ last_fetched_at: sql`datetime("now", "+8 hours")`, last_fetched_count: saved })
+            .set({ last_fetched_at: sql`strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`, last_fetched_count: saved })
             .where(eq(newsSources.id, source.id));
         return saved;
     } catch (e) {
@@ -341,7 +385,7 @@ async function processSource(env: Bindings, source: NewsSource, skipSummary: boo
 }
 
 export async function fetchNews(env: Bindings, skipSummary = false): Promise<void> {
-    console.log('Starting news fetch...');
+    console.log('Starting news fetch enqueue...');
     const db = getDb(env);
     const rows = await db.select({
         id: newsSources.id,
@@ -361,19 +405,16 @@ export async function fetchNews(env: Bindings, skipSummary = false): Promise<voi
 
     console.log(`Found ${rows.length} enabled sources`);
 
-    const results = await Promise.allSettled(rows.map(source => processSource(env, source, skipSummary)));
-    let totalSaved = 0;
-    for (const r of results) {
-        if (r.status === 'fulfilled') totalSaved += r.value;
+    let enqueued = 0;
+    for (const source of rows) {
+        await env.NEWS_QUEUE.send({ type: 'fetch_source', sourceId: source.id, skipSummary });
+        enqueued++;
     }
 
-    console.log(`News fetch complete. Total saved: ${totalSaved}`);
-    if (totalSaved > 0) {
-        await env.KV.put('news_cache_ver', String(Date.now())).catch(e => console.error('Failed to bump cache version:', e));
-    }
+    console.log(`News fetch enqueued ${enqueued} sources`);
 }
 
-export async function fetchSourceNews(env: Bindings, sourceId: number): Promise<number> {
+export async function fetchSourceNews(env: Bindings, sourceId: number, skipSummary = false): Promise<number> {
     const db = getDb(env);
     const rows = await db.select({
         id: newsSources.id,
@@ -393,7 +434,9 @@ export async function fetchSourceNews(env: Bindings, sourceId: number): Promise<
     const source = rows[0];
     if (!source) throw new Error('Source not found');
 
-    const items = await fetchFeed(env, source);
-    const categories = await batchClassifyCategories(env, source, items);
-    return saveNewsItems(env, source, items, categories);
+    const saved = await processSource(env, source, skipSummary);
+    if (saved > 0) {
+        await env.KV.put('news_cache_ver', String(Date.now())).catch(e => console.error('Failed to bump cache version:', e));
+    }
+    return saved;
 }

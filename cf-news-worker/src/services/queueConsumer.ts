@@ -14,7 +14,7 @@ export async function handleNewsQueue(batch: MessageBatch<NewsQueueMessage>, env
             switch (msg.type) {
                 case 'fetch_source':
                     if (msg.sourceId) {
-                        const count = await fetchSourceNews(env, msg.sourceId);
+                        const count = await fetchSourceNews(env, msg.sourceId, msg.skipSummary ?? true);
                         console.log(`Queue: fetched ${count} items from source ${msg.sourceId}`);
                     }
                     break;
