@@ -1,4 +1,10 @@
 import { useRef, useState } from 'react';
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
+import timezone from 'dayjs/plugin/timezone';
+dayjs.extend(utc);
+dayjs.extend(timezone);
+const TZ = 'Asia/Shanghai';
 import type { ClipboardTransport } from '../../utils/clipboard';
 import { formatFileSize } from '../../utils/clipboard';
 import type { FileTransfer } from './types';
@@ -106,9 +112,9 @@ export default function FileSharingSection({ fileTransfers, transport, onTranspo
                                 <span className="text-[9px] cursor-pointer hover:text-indigo-500"
                                     onClick={() => setExpandedTimeId(expandedTimeId === transfer.transferId ? null : transfer.transferId)}>
                                     {expandedTimeId === transfer.transferId
-                                        ? new Date(transfer.startedAt).toLocaleString('zh-CN') + (transfer.completedAt ? ` → ${new Date(transfer.completedAt).toLocaleString('zh-CN')}` : '')
-                                        : new Date(transfer.startedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
-                                          + (transfer.completedAt ? `→${new Date(transfer.completedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}` : '')
+                                        ? dayjs(transfer.startedAt).tz(TZ).format('YYYY-MM-DD HH:mm:ss') + (transfer.completedAt ? ` → ${dayjs(transfer.completedAt).tz(TZ).format('YYYY-MM-DD HH:mm:ss')}` : '')
+                                        : dayjs(transfer.startedAt).tz(TZ).format('MM/DD HH:mm')
+                                          + (transfer.completedAt ? `→${dayjs(transfer.completedAt).tz(TZ).format('MM/DD HH:mm')}` : '')
                                     }
                                 </span>
                             </div>

@@ -1,3 +1,10 @@
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
+import timezone from 'dayjs/plugin/timezone';
+dayjs.extend(utc);
+dayjs.extend(timezone);
+const TZ = 'Asia/Shanghai';
+
 export default function Footer() {
   const buildTime = import.meta.env.VITE_BUILD_TIME || '';
   const buildPlatform = import.meta.env.VITE_BUILD_PLATFORM || '';
@@ -6,13 +13,9 @@ export default function Footer() {
 
   const fmt = (iso: string) => {
     if (!iso) return '';
-    try {
-      const d = new Date(iso);
-      const pad = (n: number) => String(n).padStart(2, '0');
-      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-    } catch {
-      return iso;
-    }
+    const d = dayjs(iso);
+    if (!d.isValid()) return iso;
+    return d.tz(TZ).format('YYYY-MM-DD HH:mm:ss');
   };
 
   const parts: string[] = [];

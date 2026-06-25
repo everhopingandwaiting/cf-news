@@ -1,3 +1,10 @@
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
+import timezone from 'dayjs/plugin/timezone';
+dayjs.extend(utc);
+dayjs.extend(timezone);
+const TZ = 'Asia/Shanghai';
+
 import type { ClipboardDevice } from './types';
 
 interface Props {
@@ -40,7 +47,7 @@ export default function DeviceSecuritySection({
                         <div key={d.deviceId} className="px-3 py-2 flex items-center justify-between gap-2">
                             <div className="min-w-0">
                                 <div className="text-[12px] text-gray-700 truncate">{d.deviceName}{d.deviceId === currentDeviceId ? '（本机）' : ''}</div>
-                                <div className="text-[10px] text-gray-400">{new Date(d.connectedAt).toLocaleString('zh-CN')}</div>
+                                <div className="text-[10px] text-gray-400">{dayjs(d.connectedAt).tz(TZ).format('YYYY-MM-DD HH:mm:ss')}</div>
                             </div>
                             {d.deviceId !== currentDeviceId && (
                                 <button className={`text-[11px] ${trustedDevices.includes(d.deviceId) ? 'text-emerald-600' : 'text-gray-400 hover:text-indigo-500'}`} onClick={() => onToggleTrusted(d.deviceId)}>
