@@ -18,6 +18,8 @@ export default function AuthModal({ visible, onClose, onLoginSuccess }: Props) {
   const [loading, setLoading] = useState(false);
   const turnstileRef = useRef<HTMLDivElement>(null);
   const widgetIdRef = useRef<string | null>(null);
+  const turnstileTokenRef = useRef('');
+  const turnstileResolveRef = useRef<((token: string) => void) | null>(null);
 
   // Render Turnstile widget after we have the site key
   useEffect(() => {
@@ -26,6 +28,13 @@ export default function AuthModal({ visible, onClose, onLoginSuccess }: Props) {
       if (c.turnstileSiteKey && turnstileRef.current && !widgetIdRef.current) {
         widgetIdRef.current = (window as any).turnstile?.render(turnstileRef.current, {
           sitekey: c.turnstileSiteKey,
+          callback: (token: string) => {
+            turnstileTokenRef.current = token;
+            if (turnstileResolveRef.current) {
+              turnstileResolveRef.current(token);
+              turnstileResolveRef.current = null;
+            }
+          },
         });
       }
     }).catch(() => {});
@@ -34,18 +43,35 @@ export default function AuthModal({ visible, onClose, onLoginSuccess }: Props) {
         try { (window as any).turnstile?.remove(widgetIdRef.current); } catch {}
         widgetIdRef.current = null;
       }
+      turnstileTokenRef.current = '';
     };
   }, [visible]);
 
   if (!visible) return null;
 
+  // The widget is Invisible mode: render() alone produces no token. It only
+  // issues one after execute() (the submit click is the user interaction), so
+  // wait for the callback before proceeding. Guard against a hung widget so the
+  // submit button never spins forever.
+  async function ensureTurnstileToken(): Promise<string> {
+    if (turnstileTokenRef.current) return turnstileTokenRef.current;
+    if (!widgetIdRef.current) return '';
+    return new Promise(resolve => {
+      const timer = setTimeout(() => { turnstileResolveRef.current = null; resolve(''); }, 5000);
+      turnstileResolveRef.current = (token: string) => { clearTimeout(timer); resolve(token); };
+      (window as any).turnstile?.execute(widgetIdRef.current);
+    });
+  }
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError('');
     setLoading(true);
-    let token = '';
-    if (widgetIdRef.current) {
-      token = (window as any).turnstile?.getResponse(widgetIdRef.current) || '';
+    const token = await ensureTurnstileToken();
+    if (!token) {
+      setError('人机验证加载失败，请刷新页面重试');
+      setLoading(false);
+      return;
     }
     try {
       if (mode === 'register') {

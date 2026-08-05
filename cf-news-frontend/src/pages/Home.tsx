@@ -291,6 +291,18 @@ export default function Home() {
     } catch { showToast('获取推荐失败', 'error'); }
   }
 
+  // 生成页码窗口：保留首页/末页，中间显示当前页附近的 5 页
+  function getPageNumbers(current: number, total: number): (number | '...')[] {
+    const nums: (number | '...')[] = [1];
+    const start = Math.max(2, current - 2);
+    const end = Math.min(total - 1, current + 2);
+    if (start > 2) nums.push('...');
+    for (let i = start; i <= end; i++) nums.push(i);
+    if (end < total - 1) nums.push('...');
+    if (total > 1) nums.push(total);
+    return nums;
+  }
+
   return (
     <div className="max-w-[1280px] mx-auto p-6">
       <Header
@@ -321,7 +333,12 @@ export default function Home() {
         clipboardHasNew={clipboard.hasNewData}
         onClearClipboardFlag={clipboard.clearNewDataFlag}
       />
-      {hasNewNews && <div className="bg-indigo-500 text-white px-5 py-3 rounded-lg mb-4 cursor-pointer font-medium text-sm text-center shadow animate-pulse hover:bg-indigo-600" onClick={() => { setHasNewNews(false); setPage(1); loadNews(1); }}>有新新闻，点击刷新</div>}
+      {hasNewNews && (
+        <div className="bg-gradient-to-r from-indigo-500 to-purple-500 text-white px-5 py-3 rounded-lg mb-4 cursor-pointer font-medium text-sm text-center shadow-md hover:shadow-lg hover:from-indigo-600 hover:to-purple-600 transition-all duration-200 animate-slideUp flex items-center justify-center gap-2" onClick={() => { setHasNewNews(false); setPage(1); loadNews(1); }}>
+          <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" /></svg>
+          有新新闻，点击刷新
+        </div>
+      )}
       <Suspense fallback={null}><DailyDigest digest={digestData} loading={digestLoading} collapsed={digestCollapsed} regenerating={digestRegenerating} dates={digestDates} onToggle={() => setDigestCollapsed(!digestCollapsed)} onRegenerate={handleRegenerateDigest} onDateChange={handleDigestDateChange} /></Suspense>
       <CategoryNav categories={CATEGORIES} active={category} onSelect={k => { setCategory(k); setPage(1); }} />
       <div className="flex gap-2.5 mb-5 items-center flex-wrap">
@@ -355,18 +372,56 @@ export default function Home() {
         onCancelFile={clipboard.cancelFileTransfer}
       /></Suspense>}
       {loading ? (
-        <div className="text-center py-20 text-gray-400 flex flex-col items-center gap-4"><div className="w-8 h-8 border-2 border-gray-200 border-t-indigo-500 rounded-full animate-spin"></div><p>加载中...</p></div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4" aria-busy="true" aria-label="加载中">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="bg-white rounded-lg p-4 border border-gray-200 shadow-sm animate-pulse">
+              <div className="aspect-[16/9] bg-gray-200 rounded-lg mb-3"></div>
+              <div className="flex items-center justify-between gap-3 mb-2">
+                <div className="h-3 w-24 bg-gray-100 rounded"></div>
+                <div className="h-4 w-12 bg-gray-100 rounded-md"></div>
+              </div>
+              <div className="h-4 bg-gray-100 rounded mb-2.5"></div>
+              <div className="h-4 w-3/4 bg-gray-100 rounded mb-3"></div>
+              <div className="h-16 bg-gray-100 rounded-lg mb-3"></div>
+              <div className="flex items-center justify-between">
+                <div className="h-3 w-16 bg-gray-100 rounded"></div>
+                <div className="h-3 w-24 bg-gray-100 rounded"></div>
+              </div>
+            </div>
+          ))}
+        </div>
       ) : (
         <>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {news.length === 0 && <p className="text-gray-400 text-center py-20 col-span-full text-sm">暂无新闻</p>}
+            {news.length === 0 && (
+              <div className="col-span-full flex flex-col items-center justify-center py-24 text-center">
+                <svg className="w-16 h-16 text-gray-200 mb-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M6 3h9l5 5v13a1 1 0 0 1-1 1H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" />
+                  <polyline points="15 3 15 8 20 8" />
+                  <line x1="8" y1="13" x2="16" y2="13" />
+                  <line x1="8" y1="17" x2="13" y2="17" />
+                </svg>
+                <p className="text-gray-500 text-base font-medium">暂无新闻</p>
+                <p className="text-gray-400 text-sm mt-1.5">换个分类或刷新试试</p>
+              </div>
+            )}
             {news.map(item => <NewsCard key={item.id} item={item} token={token} onAuthRequired={() => setShowAuth(true)} onSelect={selectNews} />)}
           </div>
           {pagination && pagination.totalPages > 1 && (
-            <div className="flex justify-center items-center gap-4 mt-8 py-5">
-              <button className="px-4 py-2 rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 transition disabled:opacity-30 disabled:cursor-not-allowed" disabled={page <= 1} onClick={() => goPage(page - 1)}>◀ 上一页</button>
-              <span className="text-gray-400 text-sm">{page} / {pagination.totalPages}</span>
-              <button className="px-4 py-2 rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 transition disabled:opacity-30 disabled:cursor-not-allowed" disabled={page >= pagination.totalPages} onClick={() => goPage(page + 1)}>下一页 ▶</button>
+            <div className="flex justify-center items-center gap-1.5 mt-8 py-5 flex-wrap">
+              <button className="w-8 h-8 flex items-center justify-center rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 transition disabled:opacity-30 disabled:cursor-not-allowed" disabled={page <= 1} onClick={() => goPage(page - 1)} aria-label="上一页">
+                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6" /></svg>
+              </button>
+              {getPageNumbers(page, pagination.totalPages).map((p, idx) =>
+                p === '...' ? (
+                  <span key={`ellipsis-${idx}`} className="w-8 h-8 flex items-center justify-center text-gray-400 text-sm select-none">…</span>
+                ) : (
+                  <button key={p} className={`w-8 h-8 flex items-center justify-center rounded-lg text-[13px] font-medium transition ${p === page ? 'bg-indigo-500 text-white shadow' : 'border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50'}`} onClick={() => goPage(p)} aria-current={p === page ? 'page' : undefined}>{p}</button>
+                )
+              )}
+              <button className="w-8 h-8 flex items-center justify-center rounded-lg text-[13px] font-medium border border-gray-200 bg-transparent text-gray-600 hover:bg-gray-50 transition disabled:opacity-30 disabled:cursor-not-allowed" disabled={page >= pagination.totalPages} onClick={() => goPage(page + 1)} aria-label="下一页">
+                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6" /></svg>
+              </button>
             </div>
           )}
         </>

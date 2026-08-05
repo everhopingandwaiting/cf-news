@@ -335,6 +335,8 @@ cf-news/
 | POST | `/api/admin/sources/reorder` | 排序 RSS 源 |
 | POST | `/api/admin/sources/refresh/:id` | 强制刷新某源 |
 | GET | `/api/admin/stats` | 源统计信息 |
+| POST | `/api/admin/backfill-vectors` | 为旧新闻回填语义去重向量（后台，每批 500 条） |
+| POST | `/api/admin/backfill-entities` | 为缺少实体的新闻回填结构化实体抽取（后台，每批 50 条） |
 
 ## 添加 RSS 源
 

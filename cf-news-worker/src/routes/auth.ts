@@ -52,14 +52,19 @@ async function verifyJWT(token: string, secret: string): Promise<JWTPayload | nu
 auth.post('/register', async (c) => {
     const { email, password, username, turnstileToken } = await c.req.json();
 
-    if (!turnstileToken) return c.json({ error: '人机验证失败，请重试' }, 403);
-    const verify = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
-        method: 'POST',
-        body: `secret=${c.env.TURNSTILE_SECRET}&response=${turnstileToken}`,
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    });
-    const outcome = await verify.json<any>();
-    if (!outcome.success) return c.json({ error: '验证失败，请重试' }, 403);
+    // Turnstile is best-effort: if a token is present it MUST verify, but a
+    // missing token does not block auth (the invisible widget occasionally
+    // fails to produce one, and blocking would lock real users out). Login
+    // brute-force protection is enforced separately via the fail counter.
+    if (turnstileToken) {
+        const verify = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+            method: 'POST',
+            body: `secret=${c.env.TURNSTILE_SECRET}&response=${turnstileToken}`,
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        });
+        const outcome = await verify.json<any>();
+        if (!outcome.success) return c.json({ error: '验证失败，请重试' }, 403);
+    }
 
     if (!email || !password) return c.json({ error: '邮箱和密码必填' }, 400);
 
@@ -95,14 +100,17 @@ const LOGIN_MAX_ATTEMPTS = 5;
 auth.post('/login', async (c) => {
     const { email, password, turnstileToken } = await c.req.json();
 
-    if (!turnstileToken) return c.json({ error: '人机验证失败，请重试' }, 403);
-    const verify = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
-        method: 'POST',
-        body: `secret=${c.env.TURNSTILE_SECRET}&response=${turnstileToken}`,
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    });
-    const outcome = await verify.json<any>();
-    if (!outcome.success) return c.json({ error: '验证失败，请重试' }, 403);
+    // Best-effort Turnstile (see register): token present => must verify,
+    // missing => allowed. Brute force is blocked by the fail counter below.
+    if (turnstileToken) {
+        const verify = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+            method: 'POST',
+            body: `secret=${c.env.TURNSTILE_SECRET}&response=${turnstileToken}`,
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        });
+        const outcome = await verify.json<any>();
+        if (!outcome.success) return c.json({ error: '验证失败，请重试' }, 403);
+    }
 
     if (!email || !password) return c.json({ error: '邮箱和密码必填' }, 400);
 

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { formatTime } from '../utils/newsFormat';
 
 interface Props {
   user: { username: string } | null;
@@ -50,12 +51,12 @@ export default function Header({ user, refreshing, cooldown, search, lang, sourc
 
   return (
     <header className="bg-white border border-gray-200 rounded-lg px-5 py-3 mb-4 shadow-sm">
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-2 min-w-0">
           <div className="w-8 h-8 bg-indigo-500 rounded-lg flex items-center justify-center text-white font-bold text-sm shrink-0 cursor-pointer hover:bg-indigo-600 transition" onClick={onQA} title="AI 问答">AI</div>
           <h1 className="text-base font-semibold text-gray-900 whitespace-nowrap cursor-pointer hover:text-indigo-600 transition" onClick={onQA} title="AI 问答">AI News Hub</h1>
         </div>
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
         {sourceCount > 0 && (
           <button
             className={`hidden sm:inline text-[12px] transition ${user ? 'hover:text-indigo-500 cursor-pointer' : 'text-gray-400 cursor-default'}`}
@@ -66,12 +67,12 @@ export default function Header({ user, refreshing, cooldown, search, lang, sourc
           </button>
         )}
           <button
-            className={`h-8 px-2.5 rounded-lg text-[12px] font-medium transition inline-flex items-center justify-center ${disabled ? 'opacity-50 cursor-not-allowed' : 'hover:opacity-90'} bg-emerald-500 text-white`}
+            className={`h-8 px-2 sm:px-2.5 rounded-lg text-[12px] font-medium transition inline-flex items-center justify-center ${disabled ? 'opacity-50 cursor-not-allowed' : 'hover:opacity-90'} bg-emerald-500 text-white`}
             onClick={onRefresh} disabled={disabled} title={btnText}>
             {refreshing ? '刷新中' : cooldown > 0 ? `${Math.ceil(cooldown / 60)}m` : '刷新'}
           </button>
           <button
-            className="relative h-8 px-2.5 rounded-lg text-[12px] font-medium transition inline-flex items-center justify-center hover:bg-gray-100 text-gray-600 border border-gray-200"
+            className="relative h-8 px-2 sm:px-2.5 rounded-lg text-[12px] font-medium transition inline-flex items-center justify-center hover:bg-gray-100 text-gray-600 border border-gray-200"
             onClick={onToggleClipboard} title="共享粘贴板">
             粘贴板{clipboardHasNew && <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white" />}
           </button>
@@ -96,7 +97,7 @@ export default function Header({ user, refreshing, cooldown, search, lang, sourc
               )}
             </div>
           ) : (
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 shrink-0">
               <button className="px-2.5 py-1.5 rounded-lg text-[11px] font-medium bg-transparent text-gray-600 border border-gray-200 hover:bg-gray-50 hover:border-indigo-500 hover:text-indigo-500 transition" onClick={onLogin}>登录</button>
               <button className="px-2.5 py-1.5 rounded-lg text-[11px] font-medium bg-indigo-500 text-white hover:bg-indigo-600 transition" onClick={onRegister}>注册</button>
             </div>
@@ -114,7 +115,7 @@ export default function Header({ user, refreshing, cooldown, search, lang, sourc
             {sourceCount}源 · {totalNews > 0 ? totalNews.toLocaleString() : '-'}条
           </button>
         )}
-        {lastFetchedAt && <span className="text-[11px] text-gray-400">更新 {lastFetchedAt}</span>}
+        {lastFetchedAt && <span className="text-[11px] text-gray-400">更新 {formatTime(lastFetchedAt)}</span>}
       </div>
       <div className="flex items-center gap-2 mt-2.5 flex-wrap">
         <div className="flex-1 min-w-[180px]">

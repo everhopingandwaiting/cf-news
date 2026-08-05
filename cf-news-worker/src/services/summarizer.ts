@@ -255,6 +255,58 @@ export async function generateAITake(env: Bindings, newsId: number, item: { titl
 
 const PERSPECTIVE_PROMPT = '以下是多篇媒体报道同一新闻事件的标题和摘要。请分析不同媒体的报道角度差异，用中文给出对比观点，200字以内。\n\n{{ARTICLES}}\n\n多视角分析：';
 
+// FTS5 keyword extraction shared with the related-articles fallback in routes/ai.ts.
+// Splits the title into significant terms and builds an OR query so semantically
+// related coverage (same event, different outlet) can be found without a
+// vector index — VECTORIZE only holds dedup hashes, so it cannot serve this.
+function stem(w: string): string {
+    if (w.endsWith('ly')) w = w.slice(0, -2);
+    if (w.endsWith('ing')) w = w.slice(0, -3);
+    if (w.endsWith('ed')) w = w.slice(0, -2);
+    return w;
+}
+
+async function buildPerspectiveFtsQuery(env: Bindings, title: string): Promise<string | null> {
+    const db = getDb(env);
+    const stopRows = await db.all<{ word: string }>(sql`SELECT word FROM stop_words`);
+    const stopWords = new Set(stopRows.map(r => r.word.toLowerCase()));
+    const keywords = title
+        .replace(/[^\w\u4e00-\u9fff\s]/g, ' ')
+        .split(/\s+/)
+        .map(w => stem(w.toLowerCase()))
+        .filter(w => w.length > 1 && !stopWords.has(w))
+        .slice(0, 3);
+    if (keywords.length === 0) return null;
+    return keywords.map(k => `"${k.replace(/"/g, '')}"`).join(' OR ');
+}
+
+async function findRelatedByFts(env: Bindings, newsId: number, title: string, category?: string | null): Promise<{ id: number; source_name: string; title: string; description: string | null }[]> {
+    const db = getDb(env);
+    const ftsQuery = await buildPerspectiveFtsQuery(env, title);
+    if (!ftsQuery) return [];
+
+    try {
+        const ftsIds = await db.all<{ rowid: number }>(
+            sql`SELECT rowid FROM news_fts WHERE news_fts MATCH ${sql.raw(`'${ftsQuery}'`)} LIMIT 30`
+        );
+        if (ftsIds.length === 0) return [];
+        const matchedIds = ftsIds.map(r => r.rowid).filter(rid => rid !== newsId).slice(0, 5);
+        if (matchedIds.length === 0) return [];
+
+        const rows = await db.all<{ id: number; source_name: string; title: string; description: string | null }>(sql`
+            SELECT n.id, s.name as source_name, n.title, n.description
+            FROM news_items n LEFT JOIN news_sources s ON n.source_id = s.id
+            WHERE n.id IN (${sql.raw(matchedIds.join(','))}) AND n.is_deleted = 0
+            ORDER BY CASE WHEN n.category = ${category} THEN 0 ELSE 1 END, n.created_at DESC
+            LIMIT 4
+        `);
+        return rows;
+    } catch (e) {
+        console.error('findRelatedByFts error:', e);
+        return [];
+    }
+}
+
 export async function generatePerspectives(env: Bindings, newsId: number): Promise<{ related: { id: number; source: string; title: string }[]; perspective: string } | null> {
     const db = getDb(env);
     const cached = await db.select({
@@ -269,15 +321,13 @@ export async function generatePerspectives(env: Bindings, newsId: number): Promi
         const rows = await db.all<{ id: number; source_name: string; title: string }>(sql`
             SELECT n.id, s.name as source_name, n.title
             FROM news_items n LEFT JOIN news_sources s ON n.source_id = s.id
-            WHERE n.id IN (${ids.join(',')})
+            WHERE n.id IN (${sql.raw(ids.join(','))})
         `);
         return { related: rows.map(r => ({ id: r.id, source: r.source_name, title: r.title })), perspective: cached.perspective };
     }
 
-    if (!env.VECTORIZE) return null;
-
     const item = await db.select({
-        title: newsItems.title, description: newsItems.description,
+        title: newsItems.title, description: newsItems.description, category: newsItems.category,
     }).from(newsItems)
         .where(and(eq(newsItems.id, newsId), eq(newsItems.is_deleted, 0)))
         .get();
@@ -288,21 +338,7 @@ export async function generatePerspectives(env: Bindings, newsId: number): Promi
     if (text.length < 20) return null;
 
     try {
-        const embedding = await env.AI.run('@cf/qwen/qwen3-embedding-0.6b', { text: [text] });
-        const vector = embedding.data[0];
-        if (!vector) return null;
-
-        const matches = await env.VECTORIZE.query(vector, { topK: 6, returnMetadata: false });
-        if (matches.count < 2) return null;
-
-        const ids = matches.matches.map((m: any) => parseInt(m.id)).filter((id: number) => id !== newsId).slice(0, 3);
-        if (ids.length === 0) return null;
-
-        const rows = await db.all<{ id: number; source_name: string; title: string; description: string | null }>(sql`
-            SELECT n.id, s.name as source_name, n.title, n.description
-            FROM news_items n LEFT JOIN news_sources s ON n.source_id = s.id
-            WHERE n.id IN (${ids.join(',')})
-        `);
+        const rows = await findRelatedByFts(env, newsId, item.title, item.category);
         if (rows.length === 0) return null;
 
         const articles = rows.map((r, i) => `【来源${i + 1}】${r.source_name || '未知'}\n标题：${r.title}\n摘要：${(r.description || '').substring(0, 200)}`).join('\n\n');

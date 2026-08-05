@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { NewsComment } from '../types';
 import { getComments, postComment } from '../api/client';
+import { formatTime } from '../utils/newsFormat';
 
 interface Props { newsId: number; token: string | null; }
 
@@ -92,7 +93,7 @@ export default function Comments({ newsId, token }: Props) {
       <div className="space-y-1.5">
         {comments.map(c => (
           <div key={c.id} className="bg-gray-50 px-3 py-2.5 rounded-lg border border-gray-200">
-            <div className="flex justify-between mb-1"><span className="font-semibold text-[12px] text-indigo-500">{c.username}</span><span className="text-[11px] text-gray-400">{(c.created_at || '').substring(0, 16)}</span></div>
+            <div className="flex justify-between mb-1"><span className="font-semibold text-[12px] text-indigo-500">{c.username}</span><span className="text-[11px] text-gray-400">{formatTime(c.created_at || '')}</span></div>
             <div className="text-[13px] text-gray-600">{c.content}</div>
           </div>
         ))}

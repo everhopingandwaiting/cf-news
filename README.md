@@ -344,6 +344,8 @@ cf-news/
 | POST | `/api/admin/sources/reorder` | Reorder sources |
 | POST | `/api/admin/sources/refresh/:id` | Force refresh a source |
 | GET | `/api/admin/stats` | Source statistics |
+| POST | `/api/admin/backfill-vectors` | Backfill semantic dedup vectors for old items (background, 500/batch) |
+| POST | `/api/admin/backfill-entities` | Backfill structured entity extraction for items missing entities (background, 50/batch) |
 
 ## Adding RSS Sources
 

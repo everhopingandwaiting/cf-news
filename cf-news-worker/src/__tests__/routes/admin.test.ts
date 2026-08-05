@@ -60,6 +60,38 @@ describe('Admin API - Auth boundary', () => {
   });
 });
 
+describe('Admin API - Entity backfill', () => {
+  it('POST /api/admin/backfill-entities - returns 401 without auth header', async () => {
+    const { status } = await request(app, db, '/api/admin/backfill-entities', { method: 'POST' });
+    expect(status).toBe(401);
+  });
+
+  it('POST /api/admin/backfill-entities - returns 403 for non-admin token', async () => {
+    const userToken = await makeToken({ role: 'user' });
+    const { status } = await request(app, db, '/api/admin/backfill-entities', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${userToken}` },
+    });
+    expect(status).toBe(403);
+  });
+
+  it('POST /api/admin/backfill-entities - returns 200 for admin', async () => {
+    await db.seed('news_sources', [
+      { id: 78, name: 'Backfill Source', feed_url: 'https://backfill/rss', category: 'news', language: 'en' },
+    ]);
+    await db.seed('news_items', [
+      { id: 300, source_id: 78, title: 'Backfill me', url: 'https://backfill/300', description: 'A substantial description for entity extraction.', content: 'Full article content with organizations and people mentioned.', is_deleted: 0 },
+    ]);
+
+    const { status, body } = await request(app, db, '/api/admin/backfill-entities', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    expect(status).toBe(200);
+    expect(body.success).toBe(true);
+  });
+});
+
 describe('Admin API - Sources CRUD', () => {
   it('GET /api/admin/sources - returns sources list', async () => {
     await db.seed('news_sources', [{ id: 1, name: 'Src1', feed_url: 'https://rss', category: 'tech', language: 'en', sort_order: 1, last_fetched_at: '2024-01-01 00:00:00', last_fetched_count: 5 }]);

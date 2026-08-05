@@ -147,8 +147,10 @@ router.get('/related/:id', async (c) => {
             if (keywords.length > 0) {
                 const ftsQuery = keywords.map(k => `"${k.replace(/"/g, '')}"`).join(' OR ');
                 try {
+                    // FTS5 MATCH cannot take a bound parameter on D1 — inline
+                    // the sanitized query (keywords are word-chars only).
                     const ftsIds = await db.all<{ rowid: number }>(
-                        sql`SELECT rowid FROM news_fts WHERE news_fts MATCH ${ftsQuery} LIMIT 20`
+                        sql`SELECT rowid FROM news_fts WHERE news_fts MATCH ${sql.raw(`'${ftsQuery}'`)} LIMIT 20`
                     );
                     if (ftsIds.length > 0) {
                         const matchedIds = ftsIds.map(r => r.rowid).filter(rid => rid !== id);
@@ -159,7 +161,7 @@ router.get('/related/:id', async (c) => {
                                 published_at: newsItems.published_at,
                             }).from(newsItems)
                                 .where(and(
-                                    sql`${newsItems.id} IN (${sql.join(matchedIds.map(i => sql`${i}`))})`,
+                                    sql`${newsItems.id} IN (${sql.raw(matchedIds.join(','))})`,
                                     eq(newsItems.is_deleted, 0),
                                 ))
                                 .orderBy(

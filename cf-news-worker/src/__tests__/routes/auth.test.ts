@@ -29,15 +29,31 @@ describe('Auth API', () => {
     expect(status).toBe(400);
   });
 
-  it('POST /api/auth/register - requires turnstile token', async () => {
-    // helpers injects a stub token; passing one explicitly with noTurnstile flag is
-    // not supported by the helper, so hit the route directly with a raw body.
+  it('POST /api/auth/register - allows missing turnstile token (best-effort)', async () => {
+    // Turnstile is best-effort: a missing token must not block registration
+    // (the invisible widget occasionally fails to produce one). Brute force is
+    // handled separately by login rate limiting.
     const res = await app.fetch(new Request('http://localhost/api/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: 'noturnstile@test.com', password: 'pass123' }),
     }), { ...MOCK_ENV, DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} } as any);
+    expect(res.status).toBe(201);
+  });
+
+  it('POST /api/auth/register - rejects invalid turnstile token', async () => {
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(
+      JSON.stringify({ success: false, 'error-codes': ['invalid-input-response'] }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    )) as typeof fetch;
+    const res = await app.fetch(new Request('http://localhost/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'badtoken@test.com', password: 'pass123', turnstileToken: 'invalid-token' }),
+    }), { ...MOCK_ENV, DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} } as any);
     expect(res.status).toBe(403);
+    globalThis.fetch = origFetch;
   });
 
   it('POST /api/auth/register - rejects duplicate email', async () => {

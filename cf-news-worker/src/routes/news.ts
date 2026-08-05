@@ -51,8 +51,10 @@ async function searchNewsFTS(env: Bindings, query: string): Promise<number[] | n
     try {
         const ftsQuery = sanitized.split(/\s+/).map(w => w + '*').join(' ');
         const db = getDb(env);
+        // FTS5 MATCH cannot take a bound parameter on D1 — inline the sanitized
+        // query (query is restricted to word chars above, so no injection).
         const result = await db.all<{ rowid: number }>(
-            sql`SELECT rowid FROM news_fts WHERE news_fts MATCH ${ftsQuery} LIMIT 200`
+            sql`SELECT rowid FROM news_fts WHERE news_fts MATCH ${sql.raw(`'${ftsQuery}'`)} LIMIT 200`
         );
         ids = result.map(r => r.rowid);
     } catch (e) {
@@ -103,7 +105,7 @@ news.get('/', async (c) => {
     if (search) {
         const indexedIds = await searchNewsFTS(c.env, search);
         if (indexedIds && indexedIds.length > 0) {
-            conds.push(sql`n.id IN (${sql.join(indexedIds.map(id => sql`${id}`))})`);
+            conds.push(sql`n.id IN (${sql.raw(indexedIds.join(','))})`);
         } else {
             const escaped = search.replace(/[%_\\]/g, '\\$&');
             conds.push(sql`n.title LIKE ${'%' + escaped + '%'} ESCAPE '\\'`);

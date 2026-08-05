@@ -3,6 +3,7 @@ import { Bindings } from '../types';
 import { indexNewsItem } from '../services/tokenizer';
 import { fetchSourceNews } from '../services/newsFetcher';
 import { storeDedupHash } from '../services/dedup';
+import { extractEntities } from '../services/entityExtractor';
 import { eq, desc, sql, and, ne } from 'drizzle-orm';
 import { getDb } from '../db';
 import { newsSources, newsItems, newsFts } from '../db/schema';
@@ -242,6 +243,43 @@ admin.post('/backfill-vectors', async (c) => {
         }
     })());
     return c.json({ success: true, message: 'Vector backfill started in background (500 items)' });
+});
+
+// Backfill entities for existing news items that have content but no extracted
+// entities yet. Runs in background; each batch is capped so the invocation stays
+// under the subrequest limit.
+admin.post('/backfill-entities', async (c) => {
+    const db = getDb(c.env);
+    c.executionCtx.waitUntil((async () => {
+        try {
+            const items = await db.all<{ id: number; title: string; description: string | null; content: string | null }>(sql`
+                SELECT n.id, n.title, n.description, n.content
+                FROM news_items n
+                LEFT JOIN news_entities ne ON ne.news_id = n.id
+                WHERE n.is_deleted = 0 AND ne.id IS NULL
+                  AND (n.content IS NOT NULL OR n.description IS NOT NULL)
+                ORDER BY n.id DESC
+                LIMIT 50
+            `);
+            let done = 0;
+            for (const item of items) {
+                try {
+                    await extractEntities(c.env, item.id, {
+                        title: item.title,
+                        description: item.description ?? undefined,
+                        content: item.content ?? undefined,
+                    });
+                    done++;
+                } catch (e) {
+                    console.error(`Entity extraction failed for id=${item.id}:`, e);
+                }
+            }
+            console.log(`Entity backfill complete: ${done}/${items.length}`);
+        } catch (e) {
+            console.error('Entity backfill failed:', e);
+        }
+    })());
+    return c.json({ success: true, message: 'Entity backfill started in background (50 items)' });
 });
 
 export default admin;

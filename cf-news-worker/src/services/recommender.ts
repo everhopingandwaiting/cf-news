@@ -32,7 +32,7 @@ export async function getRecommendations(env: Bindings, userId: number, limit = 
         FROM news_items n
         LEFT JOIN news_sources s ON n.source_id = s.id
         WHERE n.is_deleted = 0
-        AND n.category IN (${categories.join(',')})
+        AND n.category IN (${categories.map(c => `'${c.replace(/'/g, "''")}'`).join(',')})
         AND n.id NOT IN (SELECT news_id FROM user_read_history WHERE user_id = ${userId})
         ORDER BY n.created_at DESC
         LIMIT ${limit}

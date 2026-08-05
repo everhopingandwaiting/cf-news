@@ -138,6 +138,27 @@ describe('News API', () => {
     expect(body.error).toBeTruthy();
   });
 
+  it('GET /api/news/:id/perspectives - returns cached perspectives with related articles', async () => {
+    await db.seed('news_sources', [
+      { id: 41, name: 'Cached Source', feed_url: 'https://cached/rss', category: 'news', language: 'en' },
+    ]);
+    await db.seed('news_items', [
+      { id: 210, source_id: 41, title: 'Cached perspective article', url: 'https://cached/210', is_deleted: 0 },
+      { id: 211, source_id: 41, title: 'Cached related article', url: 'https://cached/211', is_deleted: 0 },
+    ]);
+    await db.seed('news_perspectives', [
+      { news_id: 210, related_ids: '211', perspective: '观点A：支持者认为利大于弊；观点B：反对者担忧安全风险。' },
+    ]);
+
+    const { status, body } = await request(app, db, '/api/news/210/perspectives');
+    expect(status).toBe(200);
+    expect(body.perspective).toContain('观点A');
+    expect(body.related).toHaveLength(1);
+    expect(body.related[0].id).toBe(211);
+    expect(body.related[0].source).toBe('Cached Source');
+    expect(body.related[0].title).toBe('Cached related article');
+  });
+
   it('GET /api/news/timeline - returns ordered events for a keyword', async () => {
     await db.seed('news_sources', [{ id: 30, name: 'Timeline Source', feed_url: 'https://timeline/rss', category: 'news', language: 'en' }]);
     await db.seed('news_items', [

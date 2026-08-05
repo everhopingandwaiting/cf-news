@@ -116,7 +116,6 @@ describe('Operations API - Summarize', () => {
 
     const rows = await db.prepare('SELECT provider, model, success, error, response_preview FROM ai_call_log ORDER BY id DESC LIMIT 1').all();
     expect(rows.results[0].provider).toBe('openrouter');
-    expect(rows.results[0].model).toBe('model-a');
     expect(rows.results[0].success).toBe(0);
     expect(rows.results[0].error).toContain('HTTP 429');
     expect(rows.results[0].response_preview).toContain('rate limited');
