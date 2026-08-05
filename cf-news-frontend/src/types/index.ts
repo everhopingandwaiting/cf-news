@@ -105,3 +105,9 @@ export interface PerspectiveReport {
   related: { id: number; source: string; title: string }[];
   perspective: string;
 }
+
+export interface NewsEntity {
+  type: 'person' | 'organization' | 'location' | 'number' | 'event';
+  value: string;
+  context: string | null;
+}

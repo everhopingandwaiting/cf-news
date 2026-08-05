@@ -105,7 +105,10 @@ export class CommentsRoom {
             SET is_deleted = 1, deleted_at = datetime("now", "+8 hours")
             WHERE id = ${commentId} AND user_id = ${userId} AND is_deleted = 0
         `);
-        return result.success;
+        // success only means "no SQL error"; changes>0 is what confirms a row was
+        // actually soft-deleted (otherwise deleting someone else's comment would
+        // still broadcast a delete event).
+        return result.meta.changes > 0;
     }
 
     private broadcast(msg: object) {

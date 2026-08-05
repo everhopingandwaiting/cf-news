@@ -1,73 +1,74 @@
-# React + TypeScript + Vite
+# cf-news-frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Frontend for [CF News](../README.md) — a daily news aggregation platform running on Cloudflare Workers. [中文文档](README_zh.md)
 
-Currently, two official plugins are available:
+## Overview
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Single-page application built with React 19 + Vite 8 + Tailwind 4 + TypeScript 6. Compiled to static assets, copied into `cf-news-worker/public/`, and served by the Hono API worker as Cloudflare [assets]. The API is reached via same-origin relative `/api/*` paths — there is no CORS or separate API host.
 
-## React Compiler
+## Tech Stack
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+| Layer | Technology |
+|-------|------------|
+| UI | React 19.2, TypeScript 6, Tailwind 4 (CSS-first via `@theme` in `src/index.css`) |
+| Build | Vite 8 (`@vitejs/plugin-react` + `@tailwindcss/vite`) |
+| HTTP | axios (interceptor injects `Authorization: Bearer <token>` from `localStorage['token']`) |
+| Utilities | dayjs, browser SpeechSynthesis (TTS), IndexedDB (clipboard image cache) |
+| PWA | `public/sw.js` + `public/manifest.json`, registered in `src/main.tsx` |
 
-## Expanding the ESLint configuration
+## Project Structure
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```
+src/
+├── components/            # 18 root components (Header, NewsCard, NewsDetailModal, ...)
+│   ├── clipboard/         # Clipboard subsystem (text/image/file sharing, device security)
+│   └── trending/          # Trending panel sub-tabs (hot keywords, rising topics, themes, charts)
+├── pages/Home.tsx         # The only page — single orchestrator, holds all app state
+├── hooks/useClipboardWS.ts# The only custom hook — WebSocket clipboard sync + file transfer
+├── api/client.ts          # Axios wrapper (named endpoint fns + default `api` export)
+├── utils/                 # newsFormat.ts (sanitize), clipboard.ts, image.ts (compress)
+└── types/index.ts         # Frontend type definitions
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Per-file inventory with roles: see [AGENTS.md](AGENTS.md).
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## Key Architecture Facts
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+- **No router library.** "Routing" is boolean panel state in `Home.tsx`; share URLs use `history.replaceState('/share/:id')`; clipboard handoff uses the `#clip=` hash.
+- **No state management library.** React state + props drilling only.
+- **Lazy loading** (`React.lazy` + `Suspense`): DailyDigest, ClipboardShare, NewsQA, ExplorePanel.
+- **Chinese UI text** throughout.
+- **Raw `fetch()`** (not axios) for streaming / blob / admin-trigger endpoints (`askQuestionStream`, digest generate, user export).
+- **XSS-safe HTML**: `dangerouslySetInnerHTML` only behind `sanitizeHtml` in `utils/newsFormat.ts` (also rewrites external images through the `/api/image?url=` proxy).
+
+## Development
+
+All npm operations run inside Docker — no Node.js on the host (repo rule):
+
+```bash
+docker run --rm \
+  -v $(pwd):/app -v /app/node_modules -w /app --network=host \
+  node:22-slim sh -c '
+    npm config set registry https://registry.npmmirror.com
+    npm install
+    npm run dev
+  '
 ```
+
+Vite dev server: **http://localhost:5173**. There is no dev proxy — `/api` requests need a worker instance on the same host (e.g. `npx wrangler dev` in `cf-news-worker`, or a deployed site).
+
+## Build & Deploy
+
+Run `./deploy.sh` at the repo root. It builds the frontend in Docker (`npm install && npm run build`), copies `dist/` into `cf-news-worker/public/`, applies D1 migrations, and deploys with wrangler.
+
+Build metadata is injected as `VITE_BUILD_TIME` / `VITE_BUILD_PLATFORM` / `VITE_BUILD_VERSION` / `VITE_BUILD_COMMIT` and displayed in `src/components/Footer.tsx`.
+
+## Conventions & Testing
+
+- Inline Tailwind classes throughout; design tokens in `src/index.css` (`@theme` + `@utility`).
+- Two mega-files to be careful with: `NewsDetailModal.tsx` (1121 lines) and `useClipboardWS.ts` (686 lines) — keep new code modular.
+- Frontend tests not yet configured. When adding: **vitest + React Testing Library**, covering user interactions, render states, and API/WS handling.
+
+## License
+
+MIT

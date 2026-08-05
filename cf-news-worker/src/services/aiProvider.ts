@@ -79,6 +79,17 @@ function failedModelKey(provider: string, model: string): string {
     return `${provider}:${model}`;
 }
 
+// Platform-level errors that are NOT the model's fault — must not poison the
+// failed-model list. "Too many subrequests" fires when a single Worker
+// invocation exceeds the subrequest cap (50 free / 1000 paid), which cascades
+// into every subsequent AI attempt failing and getting blamed on the model.
+function isInfraError(err: unknown): boolean {
+    const msg = String(err);
+    return msg.includes('Too many subrequests')
+        || msg.includes('CPU time limit exceeded')
+        || msg.includes('Subrequest');
+}
+
 export async function getFailed(env: Bindings, provider?: string): Promise<string[]> {
     const db = getDb(env);
     try {
@@ -213,7 +224,7 @@ export async function doOpenAICompat(
         await logAICall(env, { provider, model, news_id: options?.news_id, news_title: options?.news_title,
             prompt_length: JSON.stringify(messages).length, response_length: 0,
             duration_ms: Date.now() - start, success: false, error: String(e) });
-        await markFailed(env, model, provider);
+        if (!isInfraError(e)) await markFailed(env, model, provider);
         return null;
     }
 }
@@ -237,7 +248,7 @@ export async function doCF(
         await logAICall(env, { provider: 'cloudflare', model, news_id: options?.news_id, news_title: options?.news_title,
             prompt_length: JSON.stringify(messages).length, response_length: 0,
             duration_ms: Date.now() - start, success: false, error: String(e) });
-        await markFailed(env, model, 'cloudflare');
+        if (!isInfraError(e)) await markFailed(env, model, 'cloudflare');
         return null;
     }
 }

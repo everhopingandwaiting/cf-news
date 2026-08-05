@@ -6,6 +6,7 @@ import newsRoutes from '../routes/news';
 import favoritesRoutes from '../routes/favorites';
 import historyRoutes from '../routes/history';
 import commentsRoutes from '../routes/comments';
+import entitiesRoutes from '../routes/entities';
 import userRoutes from '../routes/user';
 import operationsRoutes from '../routes/operations';
 import trendingRoutes from '../routes/trending';
@@ -55,6 +56,7 @@ export function buildTestApp() {
   }));
   app.route('/api/auth', authRoutes);
   app.route('/api/news', trendingRoutes);
+  app.route('/api/news', entitiesRoutes);
   app.route('/api/news', newsRoutes);
   app.route('/api/user/favorites', favoritesRoutes);
   app.route('/api/user/history', historyRoutes);
@@ -87,10 +89,16 @@ export async function request(
   path: string,
   options?: { method?: string; body?: any; headers?: Record<string, string> }
 ): Promise<{ status: number; body: any; headers: Headers }> {
+  // Register/login now require a Turnstile token. Inject a stub token so tests
+  // don't need to repeat it; the stub fetch in test files always returns success.
+  const requestBody = { ...options?.body };
+  if (path === '/api/auth/register' || path === '/api/auth/login') {
+    requestBody.turnstileToken = requestBody.turnstileToken ?? 'test-turnstile-token';
+  }
   const req = new Request(`http://localhost${path}`, {
     method: options?.method || 'GET',
     headers: { 'Content-Type': 'application/json', ...options?.headers },
-    body: options?.body ? JSON.stringify(options.body) : undefined,
+    body: options?.body ? JSON.stringify(requestBody) : undefined,
   });
   const execCtx = {
     waitUntil: () => {},

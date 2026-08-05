@@ -45,6 +45,12 @@ jobs:
           rm -rf ../cf-news-worker/public/*
           cp -r dist/* ../cf-news-worker/public/
 
+      - name: Run Worker tests
+        run: |
+          cd cf-news-worker
+          npm ci
+          npx vitest run
+
       - name: Deploy Worker
         run: |
           cd cf-news-worker

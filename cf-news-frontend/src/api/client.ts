@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { NewsItem, NewsSource, NewsComment, Pagination, User, TimelineEvent, NewsRegion, CredibilityReport, RadarAlert, PerspectiveReport } from '../types';
+import type { NewsItem, NewsSource, NewsComment, Pagination, User, TimelineEvent, NewsRegion, CredibilityReport, RadarAlert, PerspectiveReport, NewsEntity } from '../types';
 
 const API_BASE = '';
 
@@ -162,6 +162,11 @@ export async function getCredibility(newsId: number): Promise<CredibilityReport>
 export async function getPerspectives(newsId: number): Promise<PerspectiveReport> {
   const { data } = await api.get(`/api/news/${newsId}/perspectives`);
   return data;
+}
+
+export async function getEntities(newsId: number): Promise<NewsEntity[]> {
+  const { data } = await api.get(`/api/news/${newsId}/entities`);
+  return data.entities;
 }
 
 export async function getReadLater(): Promise<NewsItem[]> {

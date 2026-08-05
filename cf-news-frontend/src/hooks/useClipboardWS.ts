@@ -185,6 +185,10 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
     panelOpenRef.current = panelOpen;
     const backoffRef = useRef(0);
     const queueRef = useRef<ClipboardMsg[]>([]);
+    // Monotonic socket generation counter: each connect() bumps it. Async callbacks
+    // (onclose/onmessage) capture their generation and bail if a newer socket exists,
+    // killing the zombie-socket race when the token changes mid-reconnect.
+    const socketGenRef = useRef(0);
     const deviceNameRef = useRef(getDeviceName());
     const deviceIdRef = useRef(getDeviceId());
     const disposedRef = useRef(false);
@@ -250,6 +254,7 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
         clearReconnect();
         clearHeartbeat();
         setConnectionState('connecting');
+        const gen = ++socketGenRef.current;
         const wsUrl = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/clipboard/ws?token=${encodeURIComponent(token)}&device_id=${encodeURIComponent(deviceIdRef.current)}&device_name=${encodeURIComponent(deviceNameRef.current)}`;
         const ws = new WebSocket(wsUrl);
         ws.binaryType = 'arraybuffer';
@@ -366,6 +371,7 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
 
         ws.onclose = () => {
             clearHeartbeat(); clearHeartbeatCheck();
+            if (gen !== socketGenRef.current) return; // stale socket from a previous token — ignore
             wsRef.current = null;
             if (disposedRef.current) {
                 setConnectionState('disconnected');
@@ -392,6 +398,20 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
             setConnectionState('disconnected');
         };
     }, [token, connect, clearReconnect, clearHeartbeat, clearHeartbeatCheck, clearDebounce]);
+
+    // On account switch (token change), reset all clipboard state so the previous
+    // user's data never leaks into the next account: no queued messages, no stale
+    // offers/transfers/devices, and no previous text/image cross-writing its key.
+    useEffect(() => {
+        queueRef.current = [];
+        setPendingCount(0);
+        setText('');
+        setImages([]);
+        setIncomingOffers([]);
+        setFileTransfers([]);
+        setDevices([]);
+        setHasNewData(false);
+    }, [token]);
 
     useEffect(() => { saveLS(ukeys.text, text); }, [text, ukeys.text]);
     useEffect(() => {

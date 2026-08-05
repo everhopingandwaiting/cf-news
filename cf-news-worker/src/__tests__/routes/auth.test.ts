@@ -1,7 +1,12 @@
-import { describe, it, expect } from 'vitest';
-import { buildTestApp, request } from '../helpers';
+import { describe, it, expect, vi, beforeAll } from 'vitest';
+import { buildTestApp, request, MOCK_ENV } from '../helpers';
 
 describe('Auth API', () => {
+  beforeAll(() => {
+    // Turnstile siteverify is called on every register/login; stub it to pass.
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ success: true })));
+  });
+
   const { app, db } = buildTestApp();
 
   it('POST /api/auth/register - creates a new user', async () => {
@@ -22,6 +27,17 @@ describe('Auth API', () => {
       body: { email: 'test@test.com' },
     });
     expect(status).toBe(400);
+  });
+
+  it('POST /api/auth/register - requires turnstile token', async () => {
+    // helpers injects a stub token; passing one explicitly with noTurnstile flag is
+    // not supported by the helper, so hit the route directly with a raw body.
+    const res = await app.fetch(new Request('http://localhost/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'noturnstile@test.com', password: 'pass123' }),
+    }), { ...MOCK_ENV, DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} } as any);
+    expect(res.status).toBe(403);
   });
 
   it('POST /api/auth/register - rejects duplicate email', async () => {

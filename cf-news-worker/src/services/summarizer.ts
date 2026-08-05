@@ -1,9 +1,10 @@
 import { Bindings } from '../types';
 import { getConfig, getConfigInt, getAvailableModels, getProviderInfo, getProviderOrder, callAI, doOpenAICompat as aiDoOpenAICompat, doCF as aiDoCF } from './aiProvider';
 import { fetchRichArticleContent } from './contentFetcher';
-import { eq, and, sql, isNull } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import { getDb } from '../db';
-import { newsSummaries, newsAiTake, newsPerspectives, newsItems, newsSources } from '../db/schema';
+import { newsSummaries, newsAiTake, newsPerspectives, newsItems } from '../db/schema';
+import { extractEntities } from './entityExtractor';
 
 function cleanText(text: string): string {
     return text.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
@@ -106,6 +107,7 @@ export async function generateSummaryForNews(env: Bindings, newsId: number, item
     }
 
     generateAITake(env, newsId, item).catch(() => {});
+    extractEntities(env, newsId, item).catch(() => {});
 
     return true;
 }
@@ -173,6 +175,7 @@ Return: [{"summary":"<article1 summary>"},{"summary":"<article2 summary>"},...]`
                 if (summaries[i]) {
                     await db.run(sql`INSERT OR REPLACE INTO news_summaries (news_id, summary) VALUES (${items[i].id}, ${summaries[i]!.substring(0, 500)})`);
                     generateAITake(env, items[i].id, items[i]).catch(() => {});
+                    extractEntities(env, items[i].id, items[i]).catch(() => {});
                     count++;
                 }
             }

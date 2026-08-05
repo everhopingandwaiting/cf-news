@@ -39,7 +39,7 @@ AI-generated summary of today's top news, sorted by time with language markers (
 - **Daily digest** — Auto-generated daily news summary with history browser
 - **Related articles** — Keyword-matched related articles with one-click navigation
 - **Trending themes** — Real-time trend panel with topic clusters, representative articles, word cloud, burst detection, AI insights, and hourly source/category distribution
-- **News exploration** — Event timelines, viewpoint spectrum, inferred news map, credibility signals, keyword radar, read-later list, and anti-filter-bubble recommendations
+- **News exploration** — Event timelines, viewpoint spectrum, structured entity extraction, inferred news map, credibility signals, keyword radar, read-later list, and anti-filter-bubble recommendations
 - **Reader mode** — Full article content extraction with dark/light themes, reading time estimate, and rich typography
 - **In-app source browsing** — Browse original article in an iframe, or take a screenshot via Cloudflare Browser Rendering
 - **TTS speed control** — Adjustable playback speed (0.5x–1.5x) for voice narration
@@ -295,6 +295,7 @@ cf-news/
 | GET | `/api/news/fresh-view?exclude=tech,ai` | Anti-filter-bubble recommendations |
 | GET | `/api/news/:id/credibility` | Source diversity and corroboration signals |
 | GET | `/api/news/:id/perspectives` | AI-generated viewpoint spectrum across related reports |
+| GET | `/api/news/:id/entities` | Structured entities extracted from the article |
 | GET | `/api/news/:id/content` | Fetch full article content |
 | GET | `/api/comments/:newsId` | Get comments for a news item |
 | POST | `/api/auth/register` | Register |

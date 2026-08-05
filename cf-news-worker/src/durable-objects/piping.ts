@@ -6,6 +6,9 @@ export class PipingRoom {
     private readable: ReadableStream | null = null;
     private readableResolve: ((s: ReadableStream) => void) | null = null;
     private readonly pairingTimeoutMs = 60_000;
+    // Server-side hard cap matching the client's HTTP_FILE_LIMIT_BYTES (100MB).
+    // The client-declared fileSize is untrusted — always count actual bytes.
+    private readonly maxUploadBytes = 100 * 1024 * 1024;
 
     async fetch(request: Request): Promise<Response> {
         if (request.method === 'PUT') {
@@ -17,8 +20,29 @@ export class PipingRoom {
                 this.readableResolve(readable);
                 this.readableResolve = null;
             }
-            await request.body.pipeTo(writable);
-            return new Response('ok', { status: 200 });
+            // Count bytes through a pass-through transform; abort past the cap.
+            let received = 0;
+            const maxUploadBytes = this.maxUploadBytes;
+            const budget = new TransformStream<Uint8Array, Uint8Array>({
+                transform(chunk, controller) {
+                    received += chunk.byteLength;
+                    if (received > maxUploadBytes) {
+                        controller.error(new Error('Upload exceeds 100MB limit'));
+                        return;
+                    }
+                    controller.enqueue(chunk);
+                },
+            });
+            try {
+                await request.body.pipeThrough(budget).pipeTo(writable);
+                return new Response('ok', { status: 200 });
+            } catch (e) {
+                // Stale stream cleanup: a later GET must get a clean 504, not an errored body.
+                this.readable = null;
+                this.readableResolve = null;
+                console.error('Piping upload failed:', e);
+                return new Response('Upload failed', { status: 413 });
+            }
         }
 
         if (request.method === 'GET') {

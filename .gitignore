@@ -53,3 +53,6 @@ cf-news-worker/public/
 # Python
 __pycache__/
 *.pyc
+
+# One-off data backfill scripts (not project code)
+/populate-*.py

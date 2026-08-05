@@ -6,6 +6,7 @@ import authRoutes from './routes/auth';
 import newsRoutes from './routes/news';
 import userRoutes from './routes/user';
 import commentsRoutes from './routes/comments';
+import entitiesRoutes from './routes/entities';
 import adminRoutes from './routes/admin';
 import aiRoutes from './routes/ai';
 import operationRoutes from './routes/operations';
@@ -55,6 +56,7 @@ app.use('/api/*', cors({
 
 app.route('/api/auth', authRoutes);
 app.route('/api/news', trendingRoutes);
+app.route('/api/news', entitiesRoutes);
 app.route('/api/news', newsRoutes);
 app.route('/api/comments', commentsRoutes);
 
@@ -117,6 +119,8 @@ export default {
 
         // WebSocket upgrade for real-time comments
         if (reqUrl.pathname === '/api/comments/ws') {
+            const limited = await checkApiRateLimit(request, env);
+            if (limited) return limited;
             const token = reqUrl.searchParams.get('token');
             const newsId = reqUrl.searchParams.get('newsId');
             if (!token || !newsId) return new Response('Missing params', { status: 401 });
@@ -166,7 +170,7 @@ export default {
             const authHeader = request.headers.get('Authorization');
             const token = authHeader?.startsWith('Bearer ')
                 ? authHeader.substring(7)
-                : reqUrl.searchParams.get('token');
+                : null;
             if (!token) return new Response('Missing token', { status: 401 });
             const payload = await verifyJWT(token, env.JWT_SECRET);
             if (!payload) return new Response('Invalid token', { status: 403 });
@@ -192,7 +196,10 @@ export default {
     async scheduled(event: ScheduledEvent, env: Bindings, ctx: ExecutionContext): Promise<void> {
         if (event.cron === '0 * * * *') {
             console.log('Fetch cron fired, fetching news...');
-            ctx.waitUntil(fetchNews(env, true));
+            // skipSummary=false so new items enqueue generate_summary jobs,
+            // which run in their own queue invocations (keeps this cron under
+            // the Workers subrequest cap instead of burning 50+ AI calls here).
+            ctx.waitUntil(fetchNews(env, false));
         } else if (event.cron === '*/15 * * * *') {
             console.log('Trending cron fired, refreshing topics...');
             ctx.waitUntil(refreshTrendingTopics(env));

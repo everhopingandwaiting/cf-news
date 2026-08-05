@@ -1,5 +1,4 @@
 import { Bindings, NewsSource } from '../types';
-import { generateBatchSummariesForNews } from './summarizer';
 import { indexNewsItem } from './tokenizer';
 import { checkDuplicate, storeDedupHash } from './dedup';
 import { uploadNewsItem } from './aiSearch';
@@ -355,8 +354,17 @@ async function saveNewsItems(
     }
 
     if (newItems.length > 0 && !skipSummary) {
-        console.log(`Generating AI summaries for ${newItems.length} new items...`);
-        await generateBatchSummariesForNews(env, newItems.slice(0, 10));
+        // Enqueue one summary job per item so AI calls run in their own queue
+        // invocation — keeps the fetch invocation under the Workers subrequest
+        // cap (a single source can hold 50-100 articles × 10 provider/model
+        // attempts = far beyond the 50/1000 subrequest limit).
+        console.log(`Enqueueing ${newItems.length} summary jobs...`);
+        for (const item of newItems.slice(0, 50)) {
+            await env.NEWS_QUEUE.send({
+                type: 'generate_summary', newsId: item.id, title: item.title,
+                description: item.description, content: item.content, url: item.url,
+            });
+        }
     }
     return savedCount;
 }

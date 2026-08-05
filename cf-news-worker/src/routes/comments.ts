@@ -3,8 +3,11 @@ import { Bindings } from '../types';
 import { eq, and, desc, sql } from 'drizzle-orm';
 import { getDb } from '../db';
 import { newsComments, users } from '../db/schema';
+import { verifyJWT } from './auth';
 
 const comments = new Hono<{ Bindings: Bindings }>();
+
+const MAX_COMMENT_LENGTH = 5000;
 
 comments.get('/:newsId', async (c) => {
     const newsId = parseInt(c.req.param('newsId'));
@@ -31,12 +34,17 @@ comments.post('/:newsId', async (c) => {
 
     try {
         const token = authHeader.replace('Bearer ', '');
-        const payload = JSON.parse(atob(token.split('.')[1]));
+        const payload = await verifyJWT(token, c.env.JWT_SECRET);
+        if (!payload) return c.json({ error: 'Invalid token' }, 401);
+
         const newsId = parseInt(c.req.param('newsId'));
         const { content } = await c.req.json();
 
         if (!content || content.trim().length === 0) {
             return c.json({ error: 'Content required' }, 400);
+        }
+        if (content.length > MAX_COMMENT_LENGTH) {
+            return c.json({ error: 'Content too long' }, 400);
         }
 
         const db = getDb(c.env);
@@ -60,7 +68,8 @@ comments.delete('/:commentId', async (c) => {
 
     try {
         const token = authHeader.replace('Bearer ', '');
-        const payload = JSON.parse(atob(token.split('.')[1]));
+        const payload = await verifyJWT(token, c.env.JWT_SECRET);
+        if (!payload) return c.json({ error: 'Invalid token' }, 401);
         const commentId = parseInt(c.req.param('commentId'));
 
         const db = getDb(c.env);

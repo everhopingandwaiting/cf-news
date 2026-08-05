@@ -1,4 +1,5 @@
 import { sqliteTable, text, integer, uniqueIndex, primaryKey, index } from 'drizzle-orm/sqlite-core';
+import { sql } from 'drizzle-orm';
 
 export const users = sqliteTable('users', {
     id: integer('id').primaryKey(),
@@ -6,8 +7,8 @@ export const users = sqliteTable('users', {
     password_hash: text('password_hash').notNull(),
     username: text('username'),
     role: text('role').default('user'),
-    created_at: text('created_at').default('CURRENT_TIMESTAMP'),
-    updated_at: text('updated_at').default('CURRENT_TIMESTAMP'),
+    created_at: text('created_at').default(sql`CURRENT_TIMESTAMP`),
+    updated_at: text('updated_at').default(sql`CURRENT_TIMESTAMP`),
 });
 
 export const newsSources = sqliteTable('news_sources', {
@@ -39,7 +40,7 @@ export const newsItems = sqliteTable('news_items', {
     published_at: text('published_at'),
     is_deleted: integer('is_deleted').default(0),
     deleted_at: text('deleted_at'),
-    created_at: text('created_at').default('CURRENT_TIMESTAMP'),
+    created_at: text('created_at').default(sql`CURRENT_TIMESTAMP`),
     ai_search_uploaded: integer('ai_search_uploaded').default(0),
     dedup_hash: text('dedup_hash'),
 }, (table) => ({
@@ -58,7 +59,7 @@ export const userFavorites = sqliteTable('user_favorites', {
     news_id: integer('news_id').notNull(),
     is_deleted: integer('is_deleted').default(0),
     deleted_at: text('deleted_at'),
-    created_at: text('created_at').default('CURRENT_TIMESTAMP'),
+    created_at: text('created_at').default(sql`CURRENT_TIMESTAMP`),
 }, (table) => ({
     userIdx: uniqueIndex('idx_user_favorites_user').on(table.user_id),
     unq: uniqueIndex('unq_user_fav').on(table.user_id, table.news_id),
@@ -70,7 +71,7 @@ export const userReadHistory = sqliteTable('user_read_history', {
     news_id: integer('news_id').notNull(),
     is_deleted: integer('is_deleted').default(0),
     deleted_at: text('deleted_at'),
-    read_at: text('read_at').default('CURRENT_TIMESTAMP'),
+    read_at: text('read_at').default(sql`CURRENT_TIMESTAMP`),
 }, (table) => ({
     userIdx: uniqueIndex('idx_user_read_history_user').on(table.user_id),
     unq: uniqueIndex('unq_user_read').on(table.user_id, table.news_id),
@@ -80,7 +81,7 @@ export const userReadLater = sqliteTable('user_read_later', {
     id: integer('id').primaryKey(),
     user_id: integer('user_id').notNull(),
     news_id: integer('news_id').notNull(),
-    created_at: text('created_at').default('CURRENT_TIMESTAMP'),
+    created_at: text('created_at').default(sql`CURRENT_TIMESTAMP`),
 }, (table) => ({
     userIdx: index('idx_user_read_later_user').on(table.user_id),
     unq: uniqueIndex('unq_user_read_later').on(table.user_id, table.news_id),
@@ -90,7 +91,7 @@ export const userAlertKeywords = sqliteTable('user_alert_keywords', {
     id: integer('id').primaryKey(),
     user_id: integer('user_id').notNull(),
     keyword: text('keyword').notNull(),
-    created_at: text('created_at').default('CURRENT_TIMESTAMP'),
+    created_at: text('created_at').default(sql`CURRENT_TIMESTAMP`),
 }, (table) => ({
     userIdx: index('idx_user_alert_keywords_user').on(table.user_id),
     unq: uniqueIndex('unq_user_alert_keyword').on(table.user_id, table.keyword),
@@ -103,7 +104,7 @@ export const newsComments = sqliteTable('news_comments', {
     content: text('content').notNull(),
     is_deleted: integer('is_deleted').default(0),
     deleted_at: text('deleted_at'),
-    created_at: text('created_at').default('CURRENT_TIMESTAMP'),
+    created_at: text('created_at').default(sql`CURRENT_TIMESTAMP`),
 }, (table) => ({
     newsIdx: uniqueIndex('idx_news_comments_news').on(table.news_id),
     userIdx: uniqueIndex('idx_news_comments_user').on(table.user_id),
@@ -114,26 +115,38 @@ export const newsSummaries = sqliteTable('news_summaries', {
     news_id: integer('news_id').notNull().unique(),
     summary: text('summary').notNull(),
     illustration_url: text('illustration_url'),
-    created_at: text('created_at').default('CURRENT_TIMESTAMP'),
+    created_at: text('created_at').default(sql`CURRENT_TIMESTAMP`),
 });
 
 export const newsAiTake = sqliteTable('news_ai_take', {
     news_id: integer('news_id').primaryKey(),
     take: text('take').notNull(),
-    created_at: text('created_at').default('CURRENT_TIMESTAMP'),
+    created_at: text('created_at').default(sql`CURRENT_TIMESTAMP`),
 });
+
+export const newsEntities = sqliteTable('news_entities', {
+    id: integer('id').primaryKey(),
+    news_id: integer('news_id').notNull(),
+    entity_type: text('entity_type').notNull(),
+    entity_value: text('entity_value').notNull(),
+    entity_context: text('entity_context'),
+    created_at: text('created_at').default(sql`CURRENT_TIMESTAMP`),
+}, (table) => ({
+    newsIdx: index('idx_news_entities_news').on(table.news_id),
+    typeIdx: index('idx_news_entities_type').on(table.entity_type),
+}));
 
 export const newsPerspectives = sqliteTable('news_perspectives', {
     news_id: integer('news_id').primaryKey(),
     related_ids: text('related_ids').notNull(),
     perspective: text('perspective').notNull(),
-    created_at: text('created_at').default('CURRENT_TIMESTAMP'),
+    created_at: text('created_at').default(sql`CURRENT_TIMESTAMP`),
 });
 
 export const userPreferences = sqliteTable('user_preferences', {
     user_id: integer('user_id').primaryKey(),
     receive_digest: integer('receive_digest').default(0),
-    updated_at: text('updated_at').default('CURRENT_TIMESTAMP'),
+    updated_at: text('updated_at').default(sql`CURRENT_TIMESTAMP`),
 });
 
 export const aiCallLog = sqliteTable('ai_call_log', {
@@ -148,7 +161,7 @@ export const aiCallLog = sqliteTable('ai_call_log', {
     duration_ms: integer('duration_ms'),
     success: integer('success').default(1),
     error: text('error'),
-    created_at: text('created_at').default('CURRENT_TIMESTAMP'),
+    created_at: text('created_at').default(sql`CURRENT_TIMESTAMP`),
 }, (table) => ({
     newsIdx: index('idx_ai_call_news').on(table.news_id),
 }));
@@ -160,7 +173,7 @@ export const providers = sqliteTable('providers', {
     priority: integer('priority').default(99),
     enabled: integer('enabled').default(1),
     expires_at: text('expires_at'),
-    created_at: text('created_at').default('CURRENT_TIMESTAMP'),
+    created_at: text('created_at').default(sql`CURRENT_TIMESTAMP`),
 });
 
 export const providerModels = sqliteTable('provider_models', {
@@ -183,7 +196,7 @@ export const dailyDigests = sqliteTable('daily_digests', {
     date: text('date').notNull().unique(),
     content: text('content').notNull(),
     news_ids: text('news_ids'),
-    created_at: text('created_at').default('CURRENT_TIMESTAMP'),
+    created_at: text('created_at').default(sql`CURRENT_TIMESTAMP`),
 });
 
 export const pushSubscriptions = sqliteTable('push_subscriptions', {
@@ -192,7 +205,7 @@ export const pushSubscriptions = sqliteTable('push_subscriptions', {
     endpoint: text('endpoint').notNull(),
     p256dh_key: text('p256dh_key').notNull(),
     auth_key: text('auth_key').notNull(),
-    created_at: text('created_at').default('CURRENT_TIMESTAMP'),
+    created_at: text('created_at').default(sql`CURRENT_TIMESTAMP`),
 }, (table) => ({
     unq: uniqueIndex('unq_push_sub').on(table.user_id, table.endpoint),
 }));

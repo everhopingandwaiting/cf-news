@@ -97,4 +97,46 @@ describe('Comments API', () => {
     expect(ownRow?.is_deleted).toBe(1);
     expect(otherRow?.is_deleted).toBe(0);
   });
+
+  it('POST /api/comments/1 - rejects forged token (no signature)', async () => {
+    // base64({"sub":1}) with a garbage third segment — must NOT pass auth
+    const forged = `${btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))}.${btoa(JSON.stringify({
+      sub: 1, email: 'commenter@test.com', role: 'user', exp: Math.floor(Date.now() / 1000) + 3600,
+    }))}.${btoa('forged-signature')}`;
+    const { status } = await request(app, db, '/api/comments/1', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${forged}` },
+      body: { content: 'Impersonation attempt' },
+    });
+    expect(status).toBe(401);
+
+    const rows = await db.prepare("SELECT COUNT(*) AS c FROM news_comments WHERE content = 'Impersonation attempt'").first<any>();
+    expect(rows?.c).toBe(0);
+  });
+
+  it('DELETE /api/comments/:commentId - rejects forged token', async () => {
+    await db.seed('news_comments', [
+      { id: 20, news_id: 1, user_id: 2, content: 'Victim comment', is_deleted: 0 },
+    ]);
+    const forged = `${btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))}.${btoa(JSON.stringify({
+      sub: 2, email: 'victim@test.com', role: 'user', exp: Math.floor(Date.now() / 1000) + 3600,
+    }))}.${btoa('forged-signature')}`;
+    const { status } = await request(app, db, '/api/comments/20', {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${forged}` },
+    });
+    expect(status).toBe(401);
+
+    const row = await db.prepare('SELECT is_deleted FROM news_comments WHERE id = 20').first<any>();
+    expect(row?.is_deleted).toBe(0);
+  });
+
+  it('POST /api/comments/1 - rejects content over 5000 chars', async () => {
+    const { status } = await request(app, db, '/api/comments/1', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: { content: 'x'.repeat(5001) },
+    });
+    expect(status).toBe(400);
+  });
 });
