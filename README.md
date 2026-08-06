@@ -57,6 +57,7 @@ AI-generated summary of today's top news, sorted by time with language markers (
 - **Edge caching** — News list cached on CF edge (60s) + Cache Rules (hashed assets 1y, image proxy 7d)
 - **Image proxy with R2 cache** — External images proxied through CF edge and cached in R2 (10GB free, 0 egress)
 - **AI illustration persistence** — AI-generated illustrations stored in R2, never broken by expiring temp URLs
+- **Pixabay stock illustration** — Image-less news cards auto-filled with relevant Pixabay illustrations (downloaded to R2, hotlink-compliant)
 - **Global service rankings** — Cloudflare Radar internet-service rankings supplement the trending panel
 - **Usage analytics** — Workers Analytics Engine records search hot-words and per-provider AI call stats
 - **Durable backfill** — Admin backfill jobs run as Cloudflare Workflows (auto-retry, survives request lifetime)
@@ -180,6 +181,7 @@ GROQ_API_KEY=your-groq-key
 FREEMODEL_API_KEY=your-freemodel-key
 TURNSTILE_SECRET=your-turnstile-secret    # from dashboard
 TURNSTILE_SITE_KEY=0x4AAAA...            # from dashboard
+PIXABAY_API_KEY=your-pixabay-key          # from pixabay.com/api/docs (free)
 ```
 
 ### Step 8: Add Custom Domain to Workers
@@ -231,6 +233,26 @@ Protect the admin UI behind Cloudflare Access (free up to 50 users):
 2. Domain: `news.yourdomain.com`; Path: `/api/admin/*` and `/admin`
 3. Policy: Allow your email / any valid session → Save
 
+### Step 14 (optional): Pixabay API key (image-less news auto-illustration)
+
+Image-less news cards can be auto-filled with relevant Pixabay illustrations (free, 100 req/min). Register at [pixabay.com](https://pixabay.com/api/docs/) and push the key:
+
+```bash
+grep "^PIXABAY_API_KEY=" cf-news-worker/.env | cut -d= -f2- | \
+  docker run --rm -i --env-file cf-news-worker/.env \
+  -v $(pwd)/cf-news-worker:/app -v /app/node_modules --network=host \
+  cf-news-worker npx wrangler secret put PIXABAY_API_KEY
+```
+
+Then trigger a batch fill for recent image-less news (admin JWT required):
+
+```bash
+curl -X POST -H "Authorization: Bearer <admin-token>" \
+  https://news.yourdomain.com/api/illustrate-stock -d '{"limit":20}'
+```
+
+Illustrations are downloaded into R2 (self-hosted, Pixabay hotlink-compliant) and served via the existing `/api/image` proxy. Without the key, the endpoint returns 502 and cards keep the text-only layout.
+
 Cache Rules for hashed assets (1 year) and the image proxy (7 days) are configured via the ruleset API — see `deploy.sh` output or create them in Dashboard → **Rules > Cache Rules**.
 
 ## CI/CD Setup (GitHub Actions)
@@ -254,6 +276,7 @@ The project includes a GitHub Actions workflow for automatic deployment. To use 
 | `FREEMODEL_API_KEY` | Freemodel API key |
 | `TURNSTILE_SECRET` | Turnstile secret key (bot protection) |
 | `TURNSTILE_SITE_KEY` | Turnstile site key |
+| `PIXABAY_API_KEY` | Pixabay free image API key (image-less news auto-illustration) |
 
 Secrets are automatically pushed to Cloudflare Secrets (`wrangler secret put`) during the workflow run.
 
@@ -392,6 +415,8 @@ cf-news/
 | POST | `/api/ai/trending/insight` | AI-generated insight for trending keyword |
 | POST | `/api/user/push/subscribe` | Subscribe to push notifications |
 | DELETE | `/api/user/push/unsubscribe` | Unsubscribe from push notifications |
+| POST | `/api/illustrate-stock/:newsId` | Auto-fill a single image-less news item with a Pixabay illustration |
+| POST | `/api/illustrate-stock` | Batch-fill image-less news (default 10, max 20; body `{limit}`) |
 
 ### Admin (Bearer token, admin user only)
 

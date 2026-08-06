@@ -49,6 +49,7 @@
 - **边缘缓存** — 新闻列表 CF 边缘缓存（60s）+ Cache Rules（哈希资源 1 年、图片代理 7 天）
 - **图片代理 R2 缓存** — 外部图片经 CF 边缘代理并缓存到 R2（10GB 免费、0 出网费）
 - **AI 插画持久化** — AI 生成插画存入 R2，不受临时 URL 失效影响
+- **Pixabay 图库配图** — 无图新闻卡片自动填充相关 Pixabay 插画（下载到 R2 自托管，符合热链规范）
 - **全球服务排行** — Cloudflare Radar 互联网服务排名补充趋势面板
 - **使用分析** — Workers Analytics Engine 记录搜索热词与各 provider AI 调用统计
 - **可靠回填** — 后台回填任务改为 Cloudflare Workflows（自动重试、跨请求存活）
@@ -171,6 +172,7 @@ GROQ_API_KEY=你的Groq密钥
 FREEMODEL_API_KEY=你的Freemodel密钥
 TURNSTILE_SECRET=你的Turnstile密钥       # 从 CF 面板获取
 TURNSTILE_SITE_KEY=0x4AAAA...             # 从 CF 面板获取
+PIXABAY_API_KEY=你的Pixabay密钥            # 从 pixabay.com/api/docs 免费获取
 ```
 
 ### 第八步：绑定自定义域名
@@ -224,6 +226,26 @@ grep "^CLOUDFLARE_API_TOKEN=" cf-news-worker/.env | cut -d= -f2- | \
 
 哈希资源（1 年）和图片代理（7 天）的 Cache Rules 已通过 ruleset API 配置，也可在 Dashboard → **Rules > Cache Rules** 查看。
 
+### 第十四步（可选）：Pixabay API Key（无图新闻自动配图）
+
+无图新闻卡片可自动填充相关 Pixabay 插画（免费，100 次/分钟）。在 [pixabay.com](https://pixabay.com/api/docs/) 注册获取 key 并推送为 secret：
+
+```bash
+grep "^PIXABAY_API_KEY=" cf-news-worker/.env | cut -d= -f2- | \
+  docker run --rm -i --env-file cf-news-worker/.env \
+  -v $(pwd)/cf-news-worker:/app -v /app/node_modules --network=host \
+  cf-news-worker npx wrangler secret put PIXABAY_API_KEY
+```
+
+随后可对最近的无图新闻批量配图（需要管理员 JWT）：
+
+```bash
+curl -X POST -H "Authorization: Bearer <管理员token>" \
+  https://news.yourdomain.com/api/illustrate-stock -d '{"limit":20}'
+```
+
+插画下载到 R2 自托管（符合 Pixabay 禁止热链条款），经现有 `/api/image` 代理提供。未配置 key 时该端点返回 502，卡片保持纯文字布局。
+
 ## CI/CD 配置（GitHub Actions）
 
 项目自带 GitHub Actions 自动部署工作流。需要在仓库设置中添加以下 Secrets：
@@ -245,6 +267,7 @@ grep "^CLOUDFLARE_API_TOKEN=" cf-news-worker/.env | cut -d= -f2- | \
 | `FREEMODEL_API_KEY` | Freemodel API Key |
 | `TURNSTILE_SECRET` | Turnstile 验证码密钥 |
 | `TURNSTILE_SITE_KEY` | Turnstile 站点 Key |
+| `PIXABAY_API_KEY` | Pixabay 免费图库 Key（无图新闻自动配图） |
 
 工作流运行时会自动将这些值推到 Cloudflare Secrets（`wrangler secret put`），不会明文存储。
 
@@ -383,6 +406,8 @@ cf-news/
 | POST | `/api/ai/trending/insight` | AI 趋势解读 |
 | POST | `/api/user/push/subscribe` | 订阅推送通知 |
 | DELETE | `/api/user/push/unsubscribe` | 取消订阅推送通知 |
+| POST | `/api/illustrate-stock/:newsId` | 单条无图新闻自动填充 Pixabay 插画 |
+| POST | `/api/illustrate-stock` | 批量填充无图新闻（默认 10 条，上限 20；body 传 `{limit}`） |
 
 ### 管理接口（需要 Bearer Token，管理员）
 

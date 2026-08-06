@@ -79,7 +79,7 @@ jobs:
       - name: Push secrets to Cloudflare
         run: |
           cd cf-news-worker
-          for key in JWT_SECRET OPENROUTER_API_KEY NVIDIA_API_KEY MANGO_API_KEY GROQ_API_KEY FREEMODEL_API_KEY AGNES_API_KEY TURNSTILE_SECRET; do
+          for key in JWT_SECRET OPENROUTER_API_KEY NVIDIA_API_KEY MANGO_API_KEY GROQ_API_KEY FREEMODEL_API_KEY AGNES_API_KEY TURNSTILE_SECRET PIXABAY_API_KEY; do
             value="${!key}"
             if [ -n "$value" ]; then
               echo "$value" | npx wrangler secret put "$key"
@@ -95,3 +95,4 @@ jobs:
           FREEMODEL_API_KEY: ${{ secrets.FREEMODEL_API_KEY }}
           AGNES_API_KEY: ${{ secrets.AGNES_API_KEY }}
           TURNSTILE_SECRET: ${{ secrets.TURNSTILE_SECRET }}
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}

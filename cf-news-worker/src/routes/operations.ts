@@ -247,6 +247,75 @@ Requirements:
     }
 });
 
+operations.post('/illustrate-stock/:newsId', async (c) => {
+    const newsId = parseInt(c.req.param('newsId'));
+    const db = getDb(c.env);
+    try {
+        const item = await db.select({
+            id: newsItems.id, title: newsItems.title,
+            category: newsItems.category, image_url: newsItems.image_url,
+        }).from(newsItems).where(eq(newsItems.id, newsId)).get();
+        if (!item) return c.json({ success: false, error: '新闻不存在' }, 404);
+        if (item.image_url) {
+            return c.json({ success: true, image_url: item.image_url, cached: true });
+        }
+
+        const { illustrateFromStock } = await import('../services/pixabay');
+        const proxyUrl = await illustrateFromStock(c.env, newsId, item.title, item.category || 'general');
+        if (!proxyUrl) {
+            return c.json({ success: false, error: 'Pixabay 配图失败（未配置 key、无匹配结果或下载失败）' }, 502);
+        }
+
+        await db.update(newsItems)
+            .set({ image_url: proxyUrl })
+            .where(eq(newsItems.id, newsId));
+        return c.json({ success: true, image_url: proxyUrl, cached: false });
+    } catch (error) {
+        return c.json({ success: false, error: String(error) }, 500);
+    }
+});
+
+operations.post('/illustrate-stock', async (c) => {
+    const db = getDb(c.env);
+    try {
+        const body = await c.req.json().catch(() => ({}));
+        const limit = Math.min(
+            Number.isInteger(body?.limit) && (body.limit as number) > 0 ? (body.limit as number) : 10,
+            20
+        );
+
+        // 只处理最近的无图新闻（image_url 为空），避免误覆盖已有配图
+        const items = await db.select({
+            id: newsItems.id, title: newsItems.title,
+            category: newsItems.category, image_url: newsItems.image_url,
+        })
+            .from(newsItems)
+            .where(sql`${newsItems.is_deleted} = 0 AND ${newsItems.image_url} IS NULL`)
+            .orderBy(sql`COALESCE(${newsItems.published_at}, ${newsItems.created_at}) DESC`)
+            .limit(limit)
+            .all() as { id: number; title: string; category: string | null; image_url: string | null }[];
+
+        if (items.length === 0) {
+            return c.json({ success: true, total: 0, filled: 0, failed: 0, skipped: 0 });
+        }
+
+        const { illustrateFromStock } = await import('../services/pixabay');
+        let filled = 0;
+        let failed = 0;
+        for (const item of items) {
+            const proxyUrl = await illustrateFromStock(c.env, item.id, item.title, item.category || 'general');
+            if (!proxyUrl) { failed++; continue; }
+            await db.update(newsItems)
+                .set({ image_url: proxyUrl })
+                .where(eq(newsItems.id, item.id));
+            filled++;
+        }
+        return c.json({ success: true, total: items.length, filled, failed, skipped: 0 });
+    } catch (error) {
+        return c.json({ success: false, error: String(error) }, 500);
+    }
+});
+
 operations.post('/translate', async (c) => {
     try {
         const { text, lang } = await c.req.json();

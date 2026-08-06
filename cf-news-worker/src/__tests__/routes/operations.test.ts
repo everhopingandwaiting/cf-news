@@ -301,6 +301,99 @@ describe('Operations API - Summarize', () => {
   });
 });
 
+describe('Operations API - Pixabay stock illustration', () => {
+  it('POST /api/illustrate-stock/:newsId - returns 404 for missing item', async () => {
+    const { status, body } = await request(app, db, '/api/illustrate-stock/999999', { method: 'POST' });
+    expect(status).toBe(404);
+    expect(body.success).toBe(false);
+  });
+
+  it('POST /api/illustrate-stock/:newsId - fills image_url and returns proxy URL', async () => {
+    vi.stubGlobal('fetch', async (input: any) => {
+      const url = String(input);
+      if (url.includes('pixabay.com/api')) {
+        return new Response(JSON.stringify({ hits: [
+          { largeImageURL: 'https://cdn.pixabay.com/test-1.jpg', imageWidth: 1280, imageHeight: 853 },
+        ] }), { status: 200 });
+      }
+      return new Response('image-bytes', { status: 200, headers: { 'Content-Type': 'image/jpeg' } });
+    });
+    await db.seed('news_items', [
+      { id: 301, source_id: 1, title: 'Apple launches new AI chip', url: 'https://pix/1', description: 'desc', category: 'tech', is_deleted: 0, image_url: null },
+    ]);
+
+    const { status, body } = await request(app, db, '/api/illustrate-stock/301', { method: 'POST' });
+    expect(status).toBe(200);
+    expect(body.success).toBe(true);
+    expect(body.cached).toBe(false);
+    expect(body.image_url).toContain('/api/image?url=r2%3A%2F%2Fstock%2F301.');
+
+    const rows = await db.prepare("SELECT image_url FROM news_items WHERE id = 301").all();
+    expect(rows.results[0].image_url).toBe(body.image_url);
+  });
+
+  it('POST /api/illustrate-stock/:newsId - returns cached when image_url already set', async () => {
+    await db.seed('news_items', [
+      { id: 302, source_id: 1, title: 'Already has image', url: 'https://pix/2', category: 'tech', is_deleted: 0, image_url: 'https://example.com/old.jpg' },
+    ]);
+
+    const { status, body } = await request(app, db, '/api/illustrate-stock/302', { method: 'POST' });
+    expect(status).toBe(200);
+    expect(body.cached).toBe(true);
+    expect(body.image_url).toBe('https://example.com/old.jpg');
+  });
+
+  it('POST /api/illustrate-stock/:newsId - returns 502 when Pixabay returns no hits', async () => {
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ hits: [] }), { status: 200 }));
+    await db.seed('news_items', [
+      { id: 303, source_id: 1, title: 'No match title', url: 'https://pix/3', category: 'tech', is_deleted: 0, image_url: null },
+    ]);
+
+    const { status, body } = await request(app, db, '/api/illustrate-stock/303', { method: 'POST' });
+    expect(status).toBe(502);
+    expect(body.success).toBe(false);
+  });
+
+  it('POST /api/illustrate-stock - batch fills only items without image', async () => {
+    await db.prepare('DELETE FROM news_items').run();
+    vi.stubGlobal('fetch', async (input: any) => {
+      const url = String(input);
+      if (url.includes('pixabay.com/api')) {
+        return new Response(JSON.stringify({ hits: [
+          { largeImageURL: 'https://cdn.pixabay.com/batch.jpg', imageWidth: 1280, imageHeight: 720 },
+        ] }), { status: 200 });
+      }
+      return new Response('image-bytes', { status: 200, headers: { 'Content-Type': 'image/jpeg' } });
+    });
+    await db.seed('news_items', [
+      { id: 310, source_id: 1, title: 'Batch item one', url: 'https://pix/b1', category: 'finance', is_deleted: 0, image_url: null },
+      { id: 311, source_id: 1, title: 'Batch item two', url: 'https://pix/b2', category: 'tech', is_deleted: 0, image_url: 'https://example.com/has.png' },
+    ]);
+
+    const { status, body } = await request(app, db, '/api/illustrate-stock', { method: 'POST', body: { limit: 10 } });
+    expect(status).toBe(200);
+    expect(body.total).toBe(1);
+    expect(body.filled).toBe(1);
+    expect(body.failed).toBe(0);
+
+    const rows = await db.prepare('SELECT id, image_url FROM news_items WHERE id IN (310, 311) ORDER BY id').all();
+    expect(rows.results[0].image_url).toContain('/api/image?url=r2%3A%2F%2Fstock%2F310.');
+    expect(rows.results[1].image_url).toBe('https://example.com/has.png');
+  });
+
+  it('POST /api/illustrate-stock - returns empty result when no items missing images', async () => {
+    await db.prepare('DELETE FROM news_items').run();
+    await db.seed('news_items', [
+      { id: 312, source_id: 1, title: 'Has image already', url: 'https://pix/b3', category: 'tech', is_deleted: 0, image_url: 'https://example.com/x.png' },
+    ]);
+
+    const { status, body } = await request(app, db, '/api/illustrate-stock', { method: 'POST' });
+    expect(status).toBe(200);
+    expect(body.total).toBe(0);
+    expect(body.filled).toBe(0);
+  });
+});
+
 describe('Operations API - Translate', () => {
   it('POST /api/translate - validates params', async () => {
     const { status } = await request(app, db, '/api/translate', {

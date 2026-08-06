@@ -333,8 +333,9 @@ async function saveNewsItems(
                 VALUES (${source.id}, ${item.title}, ${item.link}, ${item.description || null}, ${item.content || null}, ${item.image || null}, ${category}, ${publishedAt}, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                 ON CONFLICT(url) DO UPDATE SET
                     title = excluded.title, description = excluded.description,
-                    content = excluded.content, image_url = excluded.image_url,
-                    category = excluded.category, published_at = COALESCE(excluded.published_at, news_items.published_at)
+                    content = excluded.content, category = excluded.category,
+                    published_at = COALESCE(excluded.published_at, news_items.published_at),
+                    image_url = COALESCE(excluded.image_url, news_items.image_url)
             `);
 
             const row = await db.get<{ id: number }>(sql`SELECT id FROM news_items WHERE url = ${item.link}`);

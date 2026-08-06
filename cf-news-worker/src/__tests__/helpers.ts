@@ -42,6 +42,13 @@ export const MOCK_ENV: Record<string, any> = {
   },
   DB: null as any,
   VECTORIZE: { query: async () => [], upsert: async () => {} },
+  R2_IMAGES: {
+    get: async () => null,
+    put: async () => {},
+    delete: async () => {},
+    list: async () => ({ objects: [] }),
+  },
+  PIXABAY_API_KEY: 'test-pixabay-key',
 };
 
 /** Build a test Hono app with all routes and mock env */

@@ -24,6 +24,8 @@ export interface Bindings {
     // Web Push VAPID 密钥（hex 编码原始 P-256 密钥，通过 wrangler secret put 注入）
     VAPID_PRIVATE_KEY: string;
     VAPID_PUBLIC_KEY: string;
+    // Pixabay 免费图库 API key（无图新闻自动配图，通过 wrangler secret put 注入）
+    PIXABAY_API_KEY?: string;
 }
 
 export interface NewsQueueMessage {

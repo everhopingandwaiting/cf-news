@@ -42,16 +42,19 @@ export default function NewsCard({ item, token, onAuthRequired, onSelect }: Prop
   }
 
   return (
-    <div id={`news-${item.id}`} className="bg-white rounded-lg p-4 border border-gray-200 shadow-sm hover:border-indigo-400 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200 cursor-pointer relative" onClick={() => onSelect(item)}>
+    <div id={`news-${item.id}`} className="bg-white rounded-lg p-4 border border-gray-200 shadow-sm hover:border-indigo-400 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200 cursor-pointer relative flex flex-col" onClick={() => onSelect(item)}>
+      {/* 有图：顶部 16:9 缩略图；无图：不占位，文字内容自然填满（Grid stretch 保证同行等高） */}
       {item.image_url && !imgError && (
-        <img
-          src={item.image_url}
-          alt=""
-          loading="lazy"
-          onClick={e => e.stopPropagation()}
-          onError={() => setImgError(true)}
-          className="w-full aspect-[16/9] object-cover rounded-lg mb-3"
-        />
+        <div className="relative w-full aspect-[16/9] rounded-lg overflow-hidden mb-3 shrink-0 bg-gray-50">
+          <img
+            src={item.image_url}
+            alt=""
+            loading="lazy"
+            onClick={e => e.stopPropagation()}
+            onError={() => setImgError(true)}
+            className="w-full h-full object-cover"
+          />
+        </div>
       )}
       <div className="flex items-center justify-between gap-3 mb-2">
         <div className="min-w-0 flex items-center gap-2 text-[12px] text-gray-400">
@@ -60,7 +63,7 @@ export default function NewsCard({ item, token, onAuthRequired, onSelect }: Prop
         </div>
         <span className={`shrink-0 px-2 py-0.5 rounded-md text-[10px] font-semibold tracking-wide uppercase ${CAT_COLORS[cat] || 'bg-gray-100 text-gray-500'}`}>{CAT_NAMES[cat] || cat}</span>
       </div>
-      <h3 className="text-base font-semibold mb-2.5 leading-snug line-clamp-2 text-gray-900">
+      <h3 className={`font-semibold mb-2.5 leading-snug text-gray-900 line-clamp-2 ${item.image_url && !imgError ? 'text-base' : 'text-lg'}`}>
         {item.title}
         {item.ai_take && <span className="inline-block ml-1.5 px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-600 align-middle">AI</span>}
       </h3>
@@ -72,11 +75,11 @@ export default function NewsCard({ item, token, onAuthRequired, onSelect }: Prop
             </svg>
             <span className="text-[10px] font-bold text-indigo-500 tracking-wide">AI 摘要</span>
           </div>
-          <p className="text-[13px] text-gray-600 leading-relaxed">{stripHtml(item.ai_summary)}</p>
+          <p className="text-[13px] text-gray-600 leading-relaxed line-clamp-3">{stripHtml(item.ai_summary)}</p>
         </div>
       )}
-      {!item.ai_summary && item.description && <p className="text-gray-500 text-[13px] leading-relaxed mb-3.5 line-clamp-3">{stripHtml(item.description.substring(0, 200))}</p>}
-      <div className="flex items-center justify-between text-gray-400 text-[12px]">
+      {!item.ai_summary && item.description && <p className={`text-gray-500 text-[13px] leading-relaxed mb-3.5 line-clamp-3 ${item.image_url && !imgError ? '' : 'flex-1'}`}>{stripHtml(item.description.substring(0, 200))}</p>}
+      <div className="flex items-center justify-between text-gray-400 text-[12px] mt-auto pt-2">
         <span className="opacity-70">抓取 {fetchDate || '-'}</span>
         <span className="flex gap-2">
           <button className={`flex items-center gap-1 text-[12px] px-1.5 py-1 rounded-md hover:bg-gray-100 hover:text-gray-600 transition ${favorited ? 'text-amber-500' : ''}`} onClick={toggleFav}>
