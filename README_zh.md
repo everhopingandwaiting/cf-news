@@ -46,7 +46,15 @@
 - **语音播报** — 浏览器原生 SpeechSynthesis，免费离线
 - **AI 分类** — LLaMA 按内容准确分类，不依赖 RSS 源
 - **机器人防护** — Turnstile 验证码保护注册/登录
-- **边缘缓存** — 新闻列表 CF 边缘缓存（60s），响应更快
+- **边缘缓存** — 新闻列表 CF 边缘缓存（60s）+ Cache Rules（哈希资源 1 年、图片代理 7 天）
+- **图片代理 R2 缓存** — 外部图片经 CF 边缘代理并缓存到 R2（10GB 免费、0 出网费）
+- **AI 插画持久化** — AI 生成插画存入 R2，不受临时 URL 失效影响
+- **全球服务排行** — Cloudflare Radar 互联网服务排名补充趋势面板
+- **使用分析** — Workers Analytics Engine 记录搜索热词与各 provider AI 调用统计
+- **可靠回填** — 后台回填任务改为 Cloudflare Workflows（自动重试、跨请求存活）
+- **Smart Placement** — Worker 自动靠近上游 AI/RSS 端点，降低延迟
+- **邮件退订** — 回复 "退订" 到 digest@ 即可关闭每日摘要（Email Routing 入站）
+- **隐私友好分析** — Cloudflare Web Analytics beacon（无 Cookie）
 - **响应式界面** — React 19 + Tailwind 4，适配桌面和移动端
 
 ## 技术栈
@@ -66,6 +74,11 @@
 | 边缘缓存 | Cache API（新闻列表 60s 缓存） |
 | AI 摘要 | OpenRouter, NVIDIA, Mango APIs |
 | 向量 | Vectorize 语义去重 |
+| 对象存储 | R2（图片代理缓存 + AI 插画） |
+| 持久任务 | Workflows（回填任务） |
+| 分析 | Analytics Engine（搜索/AI 统计）+ Web Analytics（流量） |
+| 全球趋势 | Radar API（互联网服务排名） |
+| 邮件入站 | Email Routing（摘要退订） |
 | 浏览器 | Browser Rendering（无头 Chrome，抓取 JS 重度渲染的 RSS 源） |
 | 队列 | Queues（异步新闻处理） |
 | 部署 | Docker + Wrangler |
@@ -168,6 +181,48 @@ TURNSTILE_SITE_KEY=0x4AAAA...             # 从 CF 面板获取
 2. 点击你的 Worker（`cf-news-worker`）
 3. 进入 **Settings** → **Triggers** → **Custom Domains**
 4. 添加你的域名（如 `news.yourdomain.com`）
+
+### 第九步：创建 R2 Bucket（图片缓存 + AI 插画）
+
+`wrangler.toml` 已绑定 `cf-news-images` 桶到 `R2_IMAGES`，首次部署前创建一次：
+
+```bash
+docker run --rm --env-file cf-news-worker/.env \
+  -v $(pwd)/cf-news-worker:/app -v /app/node_modules --network=host \
+  cf-news-worker npx wrangler r2 bucket create cf-news-images
+```
+
+### 第十步：Email Routing 入站（邮件退订）
+
+1. Dashboard → **Compute > Email Service > Email Routing** → 为域名启用
+2. 添加路由规则：模式 `digest@你的域名.com` → 动作 **发送到 Worker** → `cf-news-worker`
+3. 用户回复 "退订"（或 unsubscribe/stop）到 digest@ 即可关闭每日摘要
+
+### 第十一步：Radar API Token（全球趋势排行）
+
+`/api/news/trending/radar` 端点需要一个带 `Account > Radar > Read` 权限的 token：
+
+```bash
+grep "^CLOUDFLARE_API_TOKEN=" cf-news-worker/.env | cut -d= -f2- | \
+  docker run --rm -i --env-file cf-news-worker/.env \
+  -v $(pwd)/cf-news-worker:/app -v /app/node_modules --network=host \
+  cf-news-worker npx wrangler secret put RADAR_API_TOKEN
+```
+
+### 第十二步：Web Analytics（流量统计）
+
+1. Dashboard → **Analytics > Web Analytics** → 为你的域名创建站点
+2. 复制 beacon token（形如 `0x...`）替换 `cf-news-frontend/index.html` 中的 `VITE_WEB_ANALYTICS_TOKEN`
+
+### 第十三步（可选）：Zero Trust Access（后台保护）
+
+为管理界面加一层 Cloudflare Access 保护（免费 50 用户）：
+
+1. Dashboard → **Zero Trust** → **Access > Applications** → 添加应用
+2. 域名：`news.yourdomain.com`；路径：`/api/admin/*` 和 `/admin`
+3. 策略：允许你的邮箱 / 任何有效会话 → 保存
+
+哈希资源（1 年）和图片代理（7 天）的 Cache Rules 已通过 ruleset API 配置，也可在 Dashboard → **Rules > Cache Rules** 查看。
 
 ## CI/CD 配置（GitHub Actions）
 
@@ -281,6 +336,7 @@ cf-news/
 | GET | `/api/news/trending/categories?hours=24` | 分类分布 |
 | GET | `/api/news/trending/compare?keywords=a,b,c&hours=48` | 多关键词时间序列对比 |
 | GET | `/api/news/trending/hourly?hours=24` | 每小时来源与分类分布 |
+| GET | `/api/news/trending/radar` | Cloudflare Radar 全球互联网服务排名 |
 | GET | `/api/news/timeline?keyword=AI&hours=168` | 关键词事件时间线 |
 | GET | `/api/news/map?hours=48` | 基于近期新闻推断地区分布 |
 | GET | `/api/news/fresh-view?exclude=tech,ai` | 反信息茧房推荐 |

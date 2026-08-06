@@ -1,6 +1,5 @@
 import { Hono } from 'hono';
 import { Bindings } from '../types';
-import { indexNewsItem } from '../services/tokenizer';
 import { fetchSourceNews } from '../services/newsFetcher';
 import { storeDedupHash } from '../services/dedup';
 import { extractEntities } from '../services/entityExtractor';
@@ -215,71 +214,82 @@ admin.post('/rebuild-index', async (c) => {
 });
 
 // Backfill Vectorize embeddings for existing news items
+// 优先调度到 durable Workflow（自动重试、可跨请求存活）；
+// 测试环境没有 BACKFILL_WORKFLOW 绑定时回退到旧的 waitUntil 后台循环
 admin.post('/backfill-vectors', async (c) => {
-    const db = getDb(c.env);
-    c.executionCtx.waitUntil((async () => {
-        try {
-            const items = await db.select({
-                id: newsItems.id, title: newsItems.title, description: newsItems.description,
-            }).from(newsItems)
-                .where(eq(newsItems.is_deleted, 0))
-                .orderBy(desc(newsItems.id))
-                .limit(500)
-                .all();
-            let stored = 0;
-            let failed = 0;
-            for (const item of items) {
-                try {
-                    await storeDedupHash(c.env, item.id, item.title, item.description || undefined);
-                    stored++;
-                } catch (e) {
-                    failed++;
-                    console.error(`Vector store failed for id=${item.id}:`, e);
+    if (!c.env.BACKFILL_WORKFLOW) {
+        const db = getDb(c.env);
+        c.executionCtx.waitUntil((async () => {
+            try {
+                const items = await db.select({
+                    id: newsItems.id, title: newsItems.title, description: newsItems.description,
+                }).from(newsItems)
+                    .where(eq(newsItems.is_deleted, 0))
+                    .orderBy(desc(newsItems.id))
+                    .limit(500)
+                    .all();
+                let stored = 0;
+                let failed = 0;
+                for (const item of items) {
+                    try {
+                        await storeDedupHash(c.env, item.id, item.title, item.description || undefined);
+                        stored++;
+                    } catch (e) {
+                        failed++;
+                        console.error(`Vector store failed for id=${item.id}:`, e);
+                    }
                 }
+                console.log(`Vector backfill complete: ${stored} stored, ${failed} failed`);
+            } catch (e) {
+                console.error('Vector backfill failed:', e);
             }
-            console.log(`Vector backfill complete: ${stored} stored, ${failed} failed`);
-        } catch (e) {
-            console.error('Vector backfill failed:', e);
-        }
-    })());
-    return c.json({ success: true, message: 'Vector backfill started in background (500 items)' });
+        })());
+        return c.json({ success: true, message: 'Vector backfill started in background (500 items)' });
+    }
+    // 调度 durable Workflow：逐批游标扫描全部未删除条目，单条失败自动跳过，批次失败自动重试
+    await c.env.BACKFILL_WORKFLOW.create({ params: { type: 'vectors', batchSize: 500 } });
+    return c.json({ success: true, message: 'Vector backfill scheduled via Workflow' });
 });
 
 // Backfill entities for existing news items that have content but no extracted
-// entities yet. Runs in background; each batch is capped so the invocation stays
-// under the subrequest limit.
+// entities yet. 调度到 durable Workflow；测试环境无绑定时回退到 waitUntil 循环。
 admin.post('/backfill-entities', async (c) => {
-    const db = getDb(c.env);
-    c.executionCtx.waitUntil((async () => {
-        try {
-            const items = await db.all<{ id: number; title: string; description: string | null; content: string | null }>(sql`
-                SELECT n.id, n.title, n.description, n.content
-                FROM news_items n
-                LEFT JOIN news_entities ne ON ne.news_id = n.id
-                WHERE n.is_deleted = 0 AND ne.id IS NULL
-                  AND (n.content IS NOT NULL OR n.description IS NOT NULL)
-                ORDER BY n.id DESC
-                LIMIT 50
-            `);
-            let done = 0;
-            for (const item of items) {
-                try {
-                    await extractEntities(c.env, item.id, {
-                        title: item.title,
-                        description: item.description ?? undefined,
-                        content: item.content ?? undefined,
-                    });
-                    done++;
-                } catch (e) {
-                    console.error(`Entity extraction failed for id=${item.id}:`, e);
+    if (!c.env.BACKFILL_WORKFLOW) {
+        const db = getDb(c.env);
+        c.executionCtx.waitUntil((async () => {
+            try {
+                const items = await db.all<{ id: number; title: string; description: string | null; content: string | null }>(sql`
+                    SELECT n.id, n.title, n.description, n.content
+                    FROM news_items n
+                    LEFT JOIN news_entities ne ON ne.news_id = n.id
+                    WHERE n.is_deleted = 0 AND ne.id IS NULL
+                      AND (n.content IS NOT NULL OR n.description IS NOT NULL)
+                    ORDER BY n.id DESC
+                    LIMIT 50
+                `);
+                let done = 0;
+                for (const item of items) {
+                    try {
+                        await extractEntities(c.env, item.id, {
+                            title: item.title,
+                            description: item.description ?? undefined,
+                            content: item.content ?? undefined,
+                        });
+                        done++;
+                    } catch (e) {
+                        console.error(`Entity extraction failed for id=${item.id}:`, e);
+                    }
                 }
+                console.log(`Entity backfill complete: ${done}/${items.length}`);
+            } catch (e) {
+                console.error('Entity backfill failed:', e);
             }
-            console.log(`Entity backfill complete: ${done}/${items.length}`);
-        } catch (e) {
-            console.error('Entity backfill failed:', e);
-        }
-    })());
-    return c.json({ success: true, message: 'Entity backfill started in background (50 items)' });
+        })());
+        return c.json({ success: true, message: 'Entity backfill started in background (50 items)' });
+    }
+    // 调度 durable Workflow：游标升序扫描缺失实体的条目，单条失败在 step 内捕获不重试整批
+    await c.env.BACKFILL_WORKFLOW.create({ params: { type: 'entities', batchSize: 50 } });
+    return c.json({ success: true, message: 'Entity backfill scheduled via Workflow' });
 });
 
 export default admin;

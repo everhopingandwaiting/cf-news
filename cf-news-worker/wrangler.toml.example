@@ -2,6 +2,10 @@ name = "cf-news-worker"
 main = "src/index.ts"
 compatibility_date = "2026-05-28"
 
+# Smart Placement — 自动将 Worker 移到靠近上游 API（AI 提供商/RSS 源）的位置
+[placement]
+mode = "smart"
+
 # Static assets (React frontend)
 [assets]
 directory = "./public"
@@ -45,6 +49,22 @@ class_name = "PipingRoom"
 # Email Sending
 [[send_email]]
 name = "EMAIL"
+
+# R2 — 图片代理缓存 + AI 插画持久化
+[[r2_buckets]]
+binding = "R2_IMAGES"
+bucket_name = "cf-news-images"
+
+# Workflows — 后台长任务（backfill 等）
+[[workflows]]
+name = "backfill-workflow"
+binding = "BACKFILL_WORKFLOW"
+class_name = "BackfillWorkflow"
+
+# Analytics Engine — 自定义埋点（搜索热词、AI 调用统计）
+[[analytics_engine_datasets]]
+binding = "ANALYTICS"
+dataset = "cf_news_events"
 
 # Browser Rendering（JS 渲染抓取）
 [browser]

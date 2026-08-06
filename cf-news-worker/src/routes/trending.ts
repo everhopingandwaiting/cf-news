@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { Bindings } from '../types';
 import { shanghaiCutoff } from '../services/trending';
+import { fetchInternetServiceRanking } from '../services/radar';
 import { eq, sql, and, desc, like, inArray, gte, SQL } from 'drizzle-orm';
 import { getDb } from '../db';
 import { trendingTopics, newsItems, newsSources } from '../db/schema';
@@ -392,6 +393,12 @@ trending.get('/trending/hourly', async (c) => {
         console.error('Hourly stats error:', e);
         return c.json({ error: String(e) }, 500);
     }
+});
+
+// GET /trending/radar — Cloudflare Radar 全球互联网服务热度排行（跨源趋势补充）
+trending.get('/trending/radar', async (c) => {
+    const ranks = await fetchInternetServiceRanking(c.env);
+    return c.json({ source: 'cloudflare-radar', ranks });
 });
 
 export default trending;

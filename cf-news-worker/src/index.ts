@@ -25,10 +25,12 @@ import { generatePendingSummaries } from './services/summarizer';
 import { handleImageProxy } from './routes/image';
 import { handleScreenshot } from './routes/screenshot';
 import { handleShare } from './routes/share';
+import { handleInboundEmail } from './routes/emailInbound';
 
 export { ClipboardRoom } from './durable-objects/clipboard';
 export { CommentsRoom } from './durable-objects/comments';
 export { PipingRoom } from './durable-objects/piping';
+export { BackfillWorkflow } from './workflows/backfillWorkflow';
 
 const app = new Hono<{ Bindings: Bindings }>();
 
@@ -216,5 +218,10 @@ export default {
 
     async queue(batch: MessageBatch<any>, env: Bindings): Promise<void> {
         await handleNewsQueue(batch, env);
+    },
+
+    // Email Routing 入站：digest@slivermoss.site 的退订/回复邮件处理
+    async email(message: ForwardableEmailMessage, env: Bindings): Promise<void> {
+        await handleInboundEmail(message, env);
     }
 };

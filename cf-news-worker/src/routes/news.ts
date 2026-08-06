@@ -75,6 +75,14 @@ news.get('/', async (c) => {
     const limit = parseInt(c.req.query('limit') || '20');
     const category = c.req.query('category');
     const search = c.req.query('search');
+    // 搜索热词遥测：非阻塞写入 Analytics Engine（不 await，避免影响响应延迟）
+    if (search && c.env.ANALYTICS) {
+        c.env.ANALYTICS.writeDataPoint({
+            indexes: [],
+            blobs: ['search', search.toLowerCase().slice(0, 100)],
+            doubles: [],
+        });
+    }
     const sourceId = c.req.query('source_id');
     const lang = c.req.query('lang');
     const hasSummary = c.req.query('has_summary');

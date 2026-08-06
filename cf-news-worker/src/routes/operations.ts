@@ -218,9 +218,30 @@ Requirements:
 
         if (!imageUrl) return c.json({ success: false, error: '所有供应商的 AI 插画生成均失败' }, 502);
 
+        // 将生成的插画持久化到 R2，避免外部临时 URL 过期失效；
+        // 成功后 illustration_url 存 r2:// 内部路径，由 /api/image?url=r2://... 统一提供访问
+        let storedUrl = imageUrl;
+        if (c.env.R2_IMAGES) {
+            try {
+                const imgRes = await fetch(imageUrl, { signal: AbortSignal.timeout(15_000) });
+                const contentType = (imgRes.headers.get('Content-Type') || '').split(';')[0].trim();
+                const extMap: Record<string, string> = {
+                    'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif',
+                };
+                const ext = extMap[contentType];
+                if (imgRes.ok && ext) {
+                    const key = `illustration/${newsId}.${ext}`;
+                    await c.env.R2_IMAGES.put(key, imgRes.body, { httpMetadata: { contentType } });
+                    storedUrl = 'r2://' + key;
+                }
+            } catch (e) {
+                console.error('插画 R2 持久化失败，保留原始 URL:', e);
+            }
+        }
+
         await db.run(sql`INSERT OR REPLACE INTO news_summaries (news_id, summary, illustration_url)
-            VALUES (${newsId}, '', ${imageUrl})`);
-        return c.json({ success: true, image_url: imageUrl, cached: false });
+            VALUES (${newsId}, '', ${storedUrl})`);
+        return c.json({ success: true, image_url: storedUrl, cached: false });
     } catch (error) {
         return c.json({ success: false, error: String(error) }, 500);
     }

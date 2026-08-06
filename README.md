@@ -54,7 +54,15 @@ AI-generated summary of today's top news, sorted by time with language markers (
 - **News voice playback** — Browser-native SpeechSynthesis, free, no API calls
 - **AI classification** — LLaMA 3.1 8B classifies news by content, not source defaults
 - **Bot protection** — Turnstile verification on login/register
-- **Edge caching** — News list cached on CF edge (60s) for faster response
+- **Edge caching** — News list cached on CF edge (60s) + Cache Rules (hashed assets 1y, image proxy 7d)
+- **Image proxy with R2 cache** — External images proxied through CF edge and cached in R2 (10GB free, 0 egress)
+- **AI illustration persistence** — AI-generated illustrations stored in R2, never broken by expiring temp URLs
+- **Global service rankings** — Cloudflare Radar internet-service rankings supplement the trending panel
+- **Usage analytics** — Workers Analytics Engine records search hot-words and per-provider AI call stats
+- **Durable backfill** — Admin backfill jobs run as Cloudflare Workflows (auto-retry, survives request lifetime)
+- **Smart Placement** — Worker auto-places near upstream AI/RSS endpoints for lower latency
+- **Email unsubscribe** — Reply "退订" to digest@ and the subscription turns off (Email Routing inbound)
+- **Privacy-friendly analytics** — Cloudflare Web Analytics beacon (no cookies)
 - **Responsive UI** — React 19 + Tailwind 4, works on desktop and mobile
 
 ## Tech Stack
@@ -74,6 +82,11 @@ AI-generated summary of today's top news, sorted by time with language markers (
 | Edge Cache | Cache API (news list 60s) |
 | Summaries | OpenRouter, NVIDIA, Mango APIs |
 | Vector | Vectorize for semantic dedup |
+| Object Storage | R2 (image proxy cache + AI illustrations) |
+| Durable Tasks | Workflows (backfill jobs) |
+| Analytics | Analytics Engine (search/AI stats) + Web Analytics (traffic) |
+| Global Trends | Radar API (internet service rankings) |
+| Email Inbound | Email Routing (digest unsubscribe) |
 | Browser | Browser Rendering (headless Chrome for JS-heavy RSS) |
 | Queue | Queues (async news processing) |
 | Rate Limit | Cloudflare Rate Limiting |
@@ -177,6 +190,48 @@ After first deploy, add your domain:
 2. Click your worker (`cf-news-worker`)
 3. Go to **Settings** → **Triggers** → **Custom Domains**
 4. Add your domain (e.g., `news.yourdomain.com`)
+
+### Step 9: R2 Bucket (image cache + AI illustrations)
+
+`wrangler.toml` already binds bucket `cf-news-images` to `R2_IMAGES`. Create it once:
+
+```bash
+docker run --rm --env-file cf-news-worker/.env \
+  -v $(pwd)/cf-news-worker:/app -v /app/node_modules --network=host \
+  cf-news-worker npx wrangler r2 bucket create cf-news-images
+```
+
+### Step 10: Email Routing Inbound (digest unsubscribe)
+
+1. Dashboard → **Compute > Email Service > Email Routing** → enable for your zone
+2. Add a routing rule: pattern `digest@yourdomain.com` → action **Send to a Worker** → `cf-news-worker`
+3. Replying "退订" (or unsubscribe/stop) to digest@ disables the sender's daily digest
+
+### Step 11: Radar API Token (global trend rankings)
+
+The `/api/news/trending/radar` endpoint needs an API token with `Account > Radar > Read`:
+
+```bash
+grep "^CLOUDFLARE_API_TOKEN=" cf-news-worker/.env | cut -d= -f2- | \
+  docker run --rm -i --env-file cf-news-worker/.env \
+  -v $(pwd)/cf-news-worker:/app -v /app/node_modules --network=host \
+  cf-news-worker npx wrangler secret put RADAR_API_TOKEN
+```
+
+### Step 12: Web Analytics (traffic)
+
+1. Dashboard → **Analytics > Web Analytics** → create a site for your domain
+2. Copy the beacon token (e.g. `0x...`) and replace `VITE_WEB_ANALYTICS_TOKEN` in `cf-news-frontend/index.html`
+
+### Step 13 (optional): Zero Trust Access (admin protection)
+
+Protect the admin UI behind Cloudflare Access (free up to 50 users):
+
+1. Dashboard → **Zero Trust** → **Access > Applications** → Add an application
+2. Domain: `news.yourdomain.com`; Path: `/api/admin/*` and `/admin`
+3. Policy: Allow your email / any valid session → Save
+
+Cache Rules for hashed assets (1 year) and the image proxy (7 days) are configured via the ruleset API — see `deploy.sh` output or create them in Dashboard → **Rules > Cache Rules**.
 
 ## CI/CD Setup (GitHub Actions)
 
@@ -290,6 +345,7 @@ cf-news/
 | GET | `/api/news/trending/categories?hours=24` | Category distribution of trending content |
 | GET | `/api/news/trending/compare?keywords=a,b,c&hours=48` | Multi-keyword time series comparison |
 | GET | `/api/news/trending/hourly?hours=24` | Hourly source & category distribution |
+| GET | `/api/news/trending/radar` | Global internet-service rankings from Cloudflare Radar |
 | GET | `/api/news/timeline?keyword=AI&hours=168` | Event timeline for a keyword or recent news |
 | GET | `/api/news/map?hours=48` | Region distribution inferred from recent news |
 | GET | `/api/news/fresh-view?exclude=tech,ai` | Anti-filter-bubble recommendations |

@@ -158,6 +158,14 @@ export async function logAICall(env: Bindings, data: {
     prompt_length: number; response_length: number; response_preview?: string;
     duration_ms: number; success: boolean; error?: string;
 }) {
+    // AI 调用遥测：非阻塞写入 Analytics Engine（provider/model/成功与否/耗时都在此作用域内）
+    if (env.ANALYTICS) {
+        env.ANALYTICS.writeDataPoint({
+            indexes: [],
+            blobs: ['ai_call', data.provider, data.model || '', data.success ? 'ok' : 'fail'],
+            doubles: [data.duration_ms, 1],
+        });
+    }
     const db = getDb(env);
     try {
         await db.insert(aiCallLog).values({

@@ -7,6 +7,9 @@ export interface Bindings {
     COMMENTS: DurableObjectNamespace;
     PIPING: DurableObjectNamespace;
     EMAIL: SendEmail;
+    R2_IMAGES: R2Bucket;
+    BACKFILL_WORKFLOW: Workflow;
+    ANALYTICS: AnalyticsEngineDataset;
     JWT_SECRET: string;
     NEWS_FETCH_INTERVAL: string;
     OPENROUTER_API_KEY: string;
