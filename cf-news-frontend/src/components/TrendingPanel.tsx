@@ -1,17 +1,31 @@
 import { useState, useEffect } from 'react';
 import type { NewsItem } from '../types';
-import type { TrendingWord, Topic, CategoryInfo, CompareSeries, HourlySource, HourlyCat, TrendTheme } from './trending/types';
-import { KEYWORD_ARTICLES_LIMIT } from './trending/types';
+import type { TrendingWord, Topic, CategoryInfo, CompareSeries, HourlySource, HourlyCat, TrendTheme, TrendingOverview, ThemePerspective } from './trending/types';
+import { KEYWORD_ARTICLES_LIMIT, MAX_COMPARE_KWS } from './trending/types';
 import PeriodSelector from './trending/PeriodSelector';
 import TrendingThemesTab from './trending/TrendingThemesTab';
 import TrendingHotKeywords from './trending/TrendingHotKeywords';
 import TrendingRisingTopics from './trending/TrendingRisingTopics';
 import TrendingChartTab from './trending/TrendingChartTab';
 import TrendingInsightTooltip from './trending/TrendingInsightTooltip';
+import TrendingOverviewCard from './trending/TrendingOverviewCard';
+import { Icon } from './trending/icons';
+import type { IconName } from './trending/icons';
 import TrendingHourlyChart from './TrendingHourlyChart';
 
+type TabKey = 'themes' | 'hot' | 'rise' | 'chart' | 'sources' | 'cats';
+
+const TABS: { key: TabKey; label: string; icon: IconName; aria: string }[] = [
+    { key: 'themes', label: '主题', icon: 'tag', aria: '趋势主题' },
+    { key: 'hot', label: '热词', icon: 'fire', aria: '热门关键词' },
+    { key: 'rise', label: '上升', icon: 'trending', aria: '上升趋势' },
+    { key: 'chart', label: '对比', icon: 'chart', aria: '关键词对比' },
+    { key: 'sources', label: '来源', icon: 'newspaper', aria: '来源分布' },
+    { key: 'cats', label: '分类', icon: 'grid', aria: '分类分布' },
+];
+
 export default function TrendingPanel({ visible, onClose, onSearch, onSelectArticle }: { visible: boolean; onClose: () => void; onSearch: (keyword: string) => void; onSelectArticle?: (item: NewsItem) => void }) {
-    const [tab, setTab] = useState<'themes' | 'hot' | 'rise' | 'chart' | 'sources' | 'cats'>('themes');
+    const [tab, setTab] = useState<TabKey>('themes');
     const [period, setPeriod] = useState(24);
     const [keywords, setKeywords] = useState<TrendingWord[]>([]);
     const [topics, setTopics] = useState<Topic[]>([]);
@@ -34,6 +48,10 @@ export default function TrendingPanel({ visible, onClose, onSearch, onSelectArti
     const [kwFetchController, setKwFetchController] = useState<AbortController | null>(null);
     const [themes, setThemes] = useState<TrendTheme[]>([]);
     const [themeLoading, setThemeLoading] = useState(false);
+    const [radarRanks, setRadarRanks] = useState<{ rank: number; service: string }[]>([]);
+    const [overview, setOverview] = useState<TrendingOverview | null>(null);
+    const [overviewLoading, setOverviewLoading] = useState(true);
+    const [perspective, setPerspective] = useState<{ keyword: string; data: ThemePerspective | null; loading: boolean } | null>(null);
 
     useEffect(() => {
         if (!visible) return;
@@ -43,6 +61,11 @@ export default function TrendingPanel({ visible, onClose, onSearch, onSelectArti
         setCatLoading(true);
         setThemeLoading(true);
         setKwArticles(null);
+
+        fetch(`/api/news/trending/radar`)
+            .then(r => r.json())
+            .then(data => { if (data.ranks) setRadarRanks(data.ranks); })
+            .catch(() => {});
 
         fetch(`/api/news/trending/themes?hours=${period}`)
             .then(r => r.json())
@@ -77,6 +100,17 @@ export default function TrendingPanel({ visible, onClose, onSearch, onSelectArti
             })
             .catch(() => {})
             .finally(() => setHourlyLoading(false));
+
+        setOverviewLoading(true);
+        fetch(`/api/news/trending/overview?hours=${period}`)
+            .then(r => r.json())
+            .then(data => {
+                if (data.overview !== undefined || data.keywords !== undefined) {
+                    setOverview({ overview: data.overview ?? null, keywords: data.keywords ?? [], generated_at: data.generated_at || '' });
+                }
+            })
+            .catch(() => {})
+            .finally(() => setOverviewLoading(false));
     }, [visible, period]);
 
     useEffect(() => {
@@ -129,6 +163,19 @@ export default function TrendingPanel({ visible, onClose, onSearch, onSelectArti
         );
     }
 
+    // 热词 → 对比联动：不在对比页时跳转过去并加入关键词（最多 4 个，超出丢最旧）
+    function handleCompareKeyword(kw: string) {
+        if (tab !== 'chart') {
+            setTab('chart');
+            setCompareKws(prev => {
+                if (prev.includes(kw)) return prev;
+                return prev.length >= MAX_COMPARE_KWS ? [...prev.slice(1), kw] : [...prev, kw];
+            });
+        } else {
+            toggleCompareKw(kw);
+        }
+    }
+
     function fetchKeywordArticles(keyword: string) {
         if (kwArticles?.keyword === keyword && !kwArticles.loading) return;
         if (kwFetchController) kwFetchController.abort();
@@ -154,6 +201,34 @@ export default function TrendingPanel({ visible, onClose, onSearch, onSelectArti
             .catch(() => setInsight({ keyword, text: '分析失败', loading: false }));
     }
 
+    // 主题多视角分析（按关键词缓存，切换主题时重新拉取）
+    function fetchPerspective(keyword: string) {
+        if (perspective?.keyword === keyword && !perspective.loading) return;
+        setPerspective({ keyword, data: null, loading: true });
+        fetch(`/api/news/trending/theme-perspectives?keyword=${encodeURIComponent(keyword)}&hours=${period}`)
+            .then(r => r.json())
+            .then(data => {
+                if (data.perspective) {
+                    setPerspective({ keyword, data: { keyword, perspective: data.perspective, related: data.related || [], generated_at: data.generated_at || '' }, loading: false });
+                } else {
+                    setPerspective({ keyword, data: null, loading: false });
+                }
+            })
+            .catch(() => setPerspective({ keyword, data: null, loading: false }));
+    }
+
+    async function refreshOverview() {
+        setOverviewLoading(true);
+        try {
+            const res = await fetch(`/api/news/trending/overview?hours=${period}`);
+            const data = await res.json();
+            if (data.overview !== undefined || data.keywords !== undefined) {
+                setOverview({ overview: data.overview ?? null, keywords: data.keywords ?? [], generated_at: data.generated_at || '' });
+            }
+        } catch { /* 刷新失败保留旧数据 */ }
+        finally { setOverviewLoading(false); }
+    }
+
     const handlePeriodChange = (p: number) => { setPeriod(p); setCompareKws([]); };
 
     return (
@@ -163,12 +238,12 @@ export default function TrendingPanel({ visible, onClose, onSearch, onSelectArti
                 <div className="sticky top-0 bg-white/95 backdrop-blur-sm z-10 border-b border-gray-200">
                     <div className="flex items-center justify-between px-5 py-3">
                         <div className="flex gap-1.5 overflow-x-auto scrollbar-none flex-nowrap">
-                            <button className={`shrink-0 px-3 py-1.5 rounded-lg text-[13px] font-medium transition cursor-pointer ${tab === 'themes' ? 'bg-indigo-500 text-white shadow-sm' : 'text-gray-700 hover:bg-gray-100'}`} onClick={() => setTab('themes')} aria-label="趋势主题">主题</button>
-                            <button className={`shrink-0 px-3 py-1.5 rounded-lg text-[13px] font-medium transition cursor-pointer ${tab === 'hot' ? 'bg-indigo-500 text-white shadow-sm' : 'text-gray-700 hover:bg-gray-100'}`} onClick={() => setTab('hot')} aria-label="热门关键词">热词</button>
-                            <button className={`shrink-0 px-3 py-1.5 rounded-lg text-[13px] font-medium transition cursor-pointer ${tab === 'rise' ? 'bg-indigo-500 text-white shadow-sm' : 'text-gray-700 hover:bg-gray-100'}`} onClick={() => setTab('rise')} aria-label="上升趋势">上升</button>
-                            <button className={`shrink-0 px-3 py-1.5 rounded-lg text-[13px] font-medium transition cursor-pointer ${tab === 'chart' ? 'bg-indigo-500 text-white shadow-sm' : 'text-gray-700 hover:bg-gray-100'}`} onClick={() => setTab('chart')} aria-label="关键词对比">对比</button>
-                            <button className={`shrink-0 px-3 py-1.5 rounded-lg text-[13px] font-medium transition cursor-pointer ${tab === 'sources' ? 'bg-indigo-500 text-white shadow-sm' : 'text-gray-700 hover:bg-gray-100'}`} onClick={() => setTab('sources')} aria-label="来源分布">来源</button>
-                            <button className={`shrink-0 px-3 py-1.5 rounded-lg text-[13px] font-medium transition cursor-pointer ${tab === 'cats' ? 'bg-indigo-500 text-white shadow-sm' : 'text-gray-700 hover:bg-gray-100'}`} onClick={() => setTab('cats')} aria-label="分类分布">分类</button>
+                            {TABS.map(t => (
+                                <button key={t.key} className={`shrink-0 px-3 py-1.5 rounded-lg text-[13px] font-medium transition cursor-pointer flex items-center gap-1 ${tab === t.key ? 'bg-indigo-500 text-white shadow-sm' : 'text-gray-700 hover:bg-gray-100'}`} onClick={() => setTab(t.key)} aria-label={t.aria}>
+                                    <Icon name={t.icon} className="w-3.5 h-3.5" />
+                                    {t.label}
+                                </button>
+                            ))}
                         </div>
                         <button className="shrink-0 ml-2 text-gray-400 hover:text-gray-700 text-xl leading-none cursor-pointer" onClick={onClose} aria-label="关闭面板">&times;</button>
                     </div>
@@ -184,9 +259,32 @@ export default function TrendingPanel({ visible, onClose, onSearch, onSelectArti
                         </div>
                     )}
 
-                    {tab === 'themes' && <TrendingThemesTab themes={themes} themeLoading={themeLoading} fetchKeywordArticles={fetchKeywordArticles} fetchInsight={fetchInsight} onSearch={onSearch} onSelectArticle={onSelectArticle} onClose={onClose} />}
+                    <TrendingOverviewCard
+                        overview={overview}
+                        loading={overviewLoading}
+                        onRefresh={refreshOverview}
+                        onKeywordClick={handleCompareKeyword}
+                    />
 
-                    {tab === 'hot' && <TrendingHotKeywords keywords={keywords} kwLoading={kwLoading} error={error} maxWordCount={maxWordCount} kwArticles={kwArticles} setKwArticles={setKwArticles} dropped={dropped} fetchKeywordArticles={fetchKeywordArticles} fetchInsight={fetchInsight} onSearch={onSearch} onSelectArticle={onSelectArticle} onClose={onClose} compareKws={compareKws} toggleCompareKw={toggleCompareKw} compareSeries={compareSeries} compareLoading={compareLoading} />}
+                    {radarRanks.length > 0 && (
+                        <div className="rounded-lg border border-gray-200 bg-white p-3 mb-3">
+                            <div className="flex items-center gap-1.5 mb-2">
+                                <Icon name="trending" className="w-3.5 h-3.5 text-gray-400" />
+                                <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">全球服务排行 · Cloudflare Radar</span>
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                                {radarRanks.slice(0, 10).map(r => (
+                                    <span key={r.service} className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] ${r.rank <= 3 ? 'bg-indigo-50 text-indigo-600 font-semibold' : 'bg-gray-50 text-gray-500'}`}>
+                                        <span className="text-[10px] opacity-70">#{r.rank}</span>{r.service}
+                                    </span>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {tab === 'themes' && <TrendingThemesTab themes={themes} themeLoading={themeLoading} fetchKeywordArticles={fetchKeywordArticles} fetchInsight={fetchInsight} perspective={perspective} fetchPerspective={fetchPerspective} onSearch={onSearch} onSelectArticle={onSelectArticle} onClose={onClose} />}
+
+                    {tab === 'hot' && <TrendingHotKeywords keywords={keywords} kwLoading={kwLoading} error={error} maxWordCount={maxWordCount} topics={topics} kwArticles={kwArticles} setKwArticles={setKwArticles} dropped={dropped} fetchKeywordArticles={fetchKeywordArticles} fetchInsight={fetchInsight} handleCompareKeyword={handleCompareKeyword} onSearch={onSearch} onSelectArticle={onSelectArticle} onClose={onClose} compareKws={compareKws} compareSeries={compareSeries} compareLoading={compareLoading} />}
 
                     {tab === 'rise' && <TrendingRisingTopics risingTopics={risingTopics} tpLoading={tpLoading} keywords={keywords} onSearch={onSearch} onClose={onClose} />}
 

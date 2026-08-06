@@ -70,6 +70,30 @@ export interface TrendTheme {
     articles: NewsItem[];
 }
 
+export interface OverviewKeyword {
+    word: string;
+    count: number;
+}
+
+export interface TrendingOverview {
+    overview: string | null;
+    keywords: OverviewKeyword[];
+    generated_at: string;
+}
+
+export interface ThemePerspectiveRelated {
+    id: number;
+    source: string;
+    title: string;
+}
+
+export interface ThemePerspective {
+    keyword: string;
+    perspective: string;
+    related: ThemePerspectiveRelated[];
+    generated_at: string;
+}
+
 // --- Reusable data ---
 export const PERIODS = [
     { key: 6, label: '6h' },

@@ -1,7 +1,8 @@
 import type { NewsItem } from '../../types';
 import { PALETTE, SKELETON_CLASSES, MAX_KEYWORD_SOURCES, MAX_DROPPED_DISPLAY } from './types';
 import { isBigram, displayWord, Skeleton } from './types';
-import type { TrendingWord, CompareSeries } from './types';
+import type { TrendingWord, Topic, TopicPoint, CompareSeries } from './types';
+import { EmptyState } from './icons';
 import TrendingCompareChart from '../TrendingCompareChart';
 
 interface TrendingHotKeywordsProps {
@@ -9,24 +10,45 @@ interface TrendingHotKeywordsProps {
     kwLoading: boolean;
     error: string | null;
     maxWordCount: number;
+    topics: Topic[];
     kwArticles: { keyword: string; items: NewsItem[]; loading: boolean } | null;
     setKwArticles: (v: { keyword: string; items: NewsItem[]; loading: boolean } | null) => void;
     dropped: string[];
     fetchKeywordArticles: (keyword: string) => void;
     fetchInsight: (keyword: string) => void;
+    handleCompareKeyword: (kw: string) => void;
     onSearch: (keyword: string) => void;
     onSelectArticle?: (item: NewsItem) => void;
     onClose: () => void;
     compareKws: string[];
-    toggleCompareKw: (kw: string) => void;
     compareSeries: CompareSeries[];
     compareLoading: boolean;
 }
 
+/* ─── 爆发词迷你走势线（40x16 SVG polyline） ─── */
+function Sparkline({ points }: { points: TopicPoint[] }) {
+    if (points.length < 2) return null;
+    const sorted = [...points].sort((a, b) => a.date_hour.localeCompare(b.date_hour));
+    const counts = sorted.map(p => p.count);
+    const max = Math.max(...counts);
+    const min = Math.min(...counts);
+    const range = Math.max(max - min, 1);
+    const width = 40;
+    const height = 16;
+    const step = width / (sorted.length - 1);
+    const pts = counts.map((c, i) => `${(i * step).toFixed(1)},${(height - 2 - ((c - min) / range) * (height - 4)).toFixed(1)}`);
+    const rising = counts[counts.length - 1] >= counts[0];
+    return (
+        <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className="inline-block align-middle" aria-hidden="true">
+            <polyline points={pts.join(' ')} fill="none" stroke={rising ? '#ef4444' : '#10b981'} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+    );
+}
+
 export default function TrendingHotKeywords({
-    keywords, kwLoading, error, maxWordCount, kwArticles, setKwArticles, dropped,
-    fetchKeywordArticles, fetchInsight, onSearch, onSelectArticle, onClose,
-    compareKws, toggleCompareKw, compareSeries, compareLoading,
+    keywords, kwLoading, error, maxWordCount, topics, kwArticles, setKwArticles, dropped,
+    fetchKeywordArticles, fetchInsight, handleCompareKeyword, onSearch, onSelectArticle, onClose,
+    compareKws, compareSeries, compareLoading,
 }: TrendingHotKeywordsProps) {
     return (
         <>
@@ -37,7 +59,7 @@ export default function TrendingHotKeywords({
                     ))}
                 </div>
             ) : keywords.length === 0 ? (
-                <div className="text-center py-12 text-gray-400 text-sm">{error || '暂无数据'}</div>
+                <EmptyState icon="fire" title={error || '暂无热词数据'} hint="试试切换时间范围" />
             ) : (
                 <div className="flex flex-wrap gap-2.5 justify-center py-2">
                     {keywords.map((kw, i) => {
@@ -46,10 +68,12 @@ export default function TrendingHotKeywords({
                         const size = ratio > 0.8 ? 'text-base font-bold' : ratio > 0.6 ? 'text-sm font-semibold' : ratio > 0.4 ? 'text-xs font-medium' : 'text-[11px]';
                         const rotate = i % 5 === 0 ? 'rotate-[-1.5deg]' : i % 7 === 0 ? 'rotate-[1.5deg]' : '';
                         const pad = ratio > 0.6 ? 'px-3.5 py-2' : 'px-3 py-1.5';
+                        const burstRing = kw.burst ? ' ring-2 ring-red-400' : '';
+                        const topic = topics.find(t => t.keyword === kw.word);
                         return (
                             <div key={kw.word} className="flex flex-col items-center">
                                 <button
-                                    className={`${color} ${size} ${pad} ${rotate} rounded-xl border transition-all duration-200 cursor-pointer hover:scale-105 hover:shadow-sm active:scale-95 relative`}
+                                    className={`${color} ${size} ${pad} ${rotate}${burstRing} rounded-xl border transition-all duration-200 cursor-pointer hover:scale-105 hover:shadow-sm active:scale-95 relative`}
                                     onClick={() => fetchKeywordArticles(kw.word)}
                                     title={`${displayWord(kw.word)} (${kw.count}) - 点击查看相关文章`}>
                                     {isBigram(kw.word) && <span className="text-[9px] opacity-50 font-normal mr-0.5">词组</span>}
@@ -62,6 +86,9 @@ export default function TrendingHotKeywords({
                                         </span>
                                     )}
                                 </button>
+                                {kw.burst && topic && topic.points.length >= 2 && (
+                                    <div className="mt-0.5"><Sparkline points={topic.points} /></div>
+                                )}
                                 <div className="flex items-center gap-1 mt-0.5">
                                     {kw.sources && kw.sources.length > 0 && (
                                         <span className="text-[9px] text-gray-400 truncate max-w-[80px]">
@@ -81,9 +108,9 @@ export default function TrendingHotKeywords({
                                         AI
                                     </button>
                                     <button
-                                        className={`text-[10px] cursor-pointer leading-none ${compareKws.includes(kw.word) ? 'text-indigo-500 font-bold' : 'text-gray-300 hover:text-gray-500'}`}
-                                        onClick={(e) => { e.stopPropagation(); toggleCompareKw(kw.word); }}
-                                        title={compareKws.includes(kw.word) ? '取消对比' : '加入对比'}>
+                                        className={`text-[10px] cursor-pointer leading-none ${compareKws.includes(kw.word) ? 'text-indigo-500 font-bold' : 'text-gray-400 hover:text-indigo-500'}`}
+                                        onClick={(e) => { e.stopPropagation(); handleCompareKeyword(kw.word); }}
+                                        title={compareKws.includes(kw.word) ? '已加入对比（点击进入对比页）' : '加入对比并前往对比页'}>
                                         {compareKws.includes(kw.word) ? '对比✓' : '对比'}
                                     </button>
                                 </div>
@@ -101,8 +128,12 @@ export default function TrendingHotKeywords({
                 <div className="mt-4 pt-3 border-t border-gray-100">
                     <div className="flex items-center justify-between mb-2">
                         <div className="text-[12px] text-gray-500 font-medium">"{displayWord(kwArticles.keyword)}" 相关文章</div>
-                        <button className="text-[11px] text-gray-400 hover:text-gray-600 cursor-pointer"
-                            onClick={() => setKwArticles(null)}>关闭</button>
+                        <div className="flex items-center gap-2">
+                            <button className="text-[11px] text-indigo-500 hover:text-indigo-700 cursor-pointer font-medium"
+                                onClick={() => handleCompareKeyword(kwArticles.keyword)}>加入对比</button>
+                            <button className="text-[11px] text-gray-400 hover:text-gray-600 cursor-pointer"
+                                onClick={() => setKwArticles(null)}>关闭</button>
+                        </div>
                     </div>
                     {kwArticles.loading ? (
                         <div className="flex items-center justify-center gap-2 py-4">
@@ -110,7 +141,7 @@ export default function TrendingHotKeywords({
                             <span className="text-[12px] text-gray-400">搜索中...</span>
                         </div>
                     ) : kwArticles.items.length === 0 ? (
-                        <div className="text-center py-4 text-gray-400 text-[12px]">没有找到相关文章</div>
+                        <EmptyState icon="document" title="没有找到相关文章" />
                     ) : (
                         <div className="space-y-1.5 max-h-64 overflow-y-auto">
                             {kwArticles.items.map((item) => (

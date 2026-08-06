@@ -331,12 +331,16 @@ cf-news/
 | GET | `/api/news/:id` | 获取新闻详情 |
 | GET | `/api/news/sources/list` | 获取 RSS 源列表 |
 | GET | `/api/news/trending?hours=24` | 趋势热词（含来源/突发/变化/新词/掉出榜） |
+| GET | `/api/news/trending/overview?hours=24` | AI 今日新闻格局概览（KV 缓存 30 分钟） |
+| GET | `/api/news/trending/theme-perspectives?keyword=X&hours=24` | 热词多视角分析（跨媒体报道观点对比） |
 | GET | `/api/news/trending/themes?hours=24` | 趋势主题聚合与代表新闻 |
 | GET | `/api/news/trending/topics?hours=24` | 热点追踪时间序列 |
 | GET | `/api/news/trending/categories?hours=24` | 分类分布 |
 | GET | `/api/news/trending/compare?keywords=a,b,c&hours=48` | 多关键词时间序列对比 |
 | GET | `/api/news/trending/hourly?hours=24` | 每小时来源与分类分布 |
 | GET | `/api/news/trending/radar` | Cloudflare Radar 全球互联网服务排名 |
+| GET | `/api/news/trending/overview?hours=24` | AI 今日新闻格局概览（KV 缓存 30 分钟） |
+| GET | `/api/news/trending/theme-perspectives?keyword=X&hours=24` | 主题 AI 多视角分析 |
 | GET | `/api/news/timeline?keyword=AI&hours=168` | 关键词事件时间线 |
 | GET | `/api/news/map?hours=48` | 基于近期新闻推断地区分布 |
 | GET | `/api/news/fresh-view?exclude=tech,ai` | 反信息茧房推荐 |

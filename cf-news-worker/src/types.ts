@@ -21,6 +21,9 @@ export interface Bindings {
     AI_SEARCH?: Fetcher;
     TURNSTILE_SECRET: string;
     TURNSTILE_SITE_KEY: string;
+    // Web Push VAPID 密钥（hex 编码原始 P-256 密钥，通过 wrangler secret put 注入）
+    VAPID_PRIVATE_KEY: string;
+    VAPID_PUBLIC_KEY: string;
 }
 
 export interface NewsQueueMessage {

@@ -261,10 +261,50 @@ export default function Home() {
     } catch { showToast('操作失败', 'error'); }
   }
 
+  // 浏览器推送订阅：雷达关键词命中时接收通知。依赖 sw.js 的 push handler。
+  async function handleTogglePush() {
+    if (!token) return;
+    try {
+      if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+        showToast('当前浏览器不支持推送通知', 'error');
+        return;
+      }
+      const reg = await navigator.serviceWorker.ready;
+      const existing = await reg.pushManager.getSubscription();
+      if (existing) {
+        await existing.unsubscribe();
+        await fetch('/api/user/push/unsubscribe', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ endpoint: existing.endpoint }),
+        });
+        showToast('已关闭推送通知');
+        return;
+      }
+      // VAPID 公钥（hex 未压缩点 → base64url）由后端配置，这里直接发订阅
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: await (async () => {
+          // 从 /api/config 获取 VAPID 公钥（base64url）
+          const cfg = await fetch('/api/config').then(r => r.json()).catch(() => ({}));
+          if (cfg.vapidPublicKey) return cfg.vapidPublicKey;
+          // 兜底：内置公钥
+          return 'BOPQpi7uMY/cbrennPLwpoY8GZxbbLuZu9902p2vuCMw7gsLBpG2Gh6KE09eZ6xepgfH0OywUwoXgC4FZQXFo';
+        })(),
+      });
+      await fetch('/api/user/push/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ endpoint: sub.endpoint, keys: { p256dh: btoa(String.fromCharCode(...new Uint8Array(sub.getKey('p256dh')!))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''), auth: btoa(String.fromCharCode(...new Uint8Array(sub.getKey('auth')!))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '') } }),
+      });
+      showToast('✅ 已开启推送通知（雷达命中时提醒）');
+    } catch { showToast('推送订阅失败，请检查浏览器权限', 'error'); }
+  }
+
   async function handleExport() {
     if (!token) return;
     try {
-      const res = await fetch('/api/user/export', { headers: { Authorization: `Bearer ${token}` } });
+      const res = await fetch('/api/user/favorites/export', { headers: { Authorization: `Bearer ${token}` } });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: '导出失败' }));
         showToast(err.error || '导出失败', 'error');
@@ -314,7 +354,7 @@ export default function Home() {
         sources={sources} sourceId={sourceId}
         digestEnabled={digestEnabled}
         onToggleDigest={handleToggleDigest}
-        onExport={handleExport} onRecommendations={handleRecommendations}
+        onExport={handleExport} onRecommendations={handleRecommendations} onTogglePush={handleTogglePush}
         onQA={() => setShowQA(true)}
         onLogin={() => setShowAuth(true)} onRegister={() => setShowAuth(true)}
         onRefresh={handleRefresh} onLogout={handleLogout}

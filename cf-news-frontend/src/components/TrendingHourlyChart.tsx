@@ -1,3 +1,5 @@
+import { EmptyState } from './trending/icons';
+
 interface HourlySource {
     hour: string; source_id: number; source_name: string; count: number;
 }
@@ -29,7 +31,7 @@ export default function TrendingHourlyChart({ mode, sources, categories, loading
         );
     }
     if (raw.length === 0) {
-        return <div className="text-center py-8 text-gray-400 text-sm">暂无数据</div>;
+        return <EmptyState icon="chart" title="暂无数据" hint="试试切换时间范围" />;
     }
 
     const hours = [...new Set(raw.map(r => r.hour))].sort();

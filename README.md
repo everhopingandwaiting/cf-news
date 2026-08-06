@@ -340,12 +340,16 @@ cf-news/
 | GET | `/api/news/:id` | Get news detail |
 | GET | `/api/news/sources/list` | List RSS sources |
 | GET | `/api/news/trending?hours=24` | Trending keywords (sources, burst, change, is_new, dropped) |
+| GET | `/api/news/trending/overview?hours=24` | AI summary of today's news landscape (KV cached 30 min) |
+| GET | `/api/news/trending/theme-perspectives?keyword=X&hours=24` | Multi-perspective analysis for a trending theme |
 | GET | `/api/news/trending/themes?hours=24` | Trending topic clusters with representative articles |
 | GET | `/api/news/trending/topics?hours=24` | Trending topics time series |
 | GET | `/api/news/trending/categories?hours=24` | Category distribution of trending content |
 | GET | `/api/news/trending/compare?keywords=a,b,c&hours=48` | Multi-keyword time series comparison |
 | GET | `/api/news/trending/hourly?hours=24` | Hourly source & category distribution |
 | GET | `/api/news/trending/radar` | Global internet-service rankings from Cloudflare Radar |
+| GET | `/api/news/trending/overview?hours=24` | AI "today's news landscape" summary (KV-cached 30 min) |
+| GET | `/api/news/trending/theme-perspectives?keyword=X&hours=24` | AI multi-perspective analysis of a trending theme |
 | GET | `/api/news/timeline?keyword=AI&hours=168` | Event timeline for a keyword or recent news |
 | GET | `/api/news/map?hours=48` | Region distribution inferred from recent news |
 | GET | `/api/news/fresh-view?exclude=tech,ai` | Anti-filter-bubble recommendations |

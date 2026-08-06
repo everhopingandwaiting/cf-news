@@ -2,6 +2,8 @@ import { Hono } from 'hono';
 import { Bindings } from '../types';
 import { shanghaiCutoff } from '../services/trending';
 import { fetchInternetServiceRanking } from '../services/radar';
+import { callAI } from '../services/aiProvider';
+import { generatePerspectives } from '../services/summarizer';
 import { eq, sql, and, desc, like, inArray, gte, SQL } from 'drizzle-orm';
 import { getDb } from '../db';
 import { trendingTopics, newsItems, newsSources } from '../db/schema';
@@ -399,6 +401,166 @@ trending.get('/trending/hourly', async (c) => {
 trending.get('/trending/radar', async (c) => {
     const ranks = await fetchInternetServiceRanking(c.env);
     return c.json({ source: 'cloudflare-radar', ranks });
+});
+
+// 复用 /trending 的指数衰减聚合（半衰期 4 小时），返回 top N 关键词（word + count）
+async function computeTopKeywords(env: Bindings, hours: number, limit = 8): Promise<{ word: string; count: number }[]> {
+    const db = getDb(env);
+    const cutoff = shanghaiCutoff(hours);
+    const rows = await db.select({
+        keyword: trendingTopics.keyword,
+        date_hour: trendingTopics.date_hour,
+        count: trendingTopics.count,
+    }).from(trendingTopics)
+        .where(gte(trendingTopics.date_hour, cutoff))
+        .orderBy(desc(trendingTopics.date_hour))
+        .limit(1000)
+        .all();
+    if (rows.length === 0) return [];
+
+    const HALF_LIFE_HOURS = 4;
+    const shanghaiNow = new Date(Date.now() + 8 * 3600 * 1000);
+    const weighted = new Map<string, number>();
+    for (const row of rows) {
+        const rowDate = new Date(row.date_hour.replace(' ', 'T') + '+08:00');
+        const ageHours = (shanghaiNow.getTime() - rowDate.getTime()) / 3600000;
+        const w = Math.exp(-ageHours * Math.LN2 / HALF_LIFE_HOURS);
+        weighted.set(row.keyword, (weighted.get(row.keyword) || 0) + (row.count ?? 0) * w);
+    }
+    return Array.from(weighted.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, limit)
+        .map(([word, score]) => ({ word, count: Math.round(score) }));
+}
+
+// GET /trending/overview — AI 今日新闻格局概览（KV 缓存 30 分钟，避免重复消耗 AI 额度）
+trending.get('/trending/overview', async (c) => {
+    const hours = parseThemeHours(c.req.query('hours'));
+    const cacheKey = `trending:overview:${hours}`;
+    const now = new Date().toISOString();
+
+    // 命中 KV 缓存直接返回
+    if (c.env.KV) {
+        try {
+            const cached = await c.env.KV.get(cacheKey);
+            if (cached) {
+                const parsed = JSON.parse(cached);
+                return c.json({ overview: parsed.overview ?? null, keywords: parsed.keywords || [], generated_at: parsed.generated_at || now });
+            }
+        } catch (e) {
+            console.error('trending/overview cache read error:', e);
+        }
+    }
+
+    try {
+        const keywords = await computeTopKeywords(c.env, hours, 8);
+        if (keywords.length === 0) {
+            // 无趋势数据时不调用 AI，直接返回空概览（200 优雅降级）
+            return c.json({ overview: null, keywords: [], generated_at: now });
+        }
+
+        const keywordList = keywords.map((k, i) => `${i + 1}. ${k.word}（热度 ${k.count}）`).join('\n');
+        const prompt = `以下是最近 ${hours} 小时新闻趋势关键词及热度统计。请用 2-3 句中文概括"今日新闻格局"：哪些领域最热、有哪些显著变化。只输出正文，不要标题和编号。\n\n${keywordList}\n\n今日新闻格局：`;
+
+        const overview = await callAI(c.env, prompt, { max_tokens: 200, temperature: 0.5 });
+        const result = {
+            overview: overview?.trim() || null,
+            keywords,
+            generated_at: now,
+        };
+
+        // 仅缓存成功的 AI 结果（TTL 1800 秒 = 30 分钟）
+        if (c.env.KV && result.overview) {
+            c.env.KV.put(cacheKey, JSON.stringify(result), { expirationTtl: 1800 }).catch(() => {});
+        }
+        return c.json(result);
+    } catch (e) {
+        console.error('trending/overview error:', e);
+        // AI/DB 失败不 500，优雅降级
+        return c.json({ overview: null, keywords: [], generated_at: now });
+    }
+});
+
+// GET /trending/theme-perspectives — 主题多视角分析：FTS5 找相关报道 → generatePerspectives → callAI 兜底
+trending.get('/trending/theme-perspectives', async (c) => {
+    const keyword = (c.req.query('keyword') || '').trim();
+    if (!keyword) return c.json({ error: '暂无该主题的多视角分析' }, 404);
+    const hours = parseThemeHours(c.req.query('hours'));
+    const db = getDb(c.env);
+
+    try {
+        // FTS5 匹配：复制 summarizer.findRelatedByFts 的 MATCH 模式（查询值限制为词字符，无注入风险）
+        const safeKeyword = keyword.replace(/["']/g, ' ').trim();
+        let items: { id: number; source: string; title: string }[] = [];
+        if (safeKeyword) {
+            const ftsQuery = `"${safeKeyword.replace(/"/g, '')}"`;
+            try {
+                const ftsIds = await db.all<{ rowid: number }>(
+                    sql`SELECT rowid FROM news_fts WHERE news_fts MATCH ${sql.raw(`'${ftsQuery}'`)} LIMIT 30`
+                );
+                const matchedIds = ftsIds.map(r => r.rowid).slice(0, 5);
+                if (matchedIds.length > 0) {
+                    const rows = await db.all<any>(sql`
+                        SELECT n.id, s.name as source_name, n.title
+                        FROM news_items n LEFT JOIN news_sources s ON n.source_id = s.id
+                        WHERE n.id IN (${sql.raw(matchedIds.join(','))}) AND n.is_deleted = 0
+                          AND n.created_at >= datetime('now', '-' || ${hours} || ' hours')
+                        ORDER BY COALESCE(n.published_at, n.created_at) DESC
+                        LIMIT 5
+                    `);
+                    items = rows.map(r => ({ id: r.id, source: r.source_name || '未知', title: r.title }));
+                }
+            } catch (e) {
+                console.error('theme-perspectives FTS error:', e);
+            }
+        }
+
+        // FTS 无结果/不可用时，退化为 LIKE 匹配（转义风格同 /trending）
+        if (items.length === 0 && safeKeyword) {
+            const escaped = safeKeyword.replace(/[%_]/g, '=$&');
+            const rows = await db.all<any>(sql`
+                SELECT n.id, s.name as source_name, n.title
+                FROM news_items n LEFT JOIN news_sources s ON n.source_id = s.id
+                WHERE n.is_deleted = 0
+                  AND n.created_at >= datetime('now', '-' || ${hours} || ' hours')
+                  AND (n.title LIKE ${'%' + escaped + '%'} ESCAPE '=' OR n.description LIKE ${'%' + escaped + '%'} ESCAPE '=')
+                ORDER BY COALESCE(n.published_at, n.created_at) DESC
+                LIMIT 5
+            `);
+            items = rows.map(r => ({ id: r.id, source: r.source_name || '未知', title: r.title }));
+        }
+
+        if (items.length === 0) return c.json({ error: '暂无该主题的多视角分析' }, 404);
+
+        // 首选第一条新闻的 generatePerspectives（跨媒体观点对比）
+        const generated = await generatePerspectives(c.env, items[0].id);
+        if (generated) {
+            return c.json({
+                keyword,
+                perspective: generated.perspective,
+                related: generated.related,
+                generated_at: new Date().toISOString(),
+            });
+        }
+
+        // 兜底：基于 top 5 标题让 AI 直接给出多视角分析
+        const titles = items.map((it, i) => `${i + 1}. ${it.title}`).join('\n');
+        const prompt = `以下是关于「${keyword}」的多篇新闻标题。请用 2-3 句中文给出多视角分析：不同报道关注的角度与立场差异。只输出正文，不要标题和编号。\n\n${titles}\n\n多视角分析：`;
+        const perspective = await callAI(c.env, prompt, { max_tokens: 200, temperature: 0.5 });
+
+        if (!perspective) return c.json({ error: '暂无该主题的多视角分析' }, 404);
+
+        return c.json({
+            keyword,
+            perspective: perspective.trim(),
+            related: items,
+            generated_at: new Date().toISOString(),
+        });
+    } catch (e) {
+        console.error('trending/theme-perspectives error:', e);
+        // 兜底错误：保持 404 错误形态，绝不 500
+        return c.json({ error: '暂无该主题的多视角分析' }, 404);
+    }
 });
 
 export default trending;

@@ -1,6 +1,7 @@
 import { SKELETON_RISE_COUNT } from './types';
 import { Skeleton } from './types';
 import type { TrendingWord } from './types';
+import { EmptyState } from './icons';
 
 interface TrendingRisingTopicsProps {
     risingTopics: {
@@ -32,7 +33,7 @@ export default function TrendingRisingTopics({ risingTopics, tpLoading, keywords
     }
 
     if (risingTopics.length === 0) {
-        return <div className="text-center py-12 text-gray-400 text-sm">暂无足够数据计算趋势</div>;
+        return <EmptyState icon="trending" title="暂无足够数据计算趋势" hint="试试切换时间范围" />;
     }
 
     return (

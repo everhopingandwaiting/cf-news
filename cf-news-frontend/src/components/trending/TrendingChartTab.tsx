@@ -2,6 +2,7 @@ import { MAX_KEYWORD_SELECTOR, MAX_COMPARE_KWS } from './types';
 import { Skeleton } from './types';
 import type { Topic, TrendingWord, CategoryInfo, CompareSeries } from './types';
 import TrendingCompareChart from '../TrendingCompareChart';
+import { Icon, EmptyState } from './icons';
 
 interface TrendingChartTabProps {
     tpLoading: boolean;
@@ -35,7 +36,7 @@ export default function TrendingChartTab({
     }
 
     if (topics.length === 0) {
-        return <div className="text-center py-12 text-gray-400 text-sm">暂无数据</div>;
+        return <EmptyState icon="chart" title="暂无数据" hint="试试切换时间范围" />;
     }
 
     const chartTopic = (activeTopic ? topics.find(t => t.keyword === activeTopic) : null) || topics[0];
@@ -49,7 +50,7 @@ export default function TrendingChartTab({
         <>
             {!catLoading && categories.length > 0 && (
                 <div className="mb-4 bg-gray-50 rounded-xl p-4 border border-gray-100">
-                    <div className="text-[12px] text-gray-500 mb-2 text-center font-medium">分类分布</div>
+                    <div className="text-[12px] text-gray-500 mb-2 text-center font-medium flex items-center justify-center gap-1"><Icon name="grid" className="w-3.5 h-3.5" />分类分布</div>
                     <div className="space-y-1.5">
                         {categories.slice(0, 6).map(cat => (
                             <div key={cat.name} className="flex items-center gap-2">
@@ -87,7 +88,7 @@ export default function TrendingChartTab({
 
             {chartTopic && (
                 <div className="bg-gray-50 rounded-xl p-4 border border-gray-100">
-                    <div className="text-[12px] text-gray-500 mb-3 text-center font-medium">{chartTopic.keyword}</div>
+                    <div className="text-[12px] text-gray-500 mb-3 text-center font-medium flex items-center justify-center gap-1"><Icon name="chart" className="w-3.5 h-3.5" />{chartTopic.keyword}</div>
                     {values.length <= 1 ? (
                         <div className="text-center py-8 text-gray-400 text-sm">需要更多小时的数据才能展示趋势</div>
                     ) : (
@@ -112,7 +113,7 @@ export default function TrendingChartTab({
 
             {activity.length > 1 && (
                 <div className="mt-4 bg-gray-50 rounded-xl p-4 border border-gray-100">
-                    <div className="text-[12px] text-gray-500 mb-2 text-center font-medium">整体活跃度</div>
+                    <div className="text-[12px] text-gray-500 mb-2 text-center font-medium flex items-center justify-center gap-1"><Icon name="trending" className="w-3.5 h-3.5" />整体活跃度</div>
                     <div className="flex items-end gap-[2px] h-12">
                         {activity.map((a, i) => (
                             <div key={i} className="flex-1 flex flex-col items-center">

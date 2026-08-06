@@ -4,6 +4,7 @@ import { generatePerspectives } from '../services/summarizer';
 import { eq, sql, and, count, desc, like, SQL } from 'drizzle-orm';
 import { getDb } from '../db';
 import { newsItems, newsSources, newsSummaries, newsAiTake, newsComments, newsFts } from '../db/schema';
+import { verifyJWT } from './auth';
 
 const news = new Hono<{ Bindings: Bindings }>();
 
@@ -230,14 +231,41 @@ news.get('/map', async (c) => {
     }
 });
 
-// GET /fresh-view — Important articles outside the user's dominant categories
+// GET /fresh-view — 反信息茧房推荐：排除用户主导分类，并按"新颖度"排序
+// novelty_score = 来源新颖度 + 时效性 + 分类新颖度（登录用户基于阅读历史计算）
 news.get('/fresh-view', async (c) => {
     const exclude = (c.req.query('exclude') || '').split(',').map(v => v.trim()).filter(Boolean).slice(0, 8);
-    const limit = Math.min(parseInt(c.req.query('limit') || '6', 10) || 6, 12);
+    const limit = Math.min(parseInt(c.req.query('limit') || '8', 10) || 8, 12);
     const db = getDb(c.env);
     try {
+        // 可选 JWT：有有效 token 则读取阅读历史计算个性化新颖度；无 token 时仅按时效性排序
+        let userId: number | null = null;
+        const authHeader = c.req.header('Authorization') || '';
+        if (authHeader.startsWith('Bearer ')) {
+            const payload = await verifyJWT(authHeader.slice(7).trim(), c.env.JWT_SECRET);
+            if (payload) userId = payload.sub;
+        }
+
+        // 从阅读历史统计：每个来源被阅读的次数、每个分类被阅读的次数
+        const sourceReadCount = new Map<number, number>();
+        const categoryReadCount = new Map<string, number>();
+        if (userId) {
+            const history = await db.all<{ source_id: number; category: string; cnt: number }>(sql`
+                SELECT n.source_id, n.category, COUNT(*) as cnt
+                FROM user_read_history h
+                JOIN news_items n ON n.id = h.news_id
+                WHERE h.user_id = ${userId}
+                GROUP BY n.source_id, n.category
+            `);
+            for (const row of history) {
+                sourceReadCount.set(row.source_id, (sourceReadCount.get(row.source_id) || 0) + row.cnt);
+                categoryReadCount.set(row.category, (categoryReadCount.get(row.category) || 0) + row.cnt);
+            }
+        }
+
         const conds: SQL[] = [sql`n.is_deleted = 0`, sql`n.created_at >= datetime('now', '-72 hours')`];
         if (exclude.length > 0) conds.push(sql`n.category NOT IN (${sql.join(exclude.map(cat => sql`${cat}`), sql`, `)})`);
+        // 候选池：优先有摘要、按时间倒序，取最多 30 条后在 JS 中按新颖度重排
         const rows = await db.all<any>(sql`
             SELECT n.id, n.source_id, n.title, n.url, n.description, n.image_url, n.category,
                    n.published_at, n.created_at, s.name as source_name, s.language as source_lang,
@@ -248,9 +276,35 @@ news.get('/fresh-view', async (c) => {
             LEFT JOIN news_ai_take nt ON nt.news_id = n.id
             WHERE ${sql.join(conds, sql` AND `)}
             ORDER BY CASE WHEN ns.id IS NOT NULL THEN 0 ELSE 1 END, COALESCE(n.published_at, n.created_at) DESC
-            LIMIT ${limit}
+            LIMIT 30
         `);
-        return c.json({ recommendations: rows });
+
+        const recommendations = rows.map((row: any) => {
+            // 1) 来源新颖度：从未读过的来源 +2；只读过 1-2 次 +1；频繁阅读 +0
+            let sourceNovelty = 0;
+            if (userId) {
+                const cnt = sourceReadCount.get(row.source_id) || 0;
+                sourceNovelty = cnt === 0 ? 2 : cnt <= 2 ? 1 : 0;
+            }
+            // 2) 时效性：24 小时内 +1；48 小时内 +0.5；更早 +0
+            const timeStr = (row.published_at || row.created_at || '').replace(' ', 'T');
+            const timeMs = timeStr ? new Date(timeStr.endsWith('Z') ? timeStr : timeStr + 'Z').getTime() : NaN;
+            const hoursAgo = Number.isFinite(timeMs) ? (Date.now() - timeMs) / 3600000 : NaN;
+            let recencyFactor = 0;
+            if (hoursAgo <= 24) recencyFactor = 1;
+            else if (hoursAgo <= 48) recencyFactor = 0.5;
+            // 3) 分类新颖度：阅读历史中越少出现的分类，加分越多
+            let categoryNovelty = 0;
+            if (userId) {
+                const cnt = categoryReadCount.get(row.category) || 0;
+                categoryNovelty = cnt === 0 ? 1 : cnt <= 2 ? 0.5 : 0;
+            }
+            return { ...row, novelty_score: Number((sourceNovelty + recencyFactor + categoryNovelty).toFixed(2)) };
+        });
+
+        // 按新颖度降序排列，截取请求的条数
+        recommendations.sort((a: any, b: any) => b.novelty_score - a.novelty_score);
+        return c.json({ recommendations: recommendations.slice(0, limit) });
     } catch (error) {
         console.error('fresh-view error:', error);
         return c.json({ error: '获取反信息茧房推荐失败' }, 500);

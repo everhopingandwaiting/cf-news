@@ -20,6 +20,7 @@ import { generateDailyDigest } from './services/aiSearch';
 import { verifyJWT } from './routes/auth';
 import { handleNewsQueue } from './services/queueConsumer';
 import { refreshTrendingTopics } from './services/trending';
+import { checkRadarPush } from './services/radarPush';
 import { generatePendingSummaries } from './services/summarizer';
 
 import { handleImageProxy } from './routes/image';
@@ -98,8 +99,19 @@ app.get('/api/health', (c) => {
 });
 
 app.get('/api/config', (c) => {
+    // VAPID_PUBLIC_KEY 是 hex 编码的 65 字节未压缩 P-256 点，转为 base64url 供前端 pushManager.subscribe
+    const vapidHex = c.env.VAPID_PUBLIC_KEY || '';
+    let vapidPublicKey = '';
+    if (vapidHex) {
+        const bytes = new Uint8Array(vapidHex.length / 2);
+        for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(vapidHex.slice(i * 2, i * 2 + 2), 16);
+        let bin = '';
+        bytes.forEach(b => bin += String.fromCharCode(b));
+        vapidPublicKey = btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
     return c.json({
         turnstileSiteKey: c.env.TURNSTILE_SITE_KEY || '',
+        vapidPublicKey,
     });
 });
 
@@ -205,6 +217,8 @@ export default {
         } else if (event.cron === '*/15 * * * *') {
             console.log('Trending cron fired, refreshing topics...');
             ctx.waitUntil(refreshTrendingTopics(env));
+            // 新闻雷达关键词命中检查 → 触发 Web Push 通知
+            ctx.waitUntil(checkRadarPush(env));
         } else if (event.cron === '0 8 * * *') {
             console.log('Daily digest cron fired, generating digest...');
             ctx.waitUntil(generateDailyDigest(env).then(r => console.log(`Digest: ${r ? 'generated' : 'skipped'}`)));

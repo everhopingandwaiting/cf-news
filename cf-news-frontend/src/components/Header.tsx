@@ -20,6 +20,7 @@ interface Props {
   onToggleDigest: () => void;
   onExport: () => void;
   onRecommendations: () => void;
+  onTogglePush: () => void;
   onQA: () => void;
   onLogin: () => void;
   onRegister: () => void;
@@ -33,7 +34,7 @@ interface Props {
   onToggleClipboard: () => void;
 }
 
-export default function Header({ user, refreshing, cooldown, search, lang, sourceCount, totalNews, lastFetchedAt, showManager, showClipboard, sources, sourceId, digestEnabled, clipboardHasNew, onClearClipboardFlag, onToggleDigest, onExport, onRecommendations, onQA, onLogin, onRegister, onRefresh, onLogout, onSearchChange, onSearch, onLangChange, onSourceChange, onManageSources, onToggleClipboard }: Props) {
+export default function Header({ user, refreshing, cooldown, search, lang, sourceCount, totalNews, lastFetchedAt, showManager, showClipboard, sources, sourceId, digestEnabled, clipboardHasNew, onClearClipboardFlag, onToggleDigest, onExport, onRecommendations, onQA, onLogin, onRegister, onRefresh, onLogout, onSearchChange, onSearch, onLangChange, onSourceChange, onManageSources, onToggleClipboard, onTogglePush }: Props) {
   const [showMenu, setShowMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const disabled = refreshing || cooldown > 0;
@@ -90,6 +91,7 @@ export default function Header({ user, refreshing, cooldown, search, lang, sourc
                   <button className="w-full text-left px-4 py-2 text-[13px] text-gray-700 hover:bg-gray-50 flex items-center gap-2" onClick={() => { onRecommendations(); setShowMenu(false); }}>为你推荐</button>
                   <button className={`w-full text-left px-4 py-2 text-[13px] flex items-center gap-2 ${digestEnabled ? 'text-emerald-600' : 'text-gray-700 hover:bg-gray-50'}`} onClick={() => { onToggleDigest(); setShowMenu(false); }}>{digestEnabled ? '取消每日摘要' : '订阅每日摘要'}</button>
                   <button className="w-full text-left px-4 py-2 text-[13px] text-gray-700 hover:bg-gray-50 flex items-center gap-2" onClick={() => { onExport(); setShowMenu(false); }}>导出收藏</button>
+                  <button className="w-full text-left px-4 py-2 text-[13px] text-gray-700 hover:bg-gray-50 flex items-center gap-2" onClick={() => { onTogglePush(); setShowMenu(false); }}>推送通知</button>
                   <button className={`w-full text-left px-4 py-2 text-[13px] flex items-center gap-2 ${showClipboard ? 'text-indigo-500' : 'text-gray-700 hover:bg-gray-50'}`} onClick={() => { onToggleClipboard(); setShowMenu(false); }}>共享粘贴板{clipboardHasNew && <span className="inline-block w-2 h-2 bg-red-500 rounded-full ml-1" />}</button>
                   <div className="border-t border-gray-100 my-1" />
                   <button className="w-full text-left px-4 py-2 text-[13px] text-gray-400 hover:bg-gray-50 flex items-center gap-2" onClick={() => { onLogout(); setShowMenu(false); }}>退出登录</button>

@@ -17,6 +17,7 @@ export interface NewsItem {
   ai_summary?: string;
   ai_take?: string;
   ai_illustration?: string;
+  novelty_score?: number;
 }
 
 export interface NewsSource {
