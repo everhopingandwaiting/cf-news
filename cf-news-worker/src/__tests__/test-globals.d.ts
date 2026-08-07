@@ -2,6 +2,7 @@ declare const __dirname: string;
 
 declare module 'fs' {
   export function readFileSync(path: string, encoding: string): string;
+  export function readdirSync(path: string): string[];
 }
 
 declare module 'path' {

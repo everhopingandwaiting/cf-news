@@ -111,7 +111,9 @@ export async function request(
     waitUntil: () => {},
     passThroughOnException: () => {},
     props: {},
-  } as ExecutionContext;
+    exports: {},
+    tracing: {},
+  } as unknown as ExecutionContext;
   const res = await app.fetch(req, { ...MOCK_ENV, DB: db }, execCtx);
   const body: any = await res.clone().json().catch(() => res.text().catch(() => null));
   return { status: res.status, body, headers: res.headers };

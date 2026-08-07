@@ -1,15 +1,27 @@
-import { describe, it, expect, beforeAll, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { buildTestApp, request } from '../helpers';
+import { resetDb } from '../../db';
 
 let app: ReturnType<typeof buildTestApp>['app'];
 let db: ReturnType<typeof buildTestApp>['db'];
 
-beforeAll(() => {
+// 每个测试重建 app+db：MockD1 数据不跨测试共享（app_config/provider_models 等表残留会导致
+// aiProvider 读到上一个测试写入的 provider/model，vitest 3 的 pool 隔离掩盖过此问题）
+beforeEach(() => {
+  resetDb();
   vi.stubGlobal('caches', { default: { match: async () => null, put: async () => {}, delete: async () => {} } });
   vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ success: true })));
   const built = buildTestApp();
   app = built.app;
   db = built.db;
+});
+
+// vitest 4 不再自动清理 vi.stubGlobal。先排空微任务：summarizer 会 fire-and-forget 启动
+// generateAITake/extractEntities（不 await），若残留到下一个用例执行，会调用下一个用例的
+// fetch stub 造成误报；让后台任务在本用例内 settle 后再还原全局 mock
+afterEach(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  vi.unstubAllGlobals();
 });
 
 describe('Operations API - Fetch', () => {
