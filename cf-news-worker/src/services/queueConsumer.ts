@@ -2,6 +2,9 @@ import { Bindings, NewsQueueMessage } from '../types';
 import { generateSummaryForNews } from './summarizer';
 import { indexNewsItem } from './tokenizer';
 import { fetchSourceNews } from './newsFetcher';
+import { eq } from 'drizzle-orm';
+import { getDb } from '../db';
+import { newsItems } from '../db/schema';
 
 /**
  * Queue consumer: processes messages from the news-processing-queue.
@@ -35,6 +38,24 @@ export async function handleNewsQueue(batch: MessageBatch<NewsQueueMessage>, env
                         await indexNewsItem(env, msg.newsId, msg.title, msg.description);
                         console.log(`Queue: indexed news ${msg.newsId}`);
                     }
+                    break;
+                case 'illustrate_stock':
+                    if (msg.newsId && msg.title) {
+                        const { illustrateFromStock } = await import('./pixabay');
+                        const proxyUrl = await illustrateFromStock(env, msg.newsId, msg.title, msg.category || 'general');
+                        if (proxyUrl) {
+                            const db = getDb(env);
+                            await db.update(newsItems)
+                                .set({ image_url: proxyUrl })
+                                .where(eq(newsItems.id, msg.newsId));
+                            console.log(`Queue: illustrated stock image for news ${msg.newsId}`);
+                        } else {
+                            console.log(`Queue: no stock image for news ${msg.newsId} (searched, no hit)`);
+                        }
+                    }
+                    // Pixabay 免费额度 100 req/min：每条消息最多 2-4 次搜索，
+                    // 串行处理时人为限速 ~1.2s/条，避免批量入队瞬间打爆配额导致全部失败
+                    await new Promise((r) => setTimeout(r, 1200));
                     break;
             }
             message.ack();

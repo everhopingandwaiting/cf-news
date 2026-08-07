@@ -316,6 +316,7 @@ async function saveNewsItems(
 ): Promise<number> {
     let savedCount = 0;
     const newItems: { id: number; title: string; description?: string; content?: string; url?: string }[] = [];
+    const imageLessItems: { id: number; title: string; category: string }[] = [];
     const db = getDb(env);
 
     for (let i = 0; i < items.length; i++) {
@@ -345,6 +346,9 @@ async function saveNewsItems(
 
             if (row && row.id > 0) {
                 newItems.push({ id: row.id, title: item.title, description: item.description, content: item.content, url: item.link });
+                if (!item.image) {
+                    imageLessItems.push({ id: row.id, title: item.title, category });
+                }
                 indexNewsItem(env, row.id, item.title, item.description).catch(e => console.error(`Index failed:`, e));
                 storeDedupHash(env, row.id, item.title, item.description).catch(e => console.error(`Dedup failed:`, e));
                 uploadNewsItem(env, { id: row.id, title: item.title, description: item.description, content: item.content, category, published_at: publishedAt || undefined }).catch(e => console.error(`AI Search upload failed:`, e));
@@ -364,6 +368,16 @@ async function saveNewsItems(
             await env.NEWS_QUEUE.send({
                 type: 'generate_summary', newsId: item.id, title: item.title,
                 description: item.description, content: item.content, url: item.url,
+            });
+        }
+    }
+    // Image-less new items get a Pixabay stock illustration via the queue —
+    // independent of skipSummary (unlike AI summaries, it is cheap and free).
+    if (imageLessItems.length > 0) {
+        console.log(`Enqueueing ${imageLessItems.length} stock illustration jobs...`);
+        for (const item of imageLessItems.slice(0, 20)) {
+            await env.NEWS_QUEUE.send({
+                type: 'illustrate_stock', newsId: item.id, title: item.title, category: item.category,
             });
         }
     }

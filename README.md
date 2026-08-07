@@ -57,7 +57,7 @@ AI-generated summary of today's top news, sorted by time with language markers (
 - **Edge caching** — News list cached on CF edge (60s) + Cache Rules (hashed assets 1y, image proxy 7d)
 - **Image proxy with R2 cache** — External images proxied through CF edge and cached in R2 (10GB free, 0 egress)
 - **AI illustration persistence** — AI-generated illustrations stored in R2, never broken by expiring temp URLs
-- **Pixabay stock illustration** — Image-less news cards auto-filled with relevant Pixabay illustrations (downloaded to R2, hotlink-compliant)
+- **Pixabay stock illustration** — Image-less news cards auto-filled with relevant Pixabay illustrations (downloaded to R2, hotlink-compliant). Cards show a 「配图」badge so auto-generated images are clearly distinguished from original source images
 - **Global service rankings** — Cloudflare Radar internet-service rankings supplement the trending panel
 - **Usage analytics** — Workers Analytics Engine records search hot-words and per-provider AI call stats
 - **Durable backfill** — Admin backfill jobs run as Cloudflare Workflows (auto-retry, survives request lifetime)

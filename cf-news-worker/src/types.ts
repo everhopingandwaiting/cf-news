@@ -29,7 +29,7 @@ export interface Bindings {
 }
 
 export interface NewsQueueMessage {
-    type: 'fetch_source' | 'generate_summary' | 'index_news';
+    type: 'fetch_source' | 'generate_summary' | 'index_news' | 'illustrate_stock';
     sourceId?: number;
     skipSummary?: boolean;
     newsId?: number;
@@ -37,6 +37,7 @@ export interface NewsQueueMessage {
     description?: string;
     content?: string;
     url?: string;
+    category?: string;
 }
 
 export interface User {

@@ -22,6 +22,8 @@ export default function NewsCard({ item, token, onAuthRequired, onSelect }: Prop
   const cat = item.category || 'general';
   const pubDate = formatTime(item.published_at || '');
   const fetchDate = formatTime(item.created_at || '');
+  // 图片来源判断：Pixabay 自动配图 vs RSS 源自带原图（image_url 可选，无图时安全返回 false）
+  const isStockImage = (item.image_url ?? '').includes('r2%3A%2F%2Fstock') || (item.image_url ?? '').includes('r2://stock');
 
   async function toggleFav(e: React.MouseEvent) {
     e.stopPropagation();
@@ -54,6 +56,9 @@ export default function NewsCard({ item, token, onAuthRequired, onSelect }: Prop
             onError={() => setImgError(true)}
             className="w-full h-full object-cover"
           />
+          <span className={`absolute bottom-1.5 right-1.5 px-1.5 py-0.5 rounded-md text-[10px] font-semibold backdrop-blur-sm ${isStockImage ? 'bg-indigo-500/70 text-white' : 'bg-black/45 text-white/80'}`}>
+            {isStockImage ? '配图' : '原图'}
+          </span>
         </div>
       )}
       <div className="flex items-center justify-between gap-3 mb-2">

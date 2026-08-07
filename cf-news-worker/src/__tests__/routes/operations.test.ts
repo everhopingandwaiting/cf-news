@@ -313,10 +313,10 @@ describe('Operations API - Pixabay stock illustration', () => {
       const url = String(input);
       if (url.includes('pixabay.com/api')) {
         return new Response(JSON.stringify({ hits: [
-          { largeImageURL: 'https://cdn.pixabay.com/test-1.jpg', imageWidth: 1280, imageHeight: 853 },
+          { largeImageURL: 'https://cdn.pixabay.com/test-1.jpg', imageWidth: 1280, imageHeight: 853, tags: 'apple, chip, technology' },
         ] }), { status: 200 });
       }
-      return new Response('image-bytes', { status: 200, headers: { 'Content-Type': 'image/jpeg' } });
+      return new Response(new Uint8Array(10 * 1024), { status: 200, headers: { 'Content-Type': 'image/jpeg' } });
     });
     await db.seed('news_items', [
       { id: 301, source_id: 1, title: 'Apple launches new AI chip', url: 'https://pix/1', description: 'desc', category: 'tech', is_deleted: 0, image_url: null },
@@ -360,10 +360,10 @@ describe('Operations API - Pixabay stock illustration', () => {
       const url = String(input);
       if (url.includes('pixabay.com/api')) {
         return new Response(JSON.stringify({ hits: [
-          { largeImageURL: 'https://cdn.pixabay.com/batch.jpg', imageWidth: 1280, imageHeight: 720 },
+          { largeImageURL: 'https://cdn.pixabay.com/batch.jpg', imageWidth: 1280, imageHeight: 720, tags: 'batch, item, finance' },
         ] }), { status: 200 });
       }
-      return new Response('image-bytes', { status: 200, headers: { 'Content-Type': 'image/jpeg' } });
+      return new Response(new Uint8Array(10 * 1024), { status: 200, headers: { 'Content-Type': 'image/jpeg' } });
     });
     await db.seed('news_items', [
       { id: 310, source_id: 1, title: 'Batch item one', url: 'https://pix/b1', category: 'finance', is_deleted: 0, image_url: null },

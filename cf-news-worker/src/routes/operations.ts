@@ -284,13 +284,13 @@ operations.post('/illustrate-stock', async (c) => {
             20
         );
 
-        // 只处理最近的无图新闻（image_url 为空），避免误覆盖已有配图
+        // 只处理最近 30h 的无图新闻（image_url 为空），避免误覆盖已有配图、也避免误配全库历史旧新闻
         const items = await db.select({
             id: newsItems.id, title: newsItems.title,
             category: newsItems.category, image_url: newsItems.image_url,
         })
             .from(newsItems)
-            .where(sql`${newsItems.is_deleted} = 0 AND ${newsItems.image_url} IS NULL`)
+            .where(sql`${newsItems.is_deleted} = 0 AND ${newsItems.image_url} IS NULL AND ${newsItems.created_at} >= datetime('now', '-30 hours')`)
             .orderBy(sql`COALESCE(${newsItems.published_at}, ${newsItems.created_at}) DESC`)
             .limit(limit)
             .all() as { id: number; title: string; category: string | null; image_url: string | null }[];
