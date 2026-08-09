@@ -27,6 +27,9 @@ import { handleImageProxy } from './routes/image';
 import { handleScreenshot } from './routes/screenshot';
 import { handleShare } from './routes/share';
 import { handleInboundEmail } from './routes/emailInbound';
+import { getDb } from './db';
+import { newsItems, cronHeartbeat } from './db/schema';
+import { sql, eq } from 'drizzle-orm';
 
 export { ClipboardRoom } from './durable-objects/clipboard';
 export { CommentsRoom } from './durable-objects/comments';
@@ -96,6 +99,41 @@ app.route('/api', ttsRoutes);
 
 app.get('/api/health', (c) => {
     return c.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// 数据新鲜度健康检查：供外部监控（UptimeRobot / cron-job）探测。检测两个维度：
+// 1) 最近是否有新新闻入库（news_items 停滞 >6h 视为异常）
+// 2) cron 调度是否仍触发（fetch cron 心跳缺失 >2h 视为异常）
+app.get('/api/health/feed', async (c) => {
+    const db = getDb(c.env);
+    const now = Date.now();
+    const problems: string[] = [];
+
+    const newsRow = await db.select({ ts: newsItems.created_at })
+        .from(newsItems).orderBy(sql`created_at DESC`).limit(1).get();
+    const lastNewsMs = newsRow?.ts ? parseDbTs(newsRow.ts) : 0;
+    const newsAgeMin = lastNewsMs ? Math.round((now - lastNewsMs) / 60000) : -1;
+    if (newsAgeMin < 0 || newsAgeMin > 360) {
+        problems.push(`news_items stale (age=${newsAgeMin}min)`);
+    }
+
+    const hbRow = await db.select({ ts: cronHeartbeat.last_fired_at })
+        .from(cronHeartbeat).where(eq(cronHeartbeat.cron_name, '0 * * * *')).get();
+    const hbMs = hbRow?.ts ? parseDbTs(hbRow.ts) : 0;
+    const hbAgeMin = hbMs ? Math.round((now - hbMs) / 60000) : -1;
+    if (hbAgeMin < 0 || hbAgeMin > 120) {
+        problems.push(`fetch cron heartbeat stale (age=${hbAgeMin}min)`);
+    }
+
+    return c.json({
+        ok: problems.length === 0,
+        lastNewsAt: newsRow?.ts || null,
+        newsAgeMinutes: newsAgeMin,
+        lastFetchCronAt: hbRow?.ts || null,
+        fetchCronAgeMinutes: hbAgeMin,
+        problems,
+        timestamp: new Date().toISOString(),
+    });
 });
 
 app.get('/api/config', (c) => {
@@ -228,6 +266,8 @@ export default {
             console.log('Summary cron fired, generating summaries...');
             ctx.waitUntil(generatePendingSummaries(env));
         }
+        // 记录 cron 触发心跳，供 /api/health/feed 检测调度停摆（best-effort）
+        ctx.waitUntil(recordCronHeartbeat(env, event.cron).catch(() => {}));
     },
 
     async queue(batch: MessageBatch<any>, env: Bindings): Promise<void> {
@@ -239,3 +279,19 @@ export default {
         await handleInboundEmail(message, env);
     }
 };
+
+/** 记录 cron 触发心跳到 cron_heartbeat 表（best-effort，失败不影响主流程） */
+async function recordCronHeartbeat(env: Bindings, cron: string): Promise<void> {
+    const db = getDb(env);
+    await db.run(sql`INSERT OR REPLACE INTO cron_heartbeat (cron_name, last_fired_at) VALUES (${cron}, ${new Date().toISOString()})`);
+}
+
+/** 解析 D1 存储的时间戳：兼容 ISO 带 Z 与 "YYYY-MM-DD HH:MM:SS"（无时区后缀按 UTC 处理） */
+function parseDbTs(ts: string | number): number {
+    if (typeof ts === 'number') return ts;
+    const s = String(ts).trim();
+    const iso = s.includes('T') ? s : s.replace(' ', 'T');
+    const withZone = iso.endsWith('Z') ? iso : `${iso}Z`;
+    const ms = new Date(withZone).getTime();
+    return Number.isFinite(ms) ? ms : 0;
+}

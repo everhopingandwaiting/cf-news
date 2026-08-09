@@ -36,11 +36,13 @@ const operations = new Hono<{ Bindings: Bindings }>();
 
 operations.post('/fetch', async (c) => {
     const db = getDb(c.env);
+    // force=1 供外部监控自愈调用（绕过 5 分钟 cooldown，防止 UptimeRobot 补抓被 429 拦截）
+    const force = c.req.query('force') === '1';
     const row = await db.select({ value: appConfig.value })
         .from(appConfig).where(eq(appConfig.key, 'last_fetch_time')).get();
     const lastFetch = row?.value;
     const now = Date.now();
-    if (lastFetch && (now - parseInt(lastFetch)) < 300000) {
+    if (!force && lastFetch && (now - parseInt(lastFetch)) < 300000) {
         const remaining = Math.ceil((300000 - (now - parseInt(lastFetch))) / 1000);
         return c.json({ success: false, error: `冷却中，请 ${remaining} 秒后再试` }, 429);
     }

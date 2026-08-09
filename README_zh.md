@@ -379,6 +379,7 @@ cf-news/
 | GET | `/api/ai/digest/dates` | 列出有要闻的日期 |
 | GET | `/api/ai/related/:id` | 获取相关文章 |
 | GET | `/api/health` | 健康检查 |
+| GET | `/api/health/feed` | 数据新鲜度检查 —— 6 小时无新新闻或 fetch cron 心跳缺失 2 小时时返回 `ok:false`（供 UptimeRobot 等外部监控探测） |
 | GET | `/api/image?url=` | 图片代理（CF 边缘缓存） |
 | GET | `/api/screenshot?url=` | 网页截图（Browser Rendering） |
 | GET | `/api/config` | 公共配置（Turnstile 站点 key 等） |

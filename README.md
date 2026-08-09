@@ -388,6 +388,7 @@ cf-news/
 | GET | `/api/ai/digest/dates` | List available digest dates |
 | GET | `/api/ai/related/:id` | Get related articles |
 | GET | `/api/health` | Health check |
+| GET | `/api/health/feed` | Feed freshness check — `ok:false` when no news for 6h or fetch cron heartbeat missing for 2h (for UptimeRobot / external monitors) |
 | GET | `/api/image?url=` | Image proxy via CF edge cache |
 | GET | `/api/screenshot?url=` | Page screenshot via Browser Rendering |
 | GET | `/api/config` | Public config (Turnstile site key, etc.) |

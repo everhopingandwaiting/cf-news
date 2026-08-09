@@ -29,6 +29,20 @@ describe('Operations API - Fetch', () => {
     const { status } = await request(app, db, '/api/fetch', { method: 'POST' });
     expect(status).toBe(200);
   });
+
+  it('POST /api/fetch - respects cooldown when not forced', async () => {
+    await db.exec(`INSERT OR REPLACE INTO app_config (key, value) VALUES ('last_fetch_time', '${Date.now() + 600000}')`);
+    const { status, body } = await request(app, db, '/api/fetch', { method: 'POST' });
+    expect(status).toBe(429);
+    expect(body.success).toBe(false);
+  });
+
+  it('POST /api/fetch?force=1 - bypasses cooldown for monitor self-heal', async () => {
+    await db.exec(`INSERT OR REPLACE INTO app_config (key, value) VALUES ('last_fetch_time', '${Date.now() + 600000}')`);
+    const { status, body } = await request(app, db, '/api/fetch?force=1', { method: 'POST' });
+    expect(status).toBe(200);
+    expect(body.success).toBe(true);
+  });
 });
 
 describe('Operations API - Summarize', () => {

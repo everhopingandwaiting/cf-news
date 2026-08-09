@@ -1,6 +1,9 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import { sql, eq } from 'drizzle-orm';
 import { MockD1 } from './mock-d1';
+import { getDb } from '../db';
+import { newsItems, cronHeartbeat } from '../db/schema';
 import authRoutes, { verifyJWT } from '../routes/auth';
 import newsRoutes from '../routes/news';
 import favoritesRoutes from '../routes/favorites';
@@ -85,6 +88,47 @@ export function buildTestApp() {
 
   app.route('/api/ai', aiRoutes);
   app.get('/api/health', (c) => c.json({ ok: true }));
+  app.get('/api/health/feed', async (c) => {
+    const db = getDb(c.env as { DB: D1Database });
+    const now = Date.now();
+    const problems: string[] = [];
+
+    const parseTs = (ts: string | number | null): number => {
+      if (ts === null || ts === undefined) return 0;
+      if (typeof ts === 'number') return ts;
+      const s = String(ts).trim();
+      const iso = s.includes('T') ? s : s.replace(' ', 'T');
+      const withZone = iso.endsWith('Z') ? iso : `${iso}Z`;
+      const ms = new Date(withZone).getTime();
+      return Number.isFinite(ms) ? ms : 0;
+    };
+
+    const newsRow = await db.select({ ts: newsItems.created_at })
+      .from(newsItems).orderBy(sql`created_at DESC`).limit(1).get();
+    const lastNewsMs = parseTs(newsRow?.ts ?? null);
+    const newsAgeMin = lastNewsMs ? Math.round((now - lastNewsMs) / 60000) : -1;
+    if (newsAgeMin < 0 || newsAgeMin > 360) {
+      problems.push(`news_items stale (age=${newsAgeMin}min)`);
+    }
+
+    const hbRow = await db.select({ ts: cronHeartbeat.last_fired_at })
+      .from(cronHeartbeat).where(eq(cronHeartbeat.cron_name, '0 * * * *')).get();
+    const hbMs = parseTs(hbRow?.ts ?? null);
+    const hbAgeMin = hbMs ? Math.round((now - hbMs) / 60000) : -1;
+    if (hbAgeMin < 0 || hbAgeMin > 120) {
+      problems.push(`fetch cron heartbeat stale (age=${hbAgeMin}min)`);
+    }
+
+    return c.json({
+      ok: problems.length === 0,
+      lastNewsAt: newsRow?.ts || null,
+      newsAgeMinutes: newsAgeMin,
+      lastFetchCronAt: hbRow?.ts || null,
+      fetchCronAgeMinutes: hbAgeMin,
+      problems,
+      timestamp: new Date().toISOString(),
+    });
+  });
 
   return { app, db };
 }

@@ -315,4 +315,11 @@ CREATE TABLE IF NOT EXISTS stop_words (
     source TEXT NOT NULL DEFAULT 'unknown'
 );
 
+-- Cron 心跳表：每次 scheduled handler 触发时写入，供 /api/health/feed 和
+-- 外部监控检测 cron 调度是否停摆（2026-08-07 曾出现所有 cron 静默停止 ~10h）
+CREATE TABLE IF NOT EXISTS cron_heartbeat (
+    cron_name TEXT PRIMARY KEY,
+    last_fired_at DATETIME NOT NULL
+);
+
 INSERT OR REPLACE INTO app_config (key, value) VALUES ('schema_version', '1');

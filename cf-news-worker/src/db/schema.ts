@@ -235,3 +235,8 @@ export const newsFts = sqliteTable('news_fts', {
     title: text('title'),
     description: text('description'),
 });
+
+export const cronHeartbeat = sqliteTable('cron_heartbeat', {
+    cron_name: text('cron_name').primaryKey(),
+    last_fired_at: text('last_fired_at').notNull(),
+});
