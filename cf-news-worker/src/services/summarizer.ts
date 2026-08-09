@@ -1,5 +1,5 @@
 import { Bindings } from '../types';
-import { getConfig, getConfigInt, getAvailableModels, getProviderInfo, getProviderOrder, callAI, doOpenAICompat as aiDoOpenAICompat, doCF as aiDoCF } from './aiProvider';
+import { getConfig, getConfigInt, getAvailableModels, getAvailableModelSpecs, getProviderInfo, getProviderOrder, callAI, doOpenAICompat as aiDoOpenAICompat, doCF as aiDoCF } from './aiProvider';
 import { fetchRichArticleContent } from './contentFetcher';
 import { eq, and, sql } from 'drizzle-orm';
 import { getDb } from '../db';
@@ -112,7 +112,33 @@ export async function generateSummaryForNews(env: Bindings, newsId: number, item
     return true;
 }
 
-const SUMMARY_BATCH_SIZE = 10;
+// 批量摘要大小不再固定：按 provider 链上实际可用的模型能力（context_size /
+// max_output）动态计算，context 越大的模型一次可塞入更多文章，减少请求次数对抗限流。
+const DEFAULT_BATCH_SIZE = 10;
+const MAX_BATCH_SIZE = 20; // 解析可靠性上限：batch 过大 JSON 解析失败率上升
+const TOKENS_PER_ARTICLE = 1100; // ~1500 字符输入（中英混合保守估计）+ prompt 模板 + 每篇输出预算
+
+export async function getSummaryBatchSize(env: Bindings): Promise<number> {
+    const order = await getProviderOrder(env);
+    let minContext = Infinity;
+    let minOutput = Infinity;
+    let found = false;
+    for (const provider of order) {
+        const specs = await getAvailableModelSpecs(env, provider, 3);
+        for (const spec of specs) {
+            found = true;
+            if (spec.context_size < minContext) minContext = spec.context_size;
+            if (spec.max_output < minOutput) minOutput = spec.max_output;
+        }
+    }
+    if (!found) return DEFAULT_BATCH_SIZE;
+    // context 预留 40% 给输出与提示词；每篇摘要按 120 tokens 输出预算
+    const byContext = Math.floor((minContext * 0.6) / TOKENS_PER_ARTICLE);
+    const byOutput = Math.floor(minOutput / 120);
+    const batch = Math.max(1, Math.min(byContext, byOutput));
+    return Math.max(1, Math.min(batch, MAX_BATCH_SIZE));
+}
+
 async function getMaxModelsPerProvider(env: Bindings): Promise<number> {
     const configured = await getConfigInt(env, 'ai_max_models_per_provider', 2);
     return Math.min(Math.max(configured, 1), 5);
@@ -123,9 +149,10 @@ export async function generateBatchSummariesForNews(
     items: { id: number; title: string; description?: string; content?: string }[]
 ): Promise<number> {
     if (items.length === 0) return 0;
+    const batchSize = await getSummaryBatchSize(env);
     let successCount = 0;
-    for (let i = 0; i < items.length; i += SUMMARY_BATCH_SIZE) {
-        const batch = items.slice(i, i + SUMMARY_BATCH_SIZE);
+    for (let i = 0; i < items.length; i += batchSize) {
+        const batch = items.slice(i, i + batchSize);
         successCount += await generateOneBatch(env, batch);
     }
     return successCount;

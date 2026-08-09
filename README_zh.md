@@ -170,6 +170,7 @@ NVIDIA_API_KEY=你的NVIDIA密钥
 MANGO_API_KEY=你的Mango密钥
 GROQ_API_KEY=你的Groq密钥
 FREEMODEL_API_KEY=你的Freemodel密钥
+ZEN_API_KEY=你的Zen密钥            # 从 opencode.ai/zen 获取（聚合 API：Claude/GPT/Gemini/DeepSeek/Kimi + 8 个免费模型）
 TURNSTILE_SECRET=你的Turnstile密钥       # 从 CF 面板获取
 TURNSTILE_SITE_KEY=0x4AAAA...             # 从 CF 面板获取
 PIXABAY_API_KEY=你的Pixabay密钥            # 从 pixabay.com/api/docs 免费获取
@@ -265,6 +266,7 @@ curl -X POST -H "Authorization: Bearer <管理员token>" \
 | `MANGO_API_KEY` | Mango API Key |
 | `GROQ_API_KEY` | Groq API Key |
 | `FREEMODEL_API_KEY` | Freemodel API Key |
+| `ZEN_API_KEY` | Zen API Key（opencode.ai/zen — 聚合 AI 供应商） |
 | `TURNSTILE_SECRET` | Turnstile 验证码密钥 |
 | `TURNSTILE_SITE_KEY` | Turnstile 站点 Key |
 | `PIXABAY_API_KEY` | Pixabay 免费图库 Key（无图新闻自动配图） |

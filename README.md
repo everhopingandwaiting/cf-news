@@ -179,6 +179,7 @@ NVIDIA_API_KEY=your-nvidia-key
 MANGO_API_KEY=your-mango-key
 GROQ_API_KEY=your-groq-key
 FREEMODEL_API_KEY=your-freemodel-key
+ZEN_API_KEY=your-zen-api-key            # from opencode.ai/zen (aggregated API: Claude/GPT/Gemini/DeepSeek/Kimi + 8 free models)
 TURNSTILE_SECRET=your-turnstile-secret    # from dashboard
 TURNSTILE_SITE_KEY=0x4AAAA...            # from dashboard
 PIXABAY_API_KEY=your-pixabay-key          # from pixabay.com/api/docs (free)
@@ -274,6 +275,7 @@ The project includes a GitHub Actions workflow for automatic deployment. To use 
 | `MANGO_API_KEY` | Mango API key |
 | `GROQ_API_KEY` | Groq API key |
 | `FREEMODEL_API_KEY` | Freemodel API key |
+| `ZEN_API_KEY` | Zen API key (opencode.ai/zen — aggregated AI provider) |
 | `TURNSTILE_SECRET` | Turnstile secret key (bot protection) |
 | `TURNSTILE_SITE_KEY` | Turnstile site key |
 | `PIXABAY_API_KEY` | Pixabay free image API key (image-less news auto-illustration) |

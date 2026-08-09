@@ -182,6 +182,8 @@ export const providerModels = sqliteTable('provider_models', {
     score: integer('score').default(50),
     enabled: integer('enabled').default(1),
     type: text('type').default('text'),
+    context_size: integer('context_size').default(131072),
+    max_output: integer('max_output').default(4096),
 }, (table) => ({
     pk: primaryKey({ columns: [table.provider, table.model_id] }),
 }));

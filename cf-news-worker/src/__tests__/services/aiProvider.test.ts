@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MockD1 } from '../mock-d1';
 import { resetDb } from '../../db';
 import {
-  getConfig, getConfigInt, getProviderOrder, getModels, getProviderInfo,
-  getFailed, markFailed, getAvailableModels, doOpenAICompat, doCF, callAI,
+  getConfig, getConfigInt, getProviderOrder, getModels, getModelSpecs, getAvailableModelSpecs,
+  getProviderInfo, getFailed, markFailed, getAvailableModels, doOpenAICompat, doCF, callAI,
 } from '../../services/aiProvider';
 import type { Bindings } from '../../types';
 
@@ -71,6 +71,32 @@ describe('aiProvider model/provider lookup', () => {
       { provider: 'testprov', model_id: 'test-image', score: 60, enabled: 1, type: 'image' },
     ]);
     expect(await getModels(makeEnv(), 'testprov', 'image')).toEqual(['test-image']);
+  });
+
+  it('getModelSpecs returns context_size/max_output and falls back to DB defaults when unset', async () => {
+    // 用自定义 provider，避免 migration 014/015 预置的 zen 模型干扰断言
+    await db.seed('provider_models', [
+      { provider: 'testprov', model_id: 'big-model', score: 95, enabled: 1, type: 'text', context_size: 1000000, max_output: 384000 },
+      // 未显式设置 context_size/max_output → 数据库默认 131072/4096
+      { provider: 'testprov', model_id: 'default-model', score: 80, enabled: 1, type: 'text' },
+    ]);
+    expect(await getModelSpecs(makeEnv(), 'testprov')).toEqual([
+      { model_id: 'big-model', context_size: 1000000, max_output: 384000 },
+      { model_id: 'default-model', context_size: 131072, max_output: 4096 },
+    ]);
+  });
+
+  it('getAvailableModelSpecs excludes failed models and returns specs in score order', async () => {
+    await db.seed('provider_models', [
+      { provider: 'groq', model_id: 'model-a', score: 90, enabled: 1, type: 'text', context_size: 131072, max_output: 4096 },
+      { provider: 'groq', model_id: 'model-b', score: 80, enabled: 1, type: 'text', context_size: 262144, max_output: 8192 },
+      { provider: 'groq', model_id: 'model-c', score: 70, enabled: 1, type: 'text', context_size: 131072, max_output: 4096 },
+    ]);
+    await markFailed(makeEnv(), 'model-b', 'groq');
+    const specs = await getAvailableModelSpecs(makeEnv(), 'groq', 5);
+    expect(specs.map(s => s.model_id)).toEqual(['model-a', 'model-c']);
+    // model-a keeps its documented max_output; defaults are applied to missing
+    expect(specs[0]!.max_output).toBe(4096);
   });
 
   it('getProviderInfo resolves api key from env, honors enabled and expiry', async () => {
@@ -159,6 +185,40 @@ describe('aiProvider direct calls', () => {
     expect(await getFailed(makeEnv(), 'groq')).toEqual([]);
   });
 
+  it('doOpenAICompat clamps max_tokens by the model max_output cap', async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(
+      JSON.stringify({ choices: [{ message: { content: 'clamped' } }] }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await doOpenAICompat(
+      makeEnv(), 'groq', 'https://api.groq.com/openai/v1', 'key', 'model-a',
+      [{ role: 'user', content: 'hi' }],
+      { max_tokens: 500, max_output: 100 },
+    );
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0]![1] as RequestInit).body));
+    expect(body.max_tokens).toBe(100);
+  });
+
+  it('doOpenAICompat keeps requested max_tokens when under the model max_output', async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(
+      JSON.stringify({ choices: [{ message: { content: 'ok' } }] }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await doOpenAICompat(
+      makeEnv(), 'groq', 'https://api.groq.com/openai/v1', 'key', 'model-a',
+      [{ role: 'user', content: 'hi' }],
+      { max_tokens: 100, max_output: 500 },
+    );
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0]![1] as RequestInit).body));
+    expect(body.max_tokens).toBe(100);
+  });
+
   it('doOpenAICompat marks failed and returns null on HTTP error', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('boom', { status: 500 })));
     const result = await doOpenAICompat(makeEnv(), 'groq', 'https://api.groq.com/openai/v1', 'key', 'model-a', [{ role: 'user', content: 'hi' }]);
@@ -196,6 +256,8 @@ describe('aiProvider callAI chain', () => {
   });
 
   it('falls through to next provider when the first one fails', async () => {
+    // 显式指定 provider 链，不依赖 migration 里的全局 provider_order
+    await db.exec("INSERT OR REPLACE INTO app_config (key, value) VALUES ('provider_order', 'groq,cloudflare')");
     await db.seed('providers', [
       { name: 'groq', base_url: 'https://api.groq.com/openai/v1', api_key_env: 'GROQ_API_KEY', enabled: 1, expires_at: null },
     ]);
@@ -231,5 +293,27 @@ describe('aiProvider callAI chain', () => {
 
     const result = await callAI(makeEnv({ GROQ_API_KEY: 'key' }), 'summarize this');
     expect(result).toBeNull();
+  });
+
+  it('passes the per-model max_output cap into the request', async () => {
+    await db.exec("INSERT OR REPLACE INTO app_config (key, value) VALUES ('provider_order', 'groq')");
+    await db.seed('providers', [
+      { name: 'groq', base_url: 'https://api.groq.com/openai/v1', api_key_env: 'GROQ_API_KEY', enabled: 1, expires_at: null },
+    ]);
+    await db.seed('provider_models', [
+      { provider: 'groq', model_id: 'groq-model', score: 90, enabled: 1, type: 'text', context_size: 131072, max_output: 500 },
+    ]);
+
+    const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(
+      JSON.stringify({ choices: [{ message: { content: 'ok' } }] }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await callAI(makeEnv({ GROQ_API_KEY: 'key' }), 'summarize this', { max_tokens: 1000 });
+    expect(result).toBe('ok');
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0]![1] as RequestInit).body));
+    expect(body.max_tokens).toBe(500);
   });
 });

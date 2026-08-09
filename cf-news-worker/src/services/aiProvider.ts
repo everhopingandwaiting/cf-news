@@ -29,22 +29,40 @@ export async function getProviderOrder(env: Bindings): Promise<string[]> {
     return order ? order.split(',').map(s => s.trim()) : ['groq', 'cloudflare', 'openrouter', 'nvidia', 'mango'];
 }
 
-export async function getModels(env: Bindings, provider: string, type?: string): Promise<string[]> {
+export interface ModelSpec {
+    model_id: string;
+    context_size: number;
+    max_output: number;
+}
+
+export async function getModelSpecs(env: Bindings, provider: string, type?: string): Promise<ModelSpec[]> {
     const db = getDb(env);
     try {
         const cond = type
             ? sql`provider = ${provider} AND enabled = 1 AND type = ${type}`
             : sql`provider = ${provider} AND enabled = 1`;
-        const rows = await db.select({ model_id: providerModels.model_id })
+        const rows = await db.select({
+            model_id: providerModels.model_id,
+            context_size: providerModels.context_size,
+            max_output: providerModels.max_output,
+        })
             .from(providerModels)
             .where(cond)
             .orderBy(sql`score DESC`)
             .all();
-        return rows.map(r => r.model_id);
+        return rows.map(r => ({
+            model_id: r.model_id,
+            context_size: r.context_size ?? 131072,
+            max_output: r.max_output ?? 4096,
+        }));
     } catch (e) {
-        console.error(`getModels error for ${provider}:`, e);
+        console.error(`getModelSpecs error for ${provider}:`, e);
         return [];
     }
+}
+
+export async function getModels(env: Bindings, provider: string, type?: string): Promise<string[]> {
+    return (await getModelSpecs(env, provider, type)).map(s => s.model_id);
 }
 
 export async function getProviderInfo(env: Bindings, name: string): Promise<{ base_url: string; api_key: string } | null> {
@@ -188,20 +206,25 @@ async function getMaxModelsPerProvider(env: Bindings): Promise<number> {
     return Math.min(Math.max(configured, 1), 5);
 }
 
-export async function getAvailableModels(env: Bindings, provider: string, limit: number, type?: string): Promise<string[]> {
+export async function getAvailableModelSpecs(env: Bindings, provider: string, limit: number, type?: string): Promise<ModelSpec[]> {
     const failed = new Set(await getFailed(env, provider));
-    return (await getModels(env, provider, type))
-        .filter(model => !failed.has(model))
+    return (await getModelSpecs(env, provider, type))
+        .filter(spec => !failed.has(spec.model_id))
         .slice(0, limit);
+}
+
+export async function getAvailableModels(env: Bindings, provider: string, limit: number, type?: string): Promise<string[]> {
+    return (await getAvailableModelSpecs(env, provider, limit, type)).map(s => s.model_id);
 }
 
 export async function doOpenAICompat(
     env: Bindings, provider: string, baseUrl: string, apiKey: string,
     model: string, messages: { role: string; content: string }[],
-    options?: { max_tokens?: number; temperature?: number; news_id?: number; news_title?: string }
+    options?: { max_tokens?: number; temperature?: number; news_id?: number; news_title?: string; max_output?: number }
 ): Promise<string | null> {
     const start = Date.now();
-    const maxTokens = options?.max_tokens ?? (await getConfigInt(env, 'summary_max_tokens', 300));
+    const baseMaxTokens = options?.max_tokens ?? (await getConfigInt(env, 'summary_max_tokens', 300));
+    const maxTokens = options?.max_output ? Math.min(baseMaxTokens, options.max_output) : baseMaxTokens;
     const temp = options?.temperature ?? parseFloat(await getConfig(env, 'summary_temperature') || '0.3');
     try {
         const url = baseUrl.endsWith('/') ? `${baseUrl}chat/completions` : `${baseUrl}/chat/completions`;
@@ -239,10 +262,11 @@ export async function doOpenAICompat(
 
 export async function doCF(
     env: Bindings, model: string, messages: { role: string; content: string }[],
-    options?: { max_tokens?: number; temperature?: number; news_id?: number; news_title?: string }
+    options?: { max_tokens?: number; temperature?: number; news_id?: number; news_title?: string; max_output?: number }
 ): Promise<string | null> {
     const start = Date.now();
-    const maxTokens = options?.max_tokens ?? (await getConfigInt(env, 'summary_max_tokens', 300));
+    const baseMaxTokens = options?.max_tokens ?? (await getConfigInt(env, 'summary_max_tokens', 300));
+    const maxTokens = options?.max_output ? Math.min(baseMaxTokens, options.max_output) : baseMaxTokens;
     const temp = options?.temperature ?? parseFloat(await getConfig(env, 'summary_temperature') || '0.3');
     try {
         const r: any = await env.AI.run(model, { messages, max_tokens: maxTokens, temperature: temp });
@@ -279,17 +303,17 @@ export async function callAI(env: Bindings, prompt: string, options?: AIOptions)
 
     for (const provider of order) {
         if (provider === 'cloudflare') {
-            const models = await getAvailableModels(env, 'cloudflare', maxModels);
-            for (const model of models) {
-                const result = await doCF(env, model, messages, options);
+            const specs = await getAvailableModelSpecs(env, 'cloudflare', maxModels);
+            for (const spec of specs) {
+                const result = await doCF(env, spec.model_id, messages, { ...options, max_output: spec.max_output });
                 if (result) return result;
             }
         } else {
             const info = await getProviderInfo(env, provider);
             if (!info) continue;
-            const models = await getAvailableModels(env, provider, maxModels);
-            for (const model of models) {
-                const result = await doOpenAICompat(env, provider, info.base_url, info.api_key, model, messages, options);
+            const specs = await getAvailableModelSpecs(env, provider, maxModels);
+            for (const spec of specs) {
+                const result = await doOpenAICompat(env, provider, info.base_url, info.api_key, spec.model_id, messages, { ...options, max_output: spec.max_output });
                 if (result) return result;
             }
         }
