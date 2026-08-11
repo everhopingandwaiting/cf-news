@@ -220,7 +220,7 @@ export async function getAvailableModels(env: Bindings, provider: string, limit:
 export async function doOpenAICompat(
     env: Bindings, provider: string, baseUrl: string, apiKey: string,
     model: string, messages: { role: string; content: string }[],
-    options?: { max_tokens?: number; temperature?: number; news_id?: number; news_title?: string; max_output?: number }
+    options?: { max_tokens?: number; temperature?: number; news_id?: number; news_title?: string; max_output?: number; timeout_ms?: number }
 ): Promise<string | null> {
     const start = Date.now();
     const baseMaxTokens = options?.max_tokens ?? (await getConfigInt(env, 'summary_max_tokens', 300));
@@ -232,7 +232,7 @@ export async function doOpenAICompat(
             method: 'POST',
             headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({ model, messages, max_tokens: maxTokens, temperature: temp }),
-            signal: AbortSignal.timeout(30000),
+            signal: AbortSignal.timeout(options?.timeout_ms ?? 30000),
         });
         if (!res.ok) {
             const errText = await res.text().catch(() => '');
@@ -291,6 +291,11 @@ export interface AIOptions {
     news_id?: number;
     news_title?: string;
     system_prompt?: string;
+    /** 只尝试 context_size ≥ 该值的模型（大 batch 场景） */
+    min_context?: number;
+    /** 只尝试 max_output ≥ 该值的模型（大 batch 场景，防输出截断） */
+    min_max_output?: number;
+    timeout_ms?: number;
 }
 
 export async function callAI(env: Bindings, prompt: string, options?: AIOptions): Promise<string | null> {
@@ -300,10 +305,12 @@ export async function callAI(env: Bindings, prompt: string, options?: AIOptions)
 
     const order = await getProviderOrder(env);
     const maxModels = await getMaxModelsPerProvider(env);
+    const { min_context, min_max_output } = options || {};
 
     for (const provider of order) {
         if (provider === 'cloudflare') {
-            const specs = await getAvailableModelSpecs(env, 'cloudflare', maxModels);
+            const specs = (await getAvailableModelSpecs(env, 'cloudflare', maxModels))
+                .filter(s => (!min_context || s.context_size >= min_context) && (!min_max_output || s.max_output >= min_max_output));
             for (const spec of specs) {
                 const result = await doCF(env, spec.model_id, messages, { ...options, max_output: spec.max_output });
                 if (result) return result;
@@ -311,7 +318,8 @@ export async function callAI(env: Bindings, prompt: string, options?: AIOptions)
         } else {
             const info = await getProviderInfo(env, provider);
             if (!info) continue;
-            const specs = await getAvailableModelSpecs(env, provider, maxModels);
+            const specs = (await getAvailableModelSpecs(env, provider, maxModels))
+                .filter(s => (!min_context || s.context_size >= min_context) && (!min_max_output || s.max_output >= min_max_output));
             for (const spec of specs) {
                 const result = await doOpenAICompat(env, provider, info.base_url, info.api_key, spec.model_id, messages, { ...options, max_output: spec.max_output });
                 if (result) return result;

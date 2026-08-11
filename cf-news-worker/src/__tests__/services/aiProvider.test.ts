@@ -316,4 +316,35 @@ describe('aiProvider callAI chain', () => {
     const body = JSON.parse(String((fetchMock.mock.calls[0]![1] as RequestInit).body));
     expect(body.max_tokens).toBe(500);
   });
+
+  it('skips models whose max_output is below min_max_output (large-batch routing)', async () => {
+    await db.exec("INSERT OR REPLACE INTO app_config (key, value) VALUES ('provider_order', 'groq,zen')");
+    await db.seed('providers', [
+      { name: 'groq', base_url: 'https://api.groq.com/openai/v1', api_key_env: 'GROQ_API_KEY', enabled: 1, expires_at: null },
+      { name: 'zen', base_url: 'https://opencode.ai/zen/v1', api_key_env: 'ZEN_API_KEY', enabled: 1, expires_at: null },
+    ]);
+    await db.seed('provider_models', [
+      // 4K output — too small for a 40-article batch (needs 4800); must be skipped
+      { provider: 'groq', model_id: 'groq-small', score: 90, enabled: 1, type: 'text', context_size: 131072, max_output: 4096 },
+      // 384K output — the only model that can serve the large batch
+      { provider: 'zen', model_id: 'zen-big', score: 95, enabled: 1, type: 'text', context_size: 1000000, max_output: 384000 },
+    ]);
+
+    const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(
+      JSON.stringify({ choices: [{ message: { content: 'large batch ok' } }] }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const env = makeEnv({ GROQ_API_KEY: 'key', ZEN_API_KEY: 'zen-key' });
+    const result = await callAI(env, 'summarize these 40', { max_tokens: 4800, min_max_output: 4800 });
+    expect(result).toBe('large batch ok');
+
+    // only zen got the request; groq was filtered out
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const calledUrl = fetchMock.mock.calls[0]![0] as string;
+    expect(calledUrl).toBe('https://opencode.ai/zen/v1/chat/completions');
+    const body = JSON.parse(String((fetchMock.mock.calls[0]![1] as RequestInit).body));
+    expect(body.max_tokens).toBe(4800);
+  });
 });

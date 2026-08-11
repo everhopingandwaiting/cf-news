@@ -47,14 +47,27 @@ describe('Operations API - Fetch', () => {
 
 describe('Operations API - Summarize', () => {
   it('POST /api/summarize - runs batch summarization', async () => {
+    const recent = new Date(Date.now() - 3600_000).toISOString().slice(0, 19).replace('T', ' ');
     await db.seed('news_items', [
-      { id: 100, source_id: 1, title: 'Sum Test', url: 'https://sum/test', description: 'Test desc', content: 'Test content', category: 'tech', created_at: '2026-06-07 10:00:00', is_deleted: 0 },
+      { id: 100, source_id: 1, title: 'Sum Test', url: 'https://sum/test', description: 'This description is long enough to pass the 60-character minimum length filter.', content: 'This content is long enough to pass the batch summarize entry filter.', category: 'tech', created_at: recent, is_deleted: 0 },
     ]);
     const { status, body } = await request(app, db, '/api/summarize', { method: 'POST' });
     expect(status).toBe(200);
     expect(body.success).toBe(true);
+    expect(body.total).toBe(1);
     expect(typeof body.generated).toBe('number');
-    expect(typeof body.total).toBe('number');
+  });
+
+  it('POST /api/summarize - skips items older than 7 days and prefers newest', async () => {
+    const recent = new Date(Date.now() - 3600_000).toISOString().slice(0, 19).replace('T', ' ');
+    const old = new Date(Date.now() - 10 * 86400_000).toISOString().slice(0, 19).replace('T', ' ');
+    await db.seed('news_items', [
+      { id: 111, source_id: 1, title: 'Recent News', url: 'https://sum/recent', description: 'A recent item that should be picked up.', content: 'A recent item with enough content to summarize.', category: 'tech', created_at: recent, is_deleted: 0 },
+      { id: 112, source_id: 1, title: 'Old News', url: 'https://sum/old', description: 'An old item outside the 7-day window.', content: 'An old item that the 7-day window must exclude.', category: 'tech', created_at: old, is_deleted: 0 },
+    ]);
+    const { status, body } = await request(app, db, '/api/summarize', { method: 'POST' });
+    expect(status).toBe(200);
+    expect(body.total).toBe(1);
   });
 
   it('POST /api/summarize - filters invalid ids and skips duplicates gracefully', async () => {

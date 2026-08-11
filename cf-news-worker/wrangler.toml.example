@@ -79,6 +79,9 @@ binding = "NEWS_QUEUE"
 queue = "news-processing-queue"
 max_batch_size = 5
 max_batch_timeout = 30
+# 毒消息（重试 3 次仍失败）投递到 DLQ，防止卡住队列头部饿死其他消息
+# （2026-08-11 事故：generate_summary 爆 subrequest 导致 fetch_source 被饿死 8 小时）
+dead_letter_queue = "news-processing-dlq"
 
 [[migrations]]
 tag = "v1"
@@ -123,7 +126,7 @@ zone_id = "${ZONE_ID}"
 
 # Cron Triggers
 [triggers]
-crons = ["0 * * * *", "*/15 * * * *", "0 8 * * *"]
+crons = ["0 * * * *", "15 * * * *", "*/15 * * * *", "0 8 * * *"]
 
 [observability]
 enabled = true

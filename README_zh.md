@@ -73,7 +73,7 @@
 | AI 缓存 | AI Gateway（分类和问答结果缓存） |
 | 机器人防护 | Turnstile（免费无感验证码） |
 | 边缘缓存 | Cache API（新闻列表 60s 缓存） |
-| AI 摘要 | OpenRouter, NVIDIA, Mango APIs |
+| AI 摘要 | OpenRouter, NVIDIA, Mango, Zen（1M 上下文大批量）APIs |
 | 向量 | Vectorize 语义去重 |
 | 对象存储 | R2（图片代理缓存 + AI 插画） |
 | 持久任务 | Workflows（回填任务） |

@@ -113,30 +113,49 @@ export async function generateSummaryForNews(env: Bindings, newsId: number, item
 }
 
 // 批量摘要大小不再固定：按 provider 链上实际可用的模型能力（context_size /
-// max_output）动态计算，context 越大的模型一次可塞入更多文章，减少请求次数对抗限流。
+// max_output）动态计算。分两层：
+//   small — 任何模型都能处理的安全批量（按全链最小能力）
+//   large — 只有大 context / 大 max_output 的模型（如 zen 1M）能处理，
+//           输出上限充足时一次塞入更多文章，减少请求次数对抗限流。
 const DEFAULT_BATCH_SIZE = 10;
-const MAX_BATCH_SIZE = 20; // 解析可靠性上限：batch 过大 JSON 解析失败率上升
+const SMALL_BATCH_MAX = 20;   // 小批量上限：nvidia 4K 输出模型也能可靠解析
+const LARGE_BATCH_MAX = 40;   // 大批量上限：zen 1M 模型可容纳；60+ 数组模型漏条概率高，40 已翻倍于旧上限
+const LARGE_MIN_OUTPUT = 4800; // = LARGE_BATCH_MAX × 120：只有输出预算能服务整个大 batch 的模型才配 large，
+                               // 否则大 batch 会输出截断 → JSON 解析失败 → 白走一遍 provider 链
 const TOKENS_PER_ARTICLE = 1100; // ~1500 字符输入（中英混合保守估计）+ prompt 模板 + 每篇输出预算
 
-export async function getSummaryBatchSize(env: Bindings): Promise<number> {
+export interface BatchSizes { large: number; small: number }
+
+export async function getBatchSizes(env: Bindings): Promise<BatchSizes> {
     const order = await getProviderOrder(env);
-    let minContext = Infinity;
-    let minOutput = Infinity;
-    let found = false;
+    const specs: { context_size: number; max_output: number }[] = [];
     for (const provider of order) {
-        const specs = await getAvailableModelSpecs(env, provider, 3);
-        for (const spec of specs) {
-            found = true;
-            if (spec.context_size < minContext) minContext = spec.context_size;
-            if (spec.max_output < minOutput) minOutput = spec.max_output;
+        specs.push(...(await getAvailableModelSpecs(env, provider, 3)));
+    }
+    if (specs.length === 0) return { large: DEFAULT_BATCH_SIZE, small: DEFAULT_BATCH_SIZE };
+
+    // small 按全链最弱可用模型计算，保证任何模型都能处理
+    const minContext = Math.min(...specs.map(s => s.context_size));
+    const minOutput = Math.min(...specs.map(s => s.max_output));
+    const byContext = (ctx: number) => Math.max(1, Math.floor((ctx * 0.6) / TOKENS_PER_ARTICLE));
+    const byOutput = (out: number) => Math.max(1, Math.floor(out / 120));
+    const small = Math.max(1, Math.min(byContext(minContext), byOutput(minOutput), SMALL_BATCH_MAX));
+
+    // large 只从 max_output ≥ LARGE_MIN_OUTPUT 的模型计算。zen 被限流/标记失败后
+    // 没有任何模型达标 → large 塌缩为 small，跳过会白烧外部 subrequest 的 large 尝试
+    //（Worker 免费版外部 subrequest 仅 50/次，大 batch 失败后还要走小 batch 回退）。
+    let large = small;
+    for (const spec of specs) {
+        if (spec.max_output >= LARGE_MIN_OUTPUT) {
+            const candidate = Math.min(byContext(spec.context_size), byOutput(spec.max_output), LARGE_BATCH_MAX);
+            if (candidate > large) large = candidate;
         }
     }
-    if (!found) return DEFAULT_BATCH_SIZE;
-    // context 预留 40% 给输出与提示词；每篇摘要按 120 tokens 输出预算
-    const byContext = Math.floor((minContext * 0.6) / TOKENS_PER_ARTICLE);
-    const byOutput = Math.floor(minOutput / 120);
-    const batch = Math.max(1, Math.min(byContext, byOutput));
-    return Math.max(1, Math.min(batch, MAX_BATCH_SIZE));
+    return { large, small };
+}
+
+export async function getSummaryBatchSize(env: Bindings): Promise<number> {
+    return (await getBatchSizes(env)).small;
 }
 
 async function getMaxModelsPerProvider(env: Bindings): Promise<number> {
@@ -149,10 +168,29 @@ export async function generateBatchSummariesForNews(
     items: { id: number; title: string; description?: string; content?: string }[]
 ): Promise<number> {
     if (items.length === 0) return 0;
-    const batchSize = await getSummaryBatchSize(env);
+    const { large, small } = await getBatchSizes(env);
+
+    // 大批量优先：只让 max_output 充足的模型（zen 1M）参与，一次塞入尽可能多文章。
+    // 若失败（限流/无合适模型），拆成小批量走全链回退，不浪费请求。
+    if (large > small && items.length >= small) {
+        let successCount = 0;
+        for (let i = 0; i < items.length; i += large) {
+            const batch = items.slice(i, i + large);
+            const done = await generateOneBatch(env, batch, { minMaxOutput: batch.length * 120 });
+            if (done > 0) {
+                successCount += done;
+            } else {
+                for (let j = 0; j < batch.length; j += small) {
+                    successCount += await generateOneBatch(env, batch.slice(j, j + small));
+                }
+            }
+        }
+        return successCount;
+    }
+
     let successCount = 0;
-    for (let i = 0; i < items.length; i += batchSize) {
-        const batch = items.slice(i, i + batchSize);
+    for (let i = 0; i < items.length; i += small) {
+        const batch = items.slice(i, i + small);
         successCount += await generateOneBatch(env, batch);
     }
     return successCount;
@@ -160,7 +198,8 @@ export async function generateBatchSummariesForNews(
 
 async function generateOneBatch(
     env: Bindings,
-    items: { id: number; title: string; description?: string; content?: string }[]
+    items: { id: number; title: string; description?: string; content?: string }[],
+    opts?: { minMaxOutput?: number }
 ): Promise<number> {
     const articles: { text: string; tooShort: boolean }[] = items.map(item => {
         const text = cleanText(item.content || item.description || '');
@@ -191,6 +230,8 @@ Return: [{"summary":"<article1 summary>"},{"summary":"<article2 summary>"},...]`
     const result = await callAI(env, batchPrompt, {
         max_tokens: items.length * 120,
         temperature: 0.3,
+        // 大 batch 时只让 max_output 充足的模型（zen 1M）参与，防输出截断
+        ...(opts?.minMaxOutput ? { min_max_output: opts.minMaxOutput } : {}),
     });
 
     if (result) {
@@ -210,9 +251,16 @@ Return: [{"summary":"<article1 summary>"},{"summary":"<article2 summary>"},...]`
         }
     }
 
+    // 大 batch 解析失败 → 返回 0，由调用方拆成小 batch 重试；
+    // 直接在 40 篇文章上逐篇 fallback 会触发 Worker 50-subrequest 上限。
+    if (opts?.minMaxOutput) return 0;
+
+    // 小 batch 解析失败 → 最多逐篇兜底 5 篇（每篇会遍历整条 provider 链，
+    // 超出 Worker 50-subrequest 上限后连 D1 写入都会失败），其余留到下一轮 cron。
     let count = 0;
-    for (const item of items) {
-        if (await generateSummaryForNews(env, item.id, item)) count++;
+    const fallbackLimit = Math.min(items.length, 5);
+    for (let i = 0; i < fallbackLimit; i++) {
+        if (await generateSummaryForNews(env, items[i].id, items[i])) count++;
     }
     return count;
 }
@@ -442,7 +490,9 @@ export async function generatePendingSummaries(env: Bindings): Promise<void> {
         SELECT n.id, n.title, n.description, n.content 
         FROM news_items n LEFT JOIN news_summaries ns ON ns.news_id = n.id 
         WHERE ns.id IS NULL AND (n.description IS NOT NULL OR n.content IS NOT NULL)
-        LIMIT 10
+        AND n.created_at >= datetime('now', '-7 days')
+        ORDER BY n.created_at DESC
+        LIMIT 40
     `);
 
     if (items.length === 0) {

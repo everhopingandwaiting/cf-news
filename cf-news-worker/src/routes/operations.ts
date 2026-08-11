@@ -84,9 +84,15 @@ operations.post('/summarize', async (c) => {
                 .leftJoin(newsSummaries, eq(newsSummaries.news_id, newsItems.id))
                 .where(and(
                     isNull(newsSummaries.id),
-                    sql`LENGTH(COALESCE(${newsItems.title}, '') || '. ' || substr(COALESCE(${newsItems.content}, ${newsItems.description}, ''), 1, 1500)) >= 60`
+                    sql`LENGTH(COALESCE(${newsItems.title}, '') || '. ' || substr(COALESCE(${newsItems.content}, ${newsItems.description}, ''), 1, 1500)) >= 60`,
+                    // 只处理近 7 天积压：30 天前的旧闻会被清理任务删除，不值得花 AI 额度
+                    sql`${newsItems.created_at} >= datetime('now', '-7 days')`
                 ))
-                .limit(10)
+                // 入口上限对齐 LARGE_BATCH_MAX=40：zen 可用时一次调用即处理完，
+                // 全链失败时 large→small 级联也保持在 Worker 50-subrequest 预算内。
+                // newest-first：优先最近文章（旧积压对用户不可见，避免永远轮不到新文章）。
+                .orderBy(sql`${newsItems.created_at} DESC`)
+                .limit(40)
                 .all() as any[];
         }
 
@@ -96,8 +102,11 @@ operations.post('/summarize', async (c) => {
 
         const done = await generateBatchSummariesForNews(c.env, items as any);
         return c.json({ success: true, generated: done, total: items.length, skipped: items.length - done });
-    } catch (error) {
-        return c.json({ success: false, error: String(error) }, 500);
+    } catch (error: any) {
+        // Drizzle 会把 D1 底层错误包装成 "Failed query: ..."，真实原因在 error.cause。
+        // 不展开 cause 会导致 "Too many subrequests" 这类平台错误无法定位。
+        const cause = error?.cause?.message || error?.cause || '';
+        return c.json({ success: false, error: String(error), ...(cause ? { detail: String(cause).substring(0, 500) } : {}) }, 500);
     }
 });
 

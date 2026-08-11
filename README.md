@@ -81,7 +81,7 @@ AI-generated summary of today's top news, sorted by time with language markers (
 | AI Cache | AI Gateway (caches classification, Q&A) |
 | Bot Protection | Turnstile (free, no CAPTCHA) |
 | Edge Cache | Cache API (news list 60s) |
-| Summaries | OpenRouter, NVIDIA, Mango APIs |
+| Summaries | OpenRouter, NVIDIA, Mango, Zen (1M-context large-batch) APIs |
 | Vector | Vectorize for semantic dedup |
 | Object Storage | R2 (image proxy cache + AI illustrations) |
 | Durable Tasks | Workflows (backfill jobs) |
