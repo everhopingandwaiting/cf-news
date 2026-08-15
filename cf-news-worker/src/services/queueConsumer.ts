@@ -33,6 +33,31 @@ export async function handleNewsQueue(batch: MessageBatch<NewsQueueMessage>, env
                         console.log(`Queue: generated summary for news ${msg.newsId}`);
                     }
                     break;
+                case 'generate_take':
+                    if (msg.newsId && msg.title) {
+                        // AI 毒舌点评独立入队：每条消息在独立 invocation 中执行
+                        // （独立 50-external-subrequest 预算），避免 summary cron
+                        // 单次 invocation 内逐条遍历 provider 链烧爆上限。
+                        const { generateAITake } = await import('./summarizer');
+                        await generateAITake(env, msg.newsId, {
+                            title: msg.title,
+                            description: msg.description,
+                            content: msg.content,
+                        });
+                        console.log(`Queue: generated AI take for news ${msg.newsId}`);
+                    }
+                    break;
+                case 'generate_entities':
+                    if (msg.newsId && msg.title) {
+                        const { extractEntities } = await import('./entityExtractor');
+                        await extractEntities(env, msg.newsId, {
+                            title: msg.title,
+                            description: msg.description,
+                            content: msg.content,
+                        });
+                        console.log(`Queue: extracted entities for news ${msg.newsId}`);
+                    }
+                    break;
                 case 'index_news':
                     if (msg.newsId && msg.title) {
                         await indexNewsItem(env, msg.newsId, msg.title, msg.description);

@@ -29,7 +29,7 @@ export interface Bindings {
 }
 
 export interface NewsQueueMessage {
-    type: 'fetch_source' | 'generate_summary' | 'index_news' | 'illustrate_stock';
+    type: 'fetch_source' | 'generate_summary' | 'index_news' | 'illustrate_stock' | 'generate_take' | 'generate_entities';
     sourceId?: number;
     skipSummary?: boolean;
     newsId?: number;

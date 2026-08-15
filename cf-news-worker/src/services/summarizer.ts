@@ -1,10 +1,9 @@
-import { Bindings } from '../types';
+import { Bindings, NewsQueueMessage } from '../types';
 import { getConfig, getConfigInt, getAvailableModels, getAvailableModelSpecs, getProviderInfo, getProviderOrder, callAI, doOpenAICompat as aiDoOpenAICompat, doCF as aiDoCF } from './aiProvider';
 import { fetchRichArticleContent } from './contentFetcher';
 import { eq, and, sql } from 'drizzle-orm';
 import { getDb } from '../db';
 import { newsSummaries, newsAiTake, newsPerspectives, newsItems } from '../db/schema';
-import { extractEntities } from './entityExtractor';
 
 function cleanText(text: string): string {
     return text.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
@@ -89,6 +88,17 @@ export async function generateSummary(env: Bindings, item: { id?: number; title:
     return null;
 }
 
+// 摘要成功后不再在同一 invocation 内 fire-and-forget 生成毒舌点评/实体抽取：
+// 每条都会遍历整条 provider 链，逐条调用会把 summary cron 单次 invocation 的
+// 50-external-subrequest 预算烧爆（超出后连 D1 写入都会失败）。
+// 改为入队独立消息，每条在独立 invocation（独立预算）中执行。
+function enqueueTakeAndEntities(env: Bindings, newsId: number, item: { title: string; description?: string; content?: string }): void {
+    const takeMsg: NewsQueueMessage = { type: 'generate_take', newsId, title: item.title, description: item.description, content: item.content };
+    const entitiesMsg: NewsQueueMessage = { type: 'generate_entities', newsId, title: item.title, description: item.description, content: item.content };
+    env.NEWS_QUEUE.send(takeMsg).catch(() => {});
+    env.NEWS_QUEUE.send(entitiesMsg).catch(() => {});
+}
+
 export async function generateSummaryForNews(env: Bindings, newsId: number, item: { title: string; description?: string; content?: string }): Promise<boolean> {
     const summary = await generateSummary(env, { ...item, id: newsId });
     if (!summary || summary.length < 10) return false;
@@ -106,8 +116,7 @@ export async function generateSummaryForNews(env: Bindings, newsId: number, item
             .values({ news_id: newsId, summary: summary.substring(0, 500) });
     }
 
-    generateAITake(env, newsId, item).catch(() => {});
-    extractEntities(env, newsId, item).catch(() => {});
+    enqueueTakeAndEntities(env, newsId, item);
 
     return true;
 }
@@ -242,8 +251,7 @@ Return: [{"summary":"<article1 summary>"},{"summary":"<article2 summary>"},...]`
             for (let i = 0; i < items.length; i++) {
                 if (summaries[i]) {
                     await db.run(sql`INSERT OR REPLACE INTO news_summaries (news_id, summary) VALUES (${items[i].id}, ${summaries[i]!.substring(0, 500)})`);
-                    generateAITake(env, items[i].id, items[i]).catch(() => {});
-                    extractEntities(env, items[i].id, items[i]).catch(() => {});
+                    enqueueTakeAndEntities(env, items[i].id, items[i]);
                     count++;
                 }
             }

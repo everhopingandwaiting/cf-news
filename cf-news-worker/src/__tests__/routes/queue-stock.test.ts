@@ -1,9 +1,19 @@
 import { describe, it, expect, vi } from 'vitest';
 import { handleNewsQueue } from '../../services/queueConsumer';
+import { generateAITake } from '../../services/summarizer';
+import { extractEntities } from '../../services/entityExtractor';
 import { MockD1 } from '../mock-d1';
 import { resetDb, getDb } from '../../db';
 import { newsItems } from '../../db/schema';
 import { eq } from 'drizzle-orm';
+
+vi.mock('../../services/summarizer', () => ({
+    generateSummaryForNews: vi.fn(),
+    generateAITake: vi.fn(),
+}));
+vi.mock('../../services/entityExtractor', () => ({
+    extractEntities: vi.fn(),
+}));
 
 describe('Queue - illustrate_stock', () => {
   it('fills image_url for a news item via queue message', async () => {
@@ -102,5 +112,51 @@ describe('Queue - illustrate_stock', () => {
       urls.add(r[0]?.image_url ?? '');
     }
     expect(urls.size).toBeGreaterThan(1);
+  });
+});
+
+describe('Queue - generate_take / generate_entities', () => {
+  it('dispatches generate_take message to generateAITake with item context', async () => {
+    const { generateAITake } = await import('../../services/summarizer');
+    vi.mocked(generateAITake).mockResolvedValue(true);
+    resetDb();
+    const db = new MockD1();
+    const env: any = { DB: db, KV: { get: async () => null, put: async () => {} } };
+    let acked = false;
+    const batch = {
+      messages: [{
+        body: { type: 'generate_take', newsId: 7, title: 'Apple chip news', description: 'desc', content: 'full content' },
+        ack: () => { acked = true; }, retry: () => {},
+      }],
+    };
+    await handleNewsQueue(batch as any, env);
+    expect(generateAITake).toHaveBeenCalledWith(env, 7, {
+      title: 'Apple chip news',
+      description: 'desc',
+      content: 'full content',
+    });
+    expect(acked).toBe(true);
+  });
+
+  it('dispatches generate_entities message to extractEntities with item context', async () => {
+    const { extractEntities } = await import('../../services/entityExtractor');
+    vi.mocked(extractEntities).mockResolvedValue(true);
+    resetDb();
+    const db = new MockD1();
+    const env: any = { DB: db, KV: { get: async () => null, put: async () => {} } };
+    let acked = false;
+    const batch = {
+      messages: [{
+        body: { type: 'generate_entities', newsId: 8, title: 'Apple chip news', description: 'desc', content: 'full content' },
+        ack: () => { acked = true; }, retry: () => {},
+      }],
+    };
+    await handleNewsQueue(batch as any, env);
+    expect(extractEntities).toHaveBeenCalledWith(env, 8, {
+      title: 'Apple chip news',
+      description: 'desc',
+      content: 'full content',
+    });
+    expect(acked).toBe(true);
   });
 });

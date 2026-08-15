@@ -4,6 +4,7 @@ import { resetDb } from '../../db';
 import {
   getConfig, getConfigInt, getProviderOrder, getModels, getModelSpecs, getAvailableModelSpecs,
   getProviderInfo, getFailed, markFailed, getAvailableModels, doOpenAICompat, doCF, callAI,
+  markProviderFailed, isProviderBlocked,
 } from '../../services/aiProvider';
 import type { Bindings } from '../../types';
 
@@ -150,6 +151,38 @@ describe('aiProvider failed-model tracking', () => {
     expect(await getAvailableModels(makeEnv(), 'groq', 5)).toEqual(['model-a', 'model-c']);
     expect(await getAvailableModels(makeEnv(), 'groq', 1)).toEqual(['model-a']);
   });
+
+  it('markProviderFailed blocks the whole provider but not others', async () => {
+    await db.seed('provider_models', [
+      { provider: 'zen', model_id: 'zen-free-1', score: 90, enabled: 1, type: 'text' },
+      { provider: 'zen', model_id: 'zen-free-2', score: 80, enabled: 1, type: 'text' },
+      { provider: 'groq', model_id: 'groq-model', score: 90, enabled: 1, type: 'text' },
+    ]);
+    await markProviderFailed(makeEnv(), 'zen');
+    expect(await isProviderBlocked(makeEnv(), 'zen')).toBe(true);
+    expect(await isProviderBlocked(makeEnv(), 'groq')).toBe(false);
+    expect(await getModels(makeEnv(), 'zen')).toEqual([]);
+    expect(await getAvailableModels(makeEnv(), 'zen', 5)).toEqual([]);
+    expect(await getAvailableModelSpecs(makeEnv(), 'zen', 5)).toEqual([]);
+    expect(await getModels(makeEnv(), 'groq')).toEqual(['groq-model']);
+  });
+
+  it('provider block expires after the failed-model TTL', async () => {
+    await db.seed('provider_models', [
+      { provider: 'testprov', model_id: 'test-model-1', score: 90, enabled: 1, type: 'text' },
+    ]);
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2024-01-01T00:00:00Z'));
+      await markProviderFailed(makeEnv(), 'testprov');
+      expect(await isProviderBlocked(makeEnv(), 'testprov')).toBe(true);
+      vi.setSystemTime(new Date('2024-01-01T00:15:01Z'));
+      expect(await isProviderBlocked(makeEnv(), 'testprov')).toBe(false);
+      expect(await getModels(makeEnv(), 'testprov')).toEqual(['test-model-1']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('aiProvider direct calls', () => {
@@ -234,6 +267,29 @@ describe('aiProvider direct calls', () => {
     const result = await doOpenAICompat(makeEnv(), 'groq', 'https://api.groq.com/openai/v1', 'key', 'model-a', [{ role: 'user', content: 'hi' }]);
     expect(result).toBeNull();
     expect(await getFailed(makeEnv(), 'groq')).toEqual(['model-a']);
+  });
+
+  it('doOpenAICompat blocks the whole provider on HTTP 429 rate limit', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{"error":{"message":"Rate limit reached"}}', { status: 429 })));
+    const result = await doOpenAICompat(makeEnv(), 'zen', 'https://opencode.ai/zen/v1', 'key', 'free-model', [{ role: 'user', content: 'hi' }]);
+    expect(result).toBeNull();
+    expect(await isProviderBlocked(makeEnv(), 'zen')).toBe(true);
+    expect(await getModels(makeEnv(), 'zen')).toEqual([]);
+  });
+
+  it('doOpenAICompat blocks the whole provider on "Free usage exceeded" body', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('Free usage exceeded', { status: 402 })));
+    const result = await doOpenAICompat(makeEnv(), 'zen', 'https://opencode.ai/zen/v1', 'key', 'free-model', [{ role: 'user', content: 'hi' }]);
+    expect(result).toBeNull();
+    expect(await isProviderBlocked(makeEnv(), 'zen')).toBe(true);
+  });
+
+  it('doOpenAICompat only marks the model on 500, not the whole provider', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('boom', { status: 500 })));
+    const result = await doOpenAICompat(makeEnv(), 'zen', 'https://opencode.ai/zen/v1', 'key', 'free-model', [{ role: 'user', content: 'hi' }]);
+    expect(result).toBeNull();
+    expect(await isProviderBlocked(makeEnv(), 'zen')).toBe(false);
+    expect(await getFailed(makeEnv(), 'zen')).toEqual(['free-model']);
   });
 
   it('doCF extracts response text and logs the call', async () => {

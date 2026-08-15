@@ -62,6 +62,7 @@ export async function getModelSpecs(env: Bindings, provider: string, type?: stri
 }
 
 export async function getModels(env: Bindings, provider: string, type?: string): Promise<string[]> {
+    if (await isProviderBlocked(env, provider)) return [];
     return (await getModelSpecs(env, provider, type)).map(s => s.model_id);
 }
 
@@ -171,6 +172,34 @@ export async function markFailed(env: Bindings, model: string, provider: string)
     }
 }
 
+// Provider 级封锁：限流（HTTP 429 / "Free usage exceeded" 等）是整个 provider
+// 的问题，不是单个模型的锅。用一个保留字模型名 `*` 标记整条 provider 链冻结，
+// TTL 内 getAvailableModelSpecs/getModels 直接返回空，cron 的后续 batch 不再
+// 逐个尝试该 provider 的其他模型（免费模型限流时逐个撞墙 = 白烧 subrequest）。
+const PROVIDER_BLOCK_MODEL = '*';
+
+export async function markProviderFailed(env: Bindings, provider: string): Promise<void> {
+    await markFailed(env, PROVIDER_BLOCK_MODEL, provider);
+}
+
+export async function isProviderBlocked(env: Bindings, provider: string): Promise<boolean> {
+    const failed = await getFailed(env, provider);
+    return failed.includes(PROVIDER_BLOCK_MODEL);
+}
+
+// 限流特征：HTTP 429，或响应体包含常见的 quota/rate-limit 文案。
+// 命中即整条 provider 链冷却（markProviderFailed），而不是只冷却当前模型。
+function isRateLimitError(status: number, body: string): boolean {
+    if (status === 429) return true;
+    const lower = body.toLowerCase();
+    return lower.includes('rate limit')
+        || lower.includes('rate_limit')
+        || lower.includes('quota exceeded')
+        || lower.includes('free usage exceeded')
+        || lower.includes('too many requests')
+        || lower.includes('insufficient_quota');
+}
+
 export async function logAICall(env: Bindings, data: {
     provider: string; model?: string; news_id?: number; news_title?: string;
     prompt_length: number; response_length: number; response_preview?: string;
@@ -207,6 +236,7 @@ async function getMaxModelsPerProvider(env: Bindings): Promise<number> {
 }
 
 export async function getAvailableModelSpecs(env: Bindings, provider: string, limit: number, type?: string): Promise<ModelSpec[]> {
+    if (await isProviderBlocked(env, provider)) return [];
     const failed = new Set(await getFailed(env, provider));
     return (await getModelSpecs(env, provider, type))
         .filter(spec => !failed.has(spec.model_id))
@@ -241,7 +271,8 @@ export async function doOpenAICompat(
             await logAICall(env, { provider, model, news_id: options?.news_id, news_title: options?.news_title,
                 prompt_length: JSON.stringify(messages).length, response_length: 0, response_preview: errText,
                 duration_ms: Date.now() - start, success: false, error });
-            await markFailed(env, model, provider);
+            if (isRateLimitError(res.status, errText)) await markProviderFailed(env, provider);
+            else await markFailed(env, model, provider);
             return null;
         }
         const body: any = await res.json();
