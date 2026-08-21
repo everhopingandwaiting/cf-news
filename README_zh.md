@@ -73,7 +73,7 @@
 | AI 缓存 | AI Gateway（分类和问答结果缓存） |
 | 机器人防护 | Turnstile（免费无感验证码） |
 | 边缘缓存 | Cache API（新闻列表 60s 缓存） |
-| AI 摘要 | OpenRouter, NVIDIA, Mango, Zen（1M 上下文大批量）APIs |
+| AI 摘要 | OpenRouter, NVIDIA, Mango, Zen（1M 上下文大批量）, OrcaRouter, 智谱 GLM（免费）APIs |
 | 向量 | Vectorize 语义去重 |
 | 对象存储 | R2（图片代理缓存 + AI 插画） |
 | 持久任务 | Workflows（回填任务） |
@@ -171,6 +171,8 @@ MANGO_API_KEY=你的Mango密钥
 GROQ_API_KEY=你的Groq密钥
 FREEMODEL_API_KEY=你的Freemodel密钥
 ZEN_API_KEY=你的Zen密钥            # 从 opencode.ai/zen 获取（聚合 API：Claude/GPT/Gemini/DeepSeek/Kimi + 8 个免费模型）
+ORCAROUTER_API_KEY=你的OrcaRouter密钥  # 从 orcarouter.ai 获取（聚合 API：Claude/GPT/Gemini/DeepSeek/Qwen；含免费模型）
+ZHIPU_API_KEY=你的智谱密钥           # 从 open.bigmodel.cn 获取（GLM 免费模型：glm-4.7-flash / glm-4-flash-250414）
 TURNSTILE_SECRET=你的Turnstile密钥       # 从 CF 面板获取
 TURNSTILE_SITE_KEY=0x4AAAA...             # 从 CF 面板获取
 PIXABAY_API_KEY=你的Pixabay密钥            # 从 pixabay.com/api/docs 免费获取
@@ -267,6 +269,8 @@ curl -X POST -H "Authorization: Bearer <管理员token>" \
 | `GROQ_API_KEY` | Groq API Key |
 | `FREEMODEL_API_KEY` | Freemodel API Key |
 | `ZEN_API_KEY` | Zen API Key（opencode.ai/zen — 聚合 AI 供应商） |
+| `ORCAROUTER_API_KEY` | OrcaRouter API Key（orcarouter.ai — 聚合 AI 供应商，含免费模型） |
+| `ZHIPU_API_KEY` | 智谱 AI API Key（open.bigmodel.cn — GLM 免费模型） |
 | `TURNSTILE_SECRET` | Turnstile 验证码密钥 |
 | `TURNSTILE_SITE_KEY` | Turnstile 站点 Key |
 | `PIXABAY_API_KEY` | Pixabay 免费图库 Key（无图新闻自动配图） |
