@@ -249,7 +249,7 @@ export default {
         if (event.cron === '0 * * * *') {
             console.log('Fetch cron fired, fetching news...');
             // skipSummary=true：抓取只入队 fetch_source，摘要全部交给 summary cron
-            // (15 * * * *)。之前 skipSummary=false 会让 saveNewsItems 为每条新文章同步
+            // (*/5 * * * *)。之前 skipSummary=false 会让 saveNewsItems 为每条新文章同步
             // 入队 generate_summary，consumer 处理时每条遍历 8 providers×2 models
             // 的外部 fetch 会爆 Worker 50-subrequest 限制（实测每小时 40-53 次
             // "Too many subrequests"），堆积的毒消息把 fetch_source 挤到队尾饿死。
@@ -264,7 +264,7 @@ export default {
             ctx.waitUntil(generateDailyDigest(env).then(r => console.log(`Digest: ${r ? 'generated' : 'skipped'}`)));
             console.log('Daily digest email cron fired, sending emails...');
             ctx.waitUntil(sendDailyDigest(env).then(r => console.log(`Digest: sent=${r.sent}, failed=${r.failed}`)));
-        } else if (event.cron === '15 * * * *') {
+        } else if (event.cron === '*/5 * * * *') {
             // Summary cron: 唯一生成摘要的入口（fetch cron 已 skipSummary=true，
             // 不再入队 generate_summary）。独立调度保证每次调用有自己的 subrequest 预算。
             console.log('Summary cron fired, generating pending summaries...');
