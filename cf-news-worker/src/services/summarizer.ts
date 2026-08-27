@@ -127,9 +127,9 @@ export async function generateSummaryForNews(env: Bindings, newsId: number, item
 //   large — 只有大 context / 大 max_output 的模型（如 zen 1M）能处理，
 //           输出上限充足时一次塞入更多文章，减少请求次数对抗限流。
 const DEFAULT_BATCH_SIZE = 10;
-const SMALL_BATCH_MAX = 20;   // 小批量上限：nvidia 4K 输出模型也能可靠解析
-const LARGE_BATCH_MAX = 40;   // 大批量上限：zen 1M 模型可容纳；60+ 数组模型漏条概率高，40 已翻倍于旧上限
-const LARGE_MIN_OUTPUT = 4800; // = LARGE_BATCH_MAX × 120：只有输出预算能服务整个大 batch 的模型才配 large，
+const SMALL_BATCH_MAX = 30;   // 小批量上限：deepseek-v4-flash 8K 输出可处理 30 篇
+const LARGE_BATCH_MAX = 60;   // 大批量上限：zen 1M / sensenova 131K 模型可容纳；60+ 数组模型漏条概率高
+const LARGE_MIN_OUTPUT = 4800; // = LARGE_BATCH_MAX × 80：只有输出预算能服务整个大 batch 的模型才配 large，
                                // 否则大 batch 会输出截断 → JSON 解析失败 → 白走一遍 provider 链
 const TOKENS_PER_ARTICLE = 1100; // ~1500 字符输入（中英混合保守估计）+ prompt 模板 + 每篇输出预算
 

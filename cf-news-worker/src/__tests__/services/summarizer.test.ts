@@ -29,12 +29,12 @@ describe('summarizer batch sizing', () => {
   it('sizes small batch to the weakest model and large batch to the strongest', async () => {
     await db.exec("INSERT OR REPLACE INTO app_config (key, value) VALUES ('provider_order', 'groq,zen')");
     await db.seed('provider_models', [
-      // 128K ctx / 4K out → small = min(floor(131072*0.6/1100), floor(4096/120), 20) = min(71, 34, 20) = 20
+      // 128K ctx / 4K out → small = min(floor(131072*0.6/1100), floor(4096/120), 30) = min(71, 34, 30) = 30
       { provider: 'groq', model_id: 'small-model', score: 90, enabled: 1, type: 'text', context_size: 131072, max_output: 4096 },
-      // 1M ctx / 384K out → large = min(floor(1000000*0.6/1100), floor(384000/120), 40) = min(545, 3200, 40) = 40
+      // 1M ctx / 384K out → large = min(floor(1000000*0.6/1100), floor(384000/120), 60) = min(545, 3200, 60) = 60
       { provider: 'zen', model_id: 'big-model', score: 95, enabled: 1, type: 'text', context_size: 1000000, max_output: 384000 },
     ]);
-    expect(await getBatchSizes(makeEnv())).toEqual({ large: 40, small: 20 });
+    expect(await getBatchSizes(makeEnv())).toEqual({ large: 60, small: 30 });
   });
 
   it('caps both tiers by a small max_output', async () => {
@@ -53,7 +53,7 @@ describe('summarizer batch sizing', () => {
     ]);
     // zen 全部模型不可用（限流标记/下线）→ 链上无 max_output ≥ 4800 的模型 → large 塌缩为 small
     await db.exec("DELETE FROM provider_models WHERE provider = 'zen'");
-    expect(await getBatchSizes(makeEnv())).toEqual({ large: 20, small: 20 });
+    expect(await getBatchSizes(makeEnv())).toEqual({ large: 30, small: 30 });
   });
 
   it('does not drop below 1 even for very small contexts', async () => {

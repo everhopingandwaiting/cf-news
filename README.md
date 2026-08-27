@@ -81,7 +81,7 @@ AI-generated summary of today's top news, sorted by time with language markers (
 | AI Cache | AI Gateway (caches classification, Q&A) |
 | Bot Protection | Turnstile (free, no CAPTCHA) |
 | Edge Cache | Cache API (news list 60s) |
-| Summaries | OpenRouter, NVIDIA, Mango, Zen (1M-context large-batch), OrcaRouter, Zhipu GLM (free) APIs |
+| Summaries | OpenRouter, NVIDIA, Mango, Zen (1M-context large-batch), OrcaRouter, Zhipu GLM (free), SenseNova APIs |
 | Vector | Vectorize for semantic dedup |
 | Object Storage | R2 (image proxy cache + AI illustrations) |
 | Durable Tasks | Workflows (backfill jobs) |
@@ -182,6 +182,7 @@ FREEMODEL_API_KEY=your-freemodel-key
 ZEN_API_KEY=your-zen-api-key            # from opencode.ai/zen (aggregated API: Claude/GPT/Gemini/DeepSeek/Kimi + 8 free models)
 ORCAROUTER_API_KEY=your-orcarouter-key   # from orcarouter.ai (aggregated API: Claude/GPT/Gemini/DeepSeek/Qwen; free models included)
 ZHIPU_API_KEY=your-zhipu-key             # from open.bigmodel.cn (Zhipu GLM free models: glm-4.7-flash / glm-4-flash-250414)
+SENSENOVA_API_KEY=your-sensenova-key       # from platform.sensenova.cn (token.sensenova.cn/v1: DeepSeek/SenseChat models)
 TURNSTILE_SECRET=your-turnstile-secret    # from dashboard
 TURNSTILE_SITE_KEY=0x4AAAA...            # from dashboard
 PIXABAY_API_KEY=your-pixabay-key          # from pixabay.com/api/docs (free)
@@ -280,6 +281,7 @@ The project includes a GitHub Actions workflow for automatic deployment. To use 
 | `ZEN_API_KEY` | Zen API key (opencode.ai/zen — aggregated AI provider) |
 | `ORCAROUTER_API_KEY` | OrcaRouter API key (orcarouter.ai — aggregated AI provider, free models) |
 | `ZHIPU_API_KEY` | Zhipu AI API key (open.bigmodel.cn — GLM free models) |
+| `SENSENOVA_API_KEY` | SenseNova API key (token.sensenova.cn — DeepSeek/SenseChat models) |
 | `TURNSTILE_SECRET` | Turnstile secret key (bot protection) |
 | `TURNSTILE_SITE_KEY` | Turnstile site key |
 | `PIXABAY_API_KEY` | Pixabay free image API key (image-less news auto-illustration) |
