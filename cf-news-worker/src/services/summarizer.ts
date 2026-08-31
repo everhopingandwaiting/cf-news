@@ -475,29 +475,45 @@ export async function generatePendingSummaries(env: Bindings): Promise<void> {
     console.log('Generating pending AI summaries...');
     const db = getDb(env);
 
+    // 并行富化短文：每个 fetch 自带 10s 超时，allSettled 单个源站失败不阻塞其余。
     const shortItems = await db.all<{ id: number; title: string; url: string }>(sql`
         SELECT id, title, url FROM news_items 
         WHERE LENGTH(COALESCE(content,'')) < 300 AND LENGTH(COALESCE(description,'')) < 300
         AND url IS NOT NULL LIMIT 5
     `);
-    for (const item of shortItems) {
-        try {
-            const rich = await fetchRichArticleContent(item.url);
-            if (rich) {
-                await db.update(newsItems)
-                    .set({ content: rich.html, description: rich.text })
-                    .where(eq(newsItems.id, item.id));
-                console.log(`Enriched: "${item.title.substring(0, 40)}"`);
+    if (shortItems.length > 0) {
+        const results = await Promise.allSettled(shortItems.map(item =>
+            fetchRichArticleContent(item.url).then(async (rich) => {
+                if (rich) {
+                    await db.update(newsItems)
+                        .set({ content: rich.html, description: rich.text })
+                        .where(eq(newsItems.id, item.id));
+                    return { item, enriched: true };
+                }
+                return { item, enriched: false };
+            })
+        ));
+        for (let i = 0; i < results.length; i++) {
+            const r = results[i];
+            if (r.status === 'fulfilled') {
+                if (r.value.enriched) {
+                    console.log(`Enriched: "${r.value.item.title.substring(0, 40)}"`);
+                }
+            } else {
+                // 保留原始拒绝原因（超时 / 源站错误），便于定位是哪个源站拖慢了 enrich。
+                console.error(`Enrich failed for "${shortItems[i]?.title ?? 'unknown'}":`, r.reason);
             }
-        } catch (e) {
-            console.error(`Enrich failed for "${item.title}":`, e);
         }
     }
 
+    // 只有 content 或 description 达标（>= 300 字符）的文章才进入批量摘要路径。
+    // 短文已在上方富化/或留给 tooShort 逐条兜底，避免大量短文混入大 batch
+    // 拖垮输出预算、白烧 provider 链（曾导致 08-29 摘要停摆）。
     const items = await db.all<{ id: number; title: string; description: string | null; content: string | null }>(sql`
         SELECT n.id, n.title, n.description, n.content 
         FROM news_items n LEFT JOIN news_summaries ns ON ns.news_id = n.id 
-        WHERE ns.id IS NULL AND (n.description IS NOT NULL OR n.content IS NOT NULL)
+        WHERE ns.id IS NULL
+        AND (LENGTH(COALESCE(n.content,'')) >= 300 OR LENGTH(COALESCE(n.description,'')) >= 300)
         AND n.created_at >= datetime('now', '-7 days')
         ORDER BY n.created_at DESC
         LIMIT 40

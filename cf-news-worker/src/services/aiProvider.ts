@@ -3,7 +3,12 @@ import { eq, sql } from 'drizzle-orm';
 import { getDb } from '../db';
 import { appConfig, providerModels, providers, aiCallLog } from '../db/schema';
 
-const DEFAULT_FAILED_MODEL_TTL_SECONDS = 900;
+const DEFAULT_FAILED_MODEL_TTL_SECONDS = 120;
+// Key 失效（401/403）是 Provider 级问题：Key 属于整个 Provider，不是某个模型。
+// 一旦 Key 无效/过期/无权，该 Provider 的每个模型都会同样失败，逐个撞墙纯属
+// 白烧 subrequest。因此直接长时间（默认 7 天）禁用整条 Provider 链，直到手动
+// 更换 Key 后手动解除禁用（或等待 TTL 到期自动恢复）。
+const DEFAULT_PROVIDER_DISABLE_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 export async function getConfig(env: Bindings, key: string): Promise<string | null> {
     const db = getDb(env);
@@ -62,11 +67,16 @@ export async function getModelSpecs(env: Bindings, provider: string, type?: stri
 }
 
 export async function getModels(env: Bindings, provider: string, type?: string): Promise<string[]> {
+    if (await isProviderDisabled(env, provider)) return [];
     if (await isProviderBlocked(env, provider)) return [];
     return (await getModelSpecs(env, provider, type)).map(s => s.model_id);
 }
 
 export async function getProviderInfo(env: Bindings, name: string): Promise<{ base_url: string; api_key: string } | null> {
+    if (await isProviderDisabled(env, name)) {
+        console.log(`Provider ${name} disabled (key invalid)`);
+        return null;
+    }
     const db = getDb(env);
     try {
         const row = await db.select({
@@ -187,6 +197,41 @@ export async function isProviderBlocked(env: Bindings, provider: string): Promis
     return failed.includes(PROVIDER_BLOCK_MODEL);
 }
 
+// Key 失效持久化：存到独立的 `ai_provider_disabled` key（JSON { provider: epoch }），
+// 与限流用的 `ai_failed_models` 分离，语义更清晰，也便于手动解除（删除该 key）。
+async function readDisabled(env: Bindings): Promise<Record<string, number>> {
+    try {
+        const db = getDb(env);
+        const row = await db.select({ value: appConfig.value })
+            .from(appConfig)
+            .where(eq(appConfig.key, 'ai_provider_disabled'))
+            .get();
+        if (row && typeof row.value === 'string' && row.value.startsWith('{')) {
+            return JSON.parse(row.value);
+        }
+    } catch {}
+    return {};
+}
+
+export async function isProviderDisabled(env: Bindings, provider: string): Promise<boolean> {
+    const map = await readDisabled(env);
+    if (!(provider in map)) return false;
+    const ttl = await getConfigInt(env, 'ai_provider_disable_ttl_seconds', DEFAULT_PROVIDER_DISABLE_TTL_SECONDS);
+    const now = Math.floor(Date.now() / 1000);
+    return now - map[provider] < ttl;
+}
+
+export async function markProviderKeyFailed(env: Bindings, provider: string): Promise<void> {
+    try {
+        const db = getDb(env);
+        const map = await readDisabled(env);
+        map[provider] = Math.floor(Date.now() / 1000);
+        await db.run(sql`INSERT OR REPLACE INTO app_config (key, value) VALUES ('ai_provider_disabled', ${JSON.stringify(map)})`);
+    } catch (e) {
+        console.error(`markProviderKeyFailed error for ${provider}:`, e);
+    }
+}
+
 // 限流特征：HTTP 429，或响应体包含常见的 quota/rate-limit 文案。
 // 命中即整条 provider 链冷却（markProviderFailed），而不是只冷却当前模型。
 function isRateLimitError(status: number, body: string): boolean {
@@ -198,6 +243,33 @@ function isRateLimitError(status: number, body: string): boolean {
         || lower.includes('free usage exceeded')
         || lower.includes('too many requests')
         || lower.includes('insufficient_quota');
+}
+
+// Key 失效特征：HTTP 401/403，或响应体常见的鉴权失败文案。
+// 命中即长期禁用整条 provider 链（markProviderKeyFailed），不是只冷却当前模型——
+// Key 属于 Provider，任何模型用同一把 Key 都会同样失败。
+function isKeyError(status: number, body: string): boolean {
+    if (status === 401 || status === 403) return true;
+    const lower = body.toLowerCase();
+    return lower.includes('invalid api key')
+        || lower.includes('unauthorized')
+        || lower.includes('authentication failed')
+        || lower.includes('invalid key')
+        || lower.includes('forbidden');
+}
+
+// 模型级错误特征：HTTP 400/404，且响应体确认是「模型不存在/不可用/无效」，
+// 而非请求本身的其他问题（如参数错误）。这类错误是单个模型的锅，只标记该模型。
+function isModelError(status: number, body: string): boolean {
+    if (status !== 400 && status !== 404) return false;
+    const lower = body.toLowerCase();
+    return lower.includes('model not found')
+        || lower.includes('model_not_found')
+        || lower.includes('does not exist')
+        || lower.includes('model unavailable')
+        || lower.includes('unknown model')
+        || lower.includes('model not exist')
+        || lower.includes('invalid model');
 }
 
 export async function logAICall(env: Bindings, data: {
@@ -236,6 +308,7 @@ async function getMaxModelsPerProvider(env: Bindings): Promise<number> {
 }
 
 export async function getAvailableModelSpecs(env: Bindings, provider: string, limit: number, type?: string): Promise<ModelSpec[]> {
+    if (await isProviderDisabled(env, provider)) return [];
     if (await isProviderBlocked(env, provider)) return [];
     const failed = new Set(await getFailed(env, provider));
     return (await getModelSpecs(env, provider, type))
@@ -271,7 +344,9 @@ export async function doOpenAICompat(
             await logAICall(env, { provider, model, news_id: options?.news_id, news_title: options?.news_title,
                 prompt_length: JSON.stringify(messages).length, response_length: 0, response_preview: errText,
                 duration_ms: Date.now() - start, success: false, error });
-            if (isRateLimitError(res.status, errText)) await markProviderFailed(env, provider);
+            if (isKeyError(res.status, errText)) await markProviderKeyFailed(env, provider);
+            else if (isModelError(res.status, errText)) await markFailed(env, model, provider);
+            else if (isRateLimitError(res.status, errText)) await markProviderFailed(env, provider);
             else await markFailed(env, model, provider);
             return null;
         }

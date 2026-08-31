@@ -77,6 +77,10 @@ export async function fetchRichArticleContent(url: string): Promise<{ html: stri
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
                 'Accept': 'text/html',
             },
+            // 源站挂起（接受连接但不返回）会无限阻塞 await fetch / response.text()，
+            // 从而拖垮整个 summary cron invocation（曾导致 08-29 摘要彻底停摆，全天仅 5 次 AI 调用）。
+            // 加 10s 超时：超时即 reject，由外层 catch 返回 null，绝不让单个源站卡死主流程。
+            signal: AbortSignal.timeout(10000),
         });
         if (!response.ok) return null;
         const html = await response.text();
