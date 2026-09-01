@@ -126,7 +126,7 @@ zone_id = "${ZONE_ID}"
 
 # Cron Triggers
 [triggers]
-crons = ["0 * * * *", "*/5 * * * *", "*/15 * * * *", "0 8 * * *"]
+crons = ["0 * * * *", "*/5 * * * *", "*/15 * * * *", "0 8 * * *", "0 */6 * * *"]
 
 [observability]
 enabled = true

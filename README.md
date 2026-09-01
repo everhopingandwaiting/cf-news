@@ -60,6 +60,7 @@ AI-generated summary of today's top news, sorted by time with language markers (
 - **Pixabay stock illustration** — Image-less news cards auto-filled with relevant Pixabay illustrations (downloaded to R2, hotlink-compliant). Cards show a 「配图」badge so auto-generated images are clearly distinguished from original source images
 - **Global service rankings** — Cloudflare Radar internet-service rankings supplement the trending panel
 - **Usage analytics** — Workers Analytics Engine records search hot-words and per-provider AI call stats
+- **Auto model-catalog sync** — An independent cron (`0 */6 * * *`) auto-reconciles the `provider_models` catalog against each provider's live `/models` endpoint, quality-probes new candidates (real chat completion), and prunes dead models from `ai_call_log` evidence. New models start disabled and only enable after a successful probe; never requires manual migrations
 - **Durable backfill** — Admin backfill jobs run as Cloudflare Workflows (auto-retry, survives request lifetime)
 - **Smart Placement** — Worker auto-places near upstream AI/RSS endpoints for lower latency
 - **Email unsubscribe** — Reply "退订" to digest@ and the subscription turns off (Email Routing inbound)

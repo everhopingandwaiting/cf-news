@@ -22,6 +22,7 @@ import { handleNewsQueue } from './services/queueConsumer';
 import { refreshTrendingTopics } from './services/trending';
 import { checkRadarPush } from './services/radarPush';
 import { generatePendingSummaries } from './services/summarizer';
+import { refreshModelCatalog } from './services/modelRefresher';
 
 import { handleImageProxy } from './routes/image';
 import { handleScreenshot } from './routes/screenshot';
@@ -269,6 +270,14 @@ export default {
             // 不再入队 generate_summary）。独立调度保证每次调用有自己的 subrequest 预算。
             console.log('Summary cron fired, generating pending summaries...');
             ctx.waitUntil(generatePendingSummaries(env));
+        } else if (event.cron === '0 */6 * * *') {
+            // Model-sync cron: 自动刷新 provider_models 目录（/models reconcile +
+            // 质量探针 + 证据裁剪）。独立调度（与 fetch/summary cron 分开）保证
+            // 每次调用有自己的 subrequest 预算，避免抢爆 50-subrequest 上限。
+            console.log('Model-sync cron fired, refreshing model catalog...');
+            ctx.waitUntil(refreshModelCatalog(env).then(r =>
+                console.log(`Model-sync: reconciled=${r.reconciled.length}, probed=${r.probed.length}, pruned=${r.pruned.length}`)
+            ));
         } else {
             console.log(`Unknown cron fired: ${event.cron}`);
         }
