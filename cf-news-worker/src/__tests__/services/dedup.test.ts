@@ -30,6 +30,13 @@ describe('dedup service', () => {
     db = new MockD1();
   });
 
+  it('migration 025 creates the dedup_hash index (no per-item full table scan)', async () => {
+    const { results } = await db.prepare(
+      `SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'news_items' AND name = 'idx_news_dedup_hash'`
+    ).all<{ name: string }>();
+    expect(results.some(i => i.name === 'idx_news_dedup_hash')).toBe(true);
+  });
+
   it('returns false when no existing article has the same hash', async () => {
     const isDup = await checkDuplicate(makeEnv(), 'Brand New Title', 'Fresh description');
     expect(isDup).toBe(false);

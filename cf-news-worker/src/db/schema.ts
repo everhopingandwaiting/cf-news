@@ -43,6 +43,7 @@ export const newsItems = sqliteTable('news_items', {
     created_at: text('created_at').default(sql`CURRENT_TIMESTAMP`),
     ai_search_uploaded: integer('ai_search_uploaded').default(0),
     dedup_hash: text('dedup_hash'),
+    summary_pending: integer('summary_pending').default(1),
 }, (table) => ({
     sourceIdx: uniqueIndex('idx_news_items_source').on(table.source_id),
     categoryIdx: uniqueIndex('idx_news_items_category').on(table.category),
@@ -51,6 +52,9 @@ export const newsItems = sqliteTable('news_items', {
     listIdx: uniqueIndex('idx_news_items_list').on(table.is_deleted, table.created_at),
     catCreatedIdx: uniqueIndex('idx_news_items_cat_created').on(table.is_deleted, table.category, table.created_at),
     srcCreatedIdx: uniqueIndex('idx_news_items_src_created').on(table.is_deleted, table.source_id, table.created_at),
+    // 普通索引(与 schema.sql/026 迁移一致): summary_pending 的 0/1 值不唯一,
+    // 用 uniqueIndex 会让同秒 created_at 的批量清理互相冲突
+    pendingIdx: index('idx_news_items_pending').on(table.summary_pending, table.created_at),
 }));
 
 export const userFavorites = sqliteTable('user_favorites', {

@@ -52,6 +52,9 @@ ALTER TABLE news_items ADD COLUMN ai_search_uploaded INTEGER DEFAULT 0;
 -- 去重哈希列
 ALTER TABLE news_items ADD COLUMN dedup_hash TEXT;
 
+-- 摘要待处理标记: 1=待生成摘要(默认), 0=已生成(与 news_summaries 记录一致)
+ALTER TABLE news_items ADD COLUMN summary_pending INTEGER NOT NULL DEFAULT 1;
+
 -- 用户收藏表
 CREATE TABLE IF NOT EXISTS user_favorites (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -147,6 +150,12 @@ CREATE INDEX IF NOT EXISTS idx_news_items_created ON news_items(created_at DESC)
 CREATE INDEX IF NOT EXISTS idx_news_items_list ON news_items(is_deleted, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_news_items_cat_created ON news_items(is_deleted, category, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_news_items_src_created ON news_items(is_deleted, source_id, created_at DESC);
+-- 去重哈希索引：checkDuplicate/checkByHash 每条抓取都按 dedup_hash 精确查询，
+-- 无索引时为全表扫描（12万+ 行/条），是 D1 免费档读限额被打爆的根因
+CREATE INDEX IF NOT EXISTS idx_news_dedup_hash ON news_items(dedup_hash);
+-- 摘要待处理队列索引: summary 生成 cron 只扫 pending=1 的小集合,
+-- 不再做 7 天窗口 LEFT JOIN 反连接(12万+ 行全扫, D1 rows_read 元凶)
+CREATE INDEX IF NOT EXISTS idx_news_items_pending ON news_items(summary_pending, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_user_favorites_user ON user_favorites(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_read_history_user ON user_read_history(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_read_later_user ON user_read_later(user_id);
@@ -227,6 +236,8 @@ CREATE TABLE IF NOT EXISTS ai_call_log (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_ai_call_news ON ai_call_log(news_id);
+-- modelRefresher 每 6h GROUP BY provider,model 裁剪证据（WHERE created_at >= ?），无此索引=全表扫描
+CREATE INDEX IF NOT EXISTS idx_ai_call_log_created ON ai_call_log(created_at);
 
 -- Provider 配置表（模型管理）
 CREATE TABLE IF NOT EXISTS providers (

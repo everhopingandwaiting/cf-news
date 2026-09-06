@@ -252,6 +252,11 @@ Requirements:
 
         await db.run(sql`INSERT OR REPLACE INTO news_summaries (news_id, summary, illustration_url)
             VALUES (${newsId}, '', ${storedUrl})`);
+        // 插画直写后该条已不再需要摘要队列处理；清掉 pending 以免后续
+        // 批量摘要的 INSERT OR REPLACE 覆盖本行、丢掉 illustration_url
+        await db.update(newsItems)
+            .set({ summary_pending: 0 })
+            .where(eq(newsItems.id, newsId));
         return c.json({ success: true, image_url: storedUrl, cached: false });
     } catch (error) {
         return c.json({ success: false, error: String(error) }, 500);

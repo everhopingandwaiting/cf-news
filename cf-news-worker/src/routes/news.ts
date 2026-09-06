@@ -124,12 +124,14 @@ news.get('/', async (c) => {
     const whereClause = sql.join(conds, sql` AND `);
 
     try {
+        // 只在 WHERE 真正用到时才 JOIN：默认列表页零关联；nt 在条件中从未被引用，直接去掉
+        const countJoins: SQL[] = [];
+        if (lang) countJoins.push(sql`LEFT JOIN news_sources s ON n.source_id = s.id`);
+        if (hasSummary === '1' || hasSummary === '0') countJoins.push(sql`LEFT JOIN news_summaries ns ON ns.news_id = n.id`);
         const countResult = await db.all<{ total: number }>(sql`
             SELECT COUNT(*) as total
             FROM news_items n
-            LEFT JOIN news_sources s ON n.source_id = s.id
-            LEFT JOIN news_summaries ns ON ns.news_id = n.id
-            LEFT JOIN news_ai_take nt ON nt.news_id = n.id
+            ${countJoins.length > 0 ? sql.join(countJoins, sql` `) : sql``}
             WHERE ${whereClause}
         `);
         const total = countResult[0]?.total || 0;
@@ -144,7 +146,7 @@ news.get('/', async (c) => {
             LEFT JOIN news_summaries ns ON ns.news_id = n.id
             LEFT JOIN news_ai_take nt ON nt.news_id = n.id
             WHERE ${whereClause}
-            ORDER BY COALESCE(n.published_at, n.created_at) DESC
+            ORDER BY n.created_at DESC
             LIMIT ${limit} OFFSET ${offset}
         `);
 
@@ -436,15 +438,25 @@ news.get('/sources/list', async (c) => {
 });
 
 news.get('/categories/list', async (c) => {
+    const cacheVer = await c.env.KV.get('news_cache_ver').catch(() => null) || '0';
+    const cacheKey = new Request(c.req.url + '&_cv=' + cacheVer, { headers: { 'Accept': 'application/json' } });
+    const cache = caches.default;
+    const cached = await cache.match(cacheKey);
+    if (cached) return cached;
+
     const db = getDb(c.env);
     try {
         const categories = await db.all<{ category: string; count: number }>(sql`
             SELECT category, COUNT(*) as count
             FROM news_items
+            WHERE is_deleted = 0
             GROUP BY category
             ORDER BY count DESC
         `);
-        return c.json({ categories });
+        const response = c.json({ categories });
+        response.headers.set('Cache-Control', 'public, max-age=600, s-maxage=600');
+        c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+        return response;
     } catch (error) {
         console.error('Error fetching categories:', error);
         return c.json({ error: '获取分类失败' }, 500);

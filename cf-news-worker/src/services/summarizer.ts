@@ -116,6 +116,10 @@ export async function generateSummaryForNews(env: Bindings, newsId: number, item
             .values({ news_id: newsId, summary: summary.substring(0, 500) });
     }
 
+    await db.update(newsItems)
+        .set({ summary_pending: 0 })
+        .where(eq(newsItems.id, newsId));
+
     enqueueTakeAndEntities(env, newsId, item);
 
     return true;
@@ -251,6 +255,9 @@ Return: [{"summary":"<article1 summary>"},{"summary":"<article2 summary>"},...]`
             for (let i = 0; i < items.length; i++) {
                 if (summaries[i]) {
                     await db.run(sql`INSERT OR REPLACE INTO news_summaries (news_id, summary) VALUES (${items[i].id}, ${summaries[i]!.substring(0, 500)})`);
+                    await db.update(newsItems)
+                        .set({ summary_pending: 0 })
+                        .where(eq(newsItems.id, items[i].id));
                     enqueueTakeAndEntities(env, items[i].id, items[i]);
                     count++;
                 }
@@ -476,10 +483,16 @@ export async function generatePendingSummaries(env: Bindings): Promise<void> {
     const db = getDb(env);
 
     // 并行富化短文：每个 fetch 自带 10s 超时，allSettled 单个源站失败不阻塞其余。
+    // LENGTH() 谓词不可走索引——必须用 created_at 窗口 + ORDER BY created_at DESC 让
+    // idx_news_items_created 把扫描限制在近 7 天（否则每 5 分钟全表扫 news_items，
+    // D1 免费档 500 万行/天读配额会被烧穿，线上 500（08-31 曾因此停机）。
     const shortItems = await db.all<{ id: number; title: string; url: string }>(sql`
         SELECT id, title, url FROM news_items 
         WHERE LENGTH(COALESCE(content,'')) < 300 AND LENGTH(COALESCE(description,'')) < 300
-        AND url IS NOT NULL LIMIT 5
+        AND url IS NOT NULL
+        AND created_at >= datetime('now', '-7 days')
+        ORDER BY created_at DESC
+        LIMIT 5
     `);
     if (shortItems.length > 0) {
         const results = await Promise.allSettled(shortItems.map(item =>
@@ -509,13 +522,15 @@ export async function generatePendingSummaries(env: Bindings): Promise<void> {
     // 只有 content 或 description 达标（>= 300 字符）的文章才进入批量摘要路径。
     // 短文已在上方富化/或留给 tooShort 逐条兜底，避免大量短文混入大 batch
     // 拖垮输出预算、白烧 provider 链（曾导致 08-29 摘要停摆）。
+    // summary_pending=1: 反连接换成标记位 + (summary_pending, created_at DESC)
+    // 复合索引，cron 只扫极小待处理子集；写入摘要/插画成功路径都会清 0
     const items = await db.all<{ id: number; title: string; description: string | null; content: string | null }>(sql`
-        SELECT n.id, n.title, n.description, n.content 
-        FROM news_items n LEFT JOIN news_summaries ns ON ns.news_id = n.id 
-        WHERE ns.id IS NULL
-        AND (LENGTH(COALESCE(n.content,'')) >= 300 OR LENGTH(COALESCE(n.description,'')) >= 300)
-        AND n.created_at >= datetime('now', '-7 days')
-        ORDER BY n.created_at DESC
+        SELECT id, title, description, content 
+        FROM news_items 
+        WHERE summary_pending = 1
+        AND (LENGTH(COALESCE(content,'')) >= 300 OR LENGTH(COALESCE(description,'')) >= 300)
+        AND created_at >= datetime('now', '-7 days')
+        ORDER BY created_at DESC
         LIMIT 40
     `);
 
