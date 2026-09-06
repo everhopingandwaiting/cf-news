@@ -53,7 +53,9 @@ export async function getModelSpecs(env: Bindings, provider: string, type?: stri
         })
             .from(providerModels)
             .where(cond)
-            .orderBy(sql`score DESC`)
+            // 同分时付费模型优先于免费模型（is_free=0 排前），避免限流/易失效的
+            // 免费模型抢在付费主力前被调用，导致整 provider 被 429 级联封锁
+            .orderBy(sql`score DESC, is_free ASC`)
             .all();
         return rows.map(r => ({
             model_id: r.model_id,
@@ -232,19 +234,6 @@ export async function markProviderKeyFailed(env: Bindings, provider: string): Pr
     }
 }
 
-// 限流特征：HTTP 429，或响应体包含常见的 quota/rate-limit 文案。
-// 命中即整条 provider 链冷却（markProviderFailed），而不是只冷却当前模型。
-function isRateLimitError(status: number, body: string): boolean {
-    if (status === 429) return true;
-    const lower = body.toLowerCase();
-    return lower.includes('rate limit')
-        || lower.includes('rate_limit')
-        || lower.includes('quota exceeded')
-        || lower.includes('free usage exceeded')
-        || lower.includes('too many requests')
-        || lower.includes('insufficient_quota');
-}
-
 // Key 失效特征：HTTP 401/403，或响应体常见的鉴权失败文案。
 // 命中即长期禁用整条 provider 链（markProviderKeyFailed），不是只冷却当前模型——
 // Key 属于 Provider，任何模型用同一把 Key 都会同样失败。
@@ -346,7 +335,10 @@ export async function doOpenAICompat(
                 duration_ms: Date.now() - start, success: false, error });
             if (isKeyError(res.status, errText)) await markProviderKeyFailed(env, provider);
             else if (isModelError(res.status, errText)) await markFailed(env, model, provider);
-            else if (isRateLimitError(res.status, errText)) await markProviderFailed(env, provider);
+            // 限流只冷却当前模型，不整 provider 冻结：免费模型 429/配额耗尽是个别模型的锅，
+            // 若按老逻辑 markProviderFailed 会把同 provider 的付费可用模型一起冻 120s，
+            // 导致 provider_models 里出现大量 `provider:*` 级联封锁（Live D1 已证实）。
+            // Key 级错误才应触发整 provider 长期禁用（上面已单独处理）。
             else await markFailed(env, model, provider);
             return null;
         }

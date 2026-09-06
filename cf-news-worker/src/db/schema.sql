@@ -263,6 +263,10 @@ CREATE TABLE IF NOT EXISTS provider_models (
     model_id TEXT NOT NULL,
     score INTEGER DEFAULT 50,
     enabled INTEGER DEFAULT 1,
+    type TEXT NOT NULL DEFAULT 'text',
+    context_size INTEGER NOT NULL DEFAULT 131072,
+    max_output INTEGER NOT NULL DEFAULT 4096,
+    is_free INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (provider, model_id)
 );
 

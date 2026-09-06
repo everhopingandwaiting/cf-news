@@ -35,6 +35,7 @@ const DEFAULT_MAX_PROBES = 3;             // 每次 run 最多质量探针模型
 const DEFAULT_SUMMARY_WINDOW_DAYS = 2;    // 证据裁剪回看窗口（天）
 const DEFAULT_EVIDENCE_MIN_ATTEMPTS = 20; // 证据裁剪最少尝试次数
 const DEFAULT_BASELINE_SCORE = 60;        // 新启用模型的基线分（低于已验证主力 80+）
+const DEFAULT_FREE_SCORE_BONUS = 20;      // 免费模型优先级加分（免费优先于同分付费模型）
 const QUALIFY_PROMPT = 'Reply with exactly: ok';
 const QUALIFY_MAX_TOKENS = 4;
 const QUALIFY_TIMEOUT_MS = 20000;
@@ -44,6 +45,51 @@ interface LiveModel {
     contextSize?: number;
     maxOutput?: number;
     type?: string;
+    isFree?: boolean;
+    endpointTypes?: string[];
+}
+
+/**
+ * 判断一个模型是否为“免费”模型（在不同 provider 上标记不同）：
+ *  - OpenRouter: id 带 `:free` 后缀 且/或 pricing.prompt === '0'
+ *  - Zen / OrcaRouter: id 带 `-free` 后缀
+ *  - 其他：id 内含 `free` 标记
+ * 显式 `isFree`（探测时从 pricing 字段已解析）优先。
+ */
+function isFreeModel(id: string, isFree?: boolean): boolean {
+    if (isFree !== undefined) return isFree;
+    const lower = id.toLowerCase();
+    return lower.endsWith(':free') || lower.endsWith('-free') || /(^|[\/_-])(free)([\/_-]|$)/.test(lower) || /^(free\/|free-)/.test(lower);
+}
+
+/**
+ * 从模型 id 推断类型（用于完全缺失 type 字段的 provider，如 Agnes）。
+ * - 命中 `-image-` / `image` → image
+ * - 命中 `-video-` / `video` → video
+ * - 命中 `-audio-` / `tts` / `stt` / `whisper` → audio
+ * - 命中 `-embedding-` / `embed` / `rerank` → embedding
+ * - 否则 → text（生成式文本模型默认）
+ */
+function inferTypeFromId(id: string): string {
+    const lower = id.toLowerCase();
+    if (/(^|[\/_-])(image|img)([\/_-]|$)/.test(lower)) return 'image';
+    if (/(^|[\/_-])(video)([\/_-]|$)/.test(lower)) return 'video';
+    if (/(^|[\/_-])(audio|tts|stt|whisper)([\/_-]|$)/.test(lower)) return 'audio';
+    if (/(^|[\/_-])(embedding|embed|rerank|reranker)([\/_-]|$)/.test(lower)) return 'embedding';
+    return 'text';
+}
+
+/** 固定的生成式文本/图片模型类型（可作为 AI 摘要/问答候选） */
+const GENERATIVE_TYPES = new Set(['text', 'chat', 'llm']);
+
+/** 判断 live 模型的 endpoint 是否支持 OpenAI 兼容 chat（用于可用性校验） */
+function isChatCallable(endpointTypes?: string[]): boolean {
+    if (!endpointTypes || endpointTypes.length === 0) return true; // 缺失字段 → 假定可用
+    const lower = endpointTypes.map((t) => t.toLowerCase());
+    return lower.some((t) =>
+        t.includes('chat') || t.includes('text') || t.includes('openai') ||
+        t.includes('reasoning') || t === 'llm' || t === 'completion'
+    );
 }
 
 /**
@@ -67,7 +113,7 @@ async function readCatalog(env: Bindings): Promise<Map<string, Map<string, {
     for (const r of rows) {
         if (!map.has(r.provider)) map.set(r.provider, new Map());
         map.get(r.provider)!.set(r.model_id, {
-            score: r.score ?? 50,
+            score: r.score ?? DEFAULT_BASELINE_SCORE,
             enabled: r.enabled ?? 1,
             type: r.type ?? 'text',
             context_size: r.context_size ?? 131072,
@@ -99,14 +145,25 @@ async function probeModels(env: Bindings, provider: string): Promise<LiveModel[]
         const body: any = await res.json();
         const list: any[] = Array.isArray(body) ? body : (body?.data ?? []);
         return list.map((m) => {
-            const id = typeof m === 'string' ? m : (m?.id ?? '');
+            const id = String(typeof m === 'string' ? m : (m?.id ?? ''));
             const ctx = m?.context_length ?? m?.context_window ?? m?.max_context ?? (m?.meta?.['max_context']);
             const out = m?.max_output_tokens ?? m?.max_tokens ?? m?.meta?.['max_output_tokens'];
+            // pricing.prompt === '0' → 免费（OpenRouter 等）；Agnes 无 pricing 字段 → undefined
+            const pricingPrompt = m?.pricing?.prompt;
+            const isFree = typeof pricingPrompt === 'number' ? pricingPrompt === 0
+                : (typeof pricingPrompt === 'string' && pricingPrompt === '0');
+            const endpointTypes = Array.isArray(m?.supported_endpoint_types)
+                ? m.supported_endpoint_types.map((t: any) => String(t))
+                : undefined;
+            let type = m?.type && typeof m.type === 'string' ? m.type : '';
+            if (!type) type = inferTypeFromId(id); // 修复：Agnes 等缺失 type 字段时按 id 推断
             return {
-                id: String(id),
+                id,
                 contextSize: typeof ctx === 'number' ? ctx : undefined,
                 maxOutput: typeof out === 'number' ? out : undefined,
-                type: m?.type && typeof m.type === 'string' ? m.type : 'text',
+                type,
+                isFree: isFreeModel(id, isFree),
+                endpointTypes,
             };
         }).filter(m => m.id.length > 0);
     } catch (e) {
@@ -215,35 +272,42 @@ export async function refreshModelCatalog(env: Bindings): Promise<{ reconciled: 
             if (providerCatalog.has(modelId)) continue;
             // 过滤明显的非生成模型（embedding/router/rerank 等）
             const t = (liveMeta.type || 'text').toLowerCase();
-            if (t && t !== 'text' && t !== 'chat' && t !== 'llm') continue;
+            if (t && !GENERATIVE_TYPES.has(t)) continue;
+            // 可用性校验：显式 empty supported_endpoint_types → 非 OpenAI chat 可调用（如 image/video 专用）
+            if (!isChatCallable(liveMeta.endpointTypes)) continue;
             await db.run(sql`INSERT OR IGNORE INTO provider_models
-                (provider, model_id, score, enabled, type, context_size, max_output)
-                VALUES (${provider}, ${modelId}, ${DEFAULT_BASELINE_SCORE}, 0, 'text', ${liveMeta.contextSize ?? 131072}, ${liveMeta.maxOutput ?? 4096})`);
+                (provider, model_id, score, enabled, type, context_size, max_output, is_free)
+                VALUES (${provider}, ${modelId}, ${DEFAULT_BASELINE_SCORE}, 0, ${t || 'text'}, ${liveMeta.contextSize ?? 131072}, ${liveMeta.maxOutput ?? 4096}, ${liveMeta.isFree ? 1 : 0})`);
             reconciled.push(`new:${provider}/${modelId}`);
-            console.log(`[modelRefresher] discovered ${provider}/${modelId} → candidate (disabled)`);
+            console.log(`[modelRefresher] discovered ${provider}/${modelId} → candidate (disabled, free=${liveMeta.isFree ? 1 : 0})`);
         }
-    }
 
-    // ③ 质量探针：对「目录里 enabled=0、live 且有 key、近期未试过」的候选取一小批探测
-    if (probesUsed < maxProbes) {
-        for (const provider of providersToSync) {
-            if (probesUsed >= maxProbes) break;
+        // ③ 质量探针：对「目录里 enabled=0、live 且有 key、近期未试过」的候选取一小批探测
+        const freeBonus = await getConfigInt(env, 'model_sync_free_score_bonus', DEFAULT_FREE_SCORE_BONUS);
+        if (probesUsed < maxProbes) {
             const info = await getProviderInfo(env, provider);
             if (!info) continue;
-            const providerCatalog = catalog.get(provider) || new Map();
-
-            // 收集该 provider 的未启用且可能可用的候选（排除明确类型非 text 的）
-            const candidates: { model_id: string }[] = [];
-            for (const [modelId, meta] of providerCatalog.entries()) {
-                if (meta.enabled !== 0) continue;
-                const t = (meta.type || '').toLowerCase();
-                if (t && t !== 'text' && t !== 'chat' && t !== 'llm') continue;
-                candidates.push({ model_id: modelId });
-            }
-
-            // 跳过近期已探针失败过的（默认 1 天内不重试）
             const now = Math.floor(Date.now() / 1000);
             const cooldown = await getConfigInt(env, 'model_sync_probe_cooldown', 86400);
+
+            // 候选：未启用、类型为生成式、endpoint 可 chat 调用（免费优先）
+            const candidates: { model_id: string; isFree: boolean }[] = [];
+            for (const [modelId, meta] of providerCatalog.entries()) {
+                if (meta.enabled !== 0) continue;
+                const lm = liveById.get(modelId);
+                if (!lm) continue;
+                const t = (lm.type || meta.type || '').toLowerCase();
+                if (t && !GENERATIVE_TYPES.has(t)) continue;
+                if (!isChatCallable(lm.endpointTypes)) continue;
+                candidates.push({ model_id: modelId, isFree: !!lm.isFree });
+            }
+            // 免费优先：免费候选排到前面，确保优先探测（用户需求：优先用 Free 模型）
+            candidates.sort((a, b) => Number(b.isFree) - Number(a.isFree));
+
+            if (candidates.length > 0 && candidates.length < 5) {
+                console.log(`[modelRefresher] ${provider}: only ${candidates.length} candidate(s) — consider verifying availability manually`);
+            }
+
             for (const cand of candidates) {
                 if (probesUsed >= maxProbes) break;
                 const last = await readProbeTs(env, provider, cand.model_id);
@@ -254,11 +318,12 @@ export async function refreshModelCatalog(env: Bindings): Promise<{ reconciled: 
                 await writeProbeTs(env, provider, cand.model_id);
                 if (ok) {
                     const baseline = await getConfigInt(env, 'model_sync_baseline_score', DEFAULT_BASELINE_SCORE);
+                    const score = cand.isFree ? baseline + freeBonus : baseline;
                     await db.update(providerModels)
-                        .set({ enabled: 1, score: baseline })
+                        .set({ enabled: 1, score })
                         .where(sql`provider = ${provider} AND model_id = ${cand.model_id}`);
                     probed.push(`enable:${provider}/${cand.model_id}`);
-                    console.log(`[modelRefresher] ${provider}/${cand.model_id} probe OK → enabled (score=${baseline})`);
+                    console.log(`[modelRefresher] ${provider}/${cand.model_id} probe OK → enabled (score=${score}${cand.isFree ? ', free bonus' : ''})`);
                 } else {
                     probed.push(`keep-disabled:${provider}/${cand.model_id}`);
                     console.log(`[modelRefresher] ${provider}/${cand.model_id} probe FAILED → stays disabled`);

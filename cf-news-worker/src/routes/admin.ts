@@ -3,6 +3,7 @@ import { Bindings } from '../types';
 import { fetchSourceNews } from '../services/newsFetcher';
 import { storeDedupHash } from '../services/dedup';
 import { extractEntities } from '../services/entityExtractor';
+import { refreshModelCatalog } from '../services/modelRefresher';
 import { eq, desc, sql, and, ne } from 'drizzle-orm';
 import { getDb } from '../db';
 import { newsSources, newsItems, newsFts } from '../db/schema';
@@ -290,6 +291,21 @@ admin.post('/backfill-entities', async (c) => {
     // 调度 durable Workflow：游标升序扫描缺失实体的条目，单条失败在 step 内捕获不重试整批
     await c.env.BACKFILL_WORKFLOW.create({ params: { type: 'entities', batchSize: 50 } });
     return c.json({ success: true, message: 'Entity backfill scheduled via Workflow' });
+});
+
+// Manually trigger a model-catalog refresh (reconcile + quality probe + evidence pruning).
+// Runs in the background via waitUntil — model sync does live /models + chat probes and
+// must not block the HTTP request.
+admin.post('/refresh-models', async (c) => {
+    c.executionCtx.waitUntil((async () => {
+        try {
+            const r = await refreshModelCatalog(c.env);
+            console.log(`[admin] model refresh complete: ${r.reconciled.length} reconciled, ${r.probed.length} probed, ${r.pruned.length} pruned`);
+        } catch (e) {
+            console.error('[admin] model refresh failed:', e);
+        }
+    })());
+    return c.json({ success: true, message: 'Model catalog refresh started in background' });
 });
 
 export default admin;

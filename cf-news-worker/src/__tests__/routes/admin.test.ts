@@ -230,4 +230,27 @@ describe('Admin API - Advanced operations', () => {
     expect(status).toBe(200);
     expect(body.success).toBe(true);
   });
+
+  it('POST /api/admin/refresh-models - returns 401 without auth header', async () => {
+    const { status } = await request(app, db, '/api/admin/refresh-models', { method: 'POST' });
+    expect(status).toBe(401);
+  });
+
+  it('POST /api/admin/refresh-models - returns 403 for non-admin token', async () => {
+    const userToken = await makeToken({ role: 'user' });
+    const { status } = await request(app, db, '/api/admin/refresh-models', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${userToken}` },
+    });
+    expect(status).toBe(403);
+  });
+
+  it('POST /api/admin/refresh-models - starts model refresh for admin', async () => {
+    const { status, body } = await request(app, db, '/api/admin/refresh-models', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    expect(status).toBe(200);
+    expect(body.success).toBe(true);
+  });
 });

@@ -199,6 +199,45 @@ describe('modelRefresher quality probe (质量探针)', () => {
     expect(chatCalls).toHaveLength(2);
     expect(result.probed).toHaveLength(2);
   });
+
+  it('gives a free candidate the free score bonus when enabled', async () => {
+    await seedProvider('testprov', [{ model_id: 'free-model', enabled: 0, type: 'text' }]);
+    stubFetch(makeEnv(), [{ id: 'free-model', type: 'text', pricing: { prompt: '0' } }], true);
+    const env = makeEnv({ TEST_KEY: 'key' });
+
+    const result = await refreshModelCatalog(env);
+    expect(result.probed).toContain('enable:testprov/free-model');
+
+    const row = await db.prepare(
+      "SELECT enabled, score FROM provider_models WHERE provider = 'testprov' AND model_id = 'free-model'",
+    ).first<any>();
+    expect(row.enabled).toBe(1);
+    // baseline 60 + free bonus 20
+    expect(row.score).toBe(80);
+  });
+
+  it('probes free candidates before paid ones when probe budget is limited', async () => {
+    await seedProvider('testprov', [
+      { model_id: 'paid-model', enabled: 0, type: 'text' },
+      { model_id: 'free-model', enabled: 0, type: 'text' },
+    ]);
+    await db.exec("INSERT OR REPLACE INTO app_config (key, value) VALUES ('model_sync_max_probes', '1')");
+    const fetchMock = stubFetch(makeEnv(), [
+      { id: 'paid-model', type: 'text' },
+      { id: 'free-model', type: 'text', pricing: { prompt: '0' } },
+    ], true);
+    const env = makeEnv({ TEST_KEY: 'key' });
+
+    const result = await refreshModelCatalog(env);
+    const chatCalls = fetchMock.mock.calls.filter((c) => String(c[0]).endsWith('/chat/completions'));
+    expect(chatCalls).toHaveLength(1);
+    expect(result.probed).toEqual(['enable:testprov/free-model']);
+
+    const paid = await db.prepare(
+      "SELECT enabled FROM provider_models WHERE provider = 'testprov' AND model_id = 'paid-model'",
+    ).first<any>();
+    expect(paid.enabled).toBe(0);
+  });
 });
 
 describe('modelRefresher evidence pruning (证据裁剪)', () => {

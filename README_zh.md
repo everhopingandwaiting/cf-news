@@ -52,7 +52,7 @@
 - **Pixabay 图库配图** — 无图新闻卡片自动填充相关 Pixabay 插画（下载到 R2 自托管，符合热链规范）；卡片显示「配图」标记，明确区分自动生成图与源站原图
 - **全球服务排行** — Cloudflare Radar 互联网服务排名补充趋势面板
 - **使用分析** — Workers Analytics Engine 记录搜索热词与各 provider AI 调用统计
-- **自动模型目录同步** — 独立定时任务（`0 */6 * * *`）自动将 `provider_models` 目录与各 provider 的 live `/models` 端点校准，对新候选做真实质量探针，并根据 `ai_call_log` 证据裁剪死模型。新模型默认禁用，只有探针成功才启用，无需手动迁移
+- **自动模型目录同步** — 独立定时任务（`0 */6 * * *`）自动将 `provider_models` 目录与各 provider 的 live `/models` 端点校准，对新候选做真实质量探针，并根据 `ai_call_log` 证据裁剪死模型。自动识别免费模型（OpenRouter `:free`、Zen/OrcaRouter `-free`、零价），并优先探测、给予加分使其优先于同类付费模型。新模型默认禁用，只有探针成功才启用，无需手动迁移。也可通过 `POST /api/admin/refresh-models` 手动触发
 - **可靠回填** — 后台回填任务改为 Cloudflare Workflows（自动重试、跨请求存活）
 - **Smart Placement** — Worker 自动靠近上游 AI/RSS 端点，降低延迟
 - **邮件退订** — 回复 "退订" 到 digest@ 即可关闭每日摘要（Email Routing 入站）
@@ -432,6 +432,7 @@ cf-news/
 | GET | `/api/admin/stats` | 源统计信息 |
 | POST | `/api/admin/backfill-vectors` | 为旧新闻回填语义去重向量（后台，每批 500 条） |
 | POST | `/api/admin/backfill-entities` | 为缺少实体的新闻回填结构化实体抽取（后台，每批 50 条） |
+| POST | `/api/admin/refresh-models` | 手动触模型目录同步（校准 + 质量探针 + 证据裁剪，后台） |
 
 ## 添加 RSS 源
 

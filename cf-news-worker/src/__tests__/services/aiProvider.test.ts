@@ -87,6 +87,18 @@ describe('aiProvider model/provider lookup', () => {
     ]);
   });
 
+  it('getModelSpecs breaks score ties with paid models first (is_free=0 before is_free=1)', async () => {
+    // 同分时付费模型必须排在免费模型前，避免限流/易失效的免费模型抢在主力前被调用，
+    // 导致整 provider 被 429 级联封锁（回归测试，对应 aiProvider.ts 的 is_free ASC 排序）
+    await db.seed('provider_models', [
+      { provider: 'testprov', model_id: 'paid-tie', score: 80, enabled: 1, type: 'text', is_free: 0 },
+      { provider: 'testprov', model_id: 'free-tie', score: 80, enabled: 1, type: 'text', is_free: 1 },
+      { provider: 'testprov', model_id: 'free-lower', score: 70, enabled: 1, type: 'text', is_free: 1 },
+      { provider: 'testprov', model_id: 'paid-lower', score: 70, enabled: 1, type: 'text', is_free: 0 },
+    ]);
+    expect(await getModels(makeEnv(), 'testprov')).toEqual(['paid-tie', 'free-tie', 'paid-lower', 'free-lower']);
+  });
+
   it('getAvailableModelSpecs excludes failed models and returns specs in score order', async () => {
     await db.seed('provider_models', [
       { provider: 'groq', model_id: 'model-a', score: 90, enabled: 1, type: 'text', context_size: 131072, max_output: 4096 },
@@ -269,19 +281,19 @@ describe('aiProvider direct calls', () => {
     expect(await getFailed(makeEnv(), 'groq')).toEqual(['model-a']);
   });
 
-  it('doOpenAICompat blocks the whole provider on HTTP 429 rate limit', async () => {
+  it('doOpenAICompat cools only the model on HTTP 429 rate limit, not the whole provider', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{"error":{"message":"Rate limit reached"}}', { status: 429 })));
     const result = await doOpenAICompat(makeEnv(), 'zen', 'https://opencode.ai/zen/v1', 'key', 'free-model', [{ role: 'user', content: 'hi' }]);
     expect(result).toBeNull();
-    expect(await isProviderBlocked(makeEnv(), 'zen')).toBe(true);
-    expect(await getModels(makeEnv(), 'zen')).toEqual([]);
+    expect(await isProviderBlocked(makeEnv(), 'zen')).toBe(false);
+    expect(await getFailed(makeEnv(), 'zen')).toEqual(['free-model']);
   });
 
-  it('doOpenAICompat blocks the whole provider on "Free usage exceeded" body', async () => {
+  it('doOpenAICompat cools only the model on "Free usage exceeded" body, not the whole provider', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('Free usage exceeded', { status: 402 })));
     const result = await doOpenAICompat(makeEnv(), 'zen', 'https://opencode.ai/zen/v1', 'key', 'free-model', [{ role: 'user', content: 'hi' }]);
     expect(result).toBeNull();
-    expect(await isProviderBlocked(makeEnv(), 'zen')).toBe(true);
+    expect(await isProviderBlocked(makeEnv(), 'zen')).toBe(false);
   });
 
   it('doOpenAICompat only marks the model on 500, not the whole provider', async () => {
