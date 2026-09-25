@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { buildTestApp, request } from '../helpers';
+import { buildTestApp, request, MOCK_ENV } from '../helpers';
 
 describe('Health endpoint', () => {
   let app: ReturnType<typeof buildTestApp>['app'];
@@ -48,5 +48,35 @@ describe('Health endpoint', () => {
     expect(status).toBe(200);
     expect(body.ok).toBe(true);
     expect(body.problems).toEqual([]);
+  });
+
+  it('GET /api/health/feed returns 503 when D1 is unavailable', async () => {
+    const originalPrepare = db.prepare.bind(db);
+    db.prepare = () => { throw new Error('D1 unavailable (simulated)'); };
+    try {
+      const { status, body } = await request(app, db, '/api/health/feed');
+      expect(status).toBe(503);
+      expect(body.error).toBe('D1 unavailable');
+    } finally {
+      db.prepare = originalPrepare;
+    }
+  });
+
+  it('GET /api/health/feed uses KV heartbeat without D1 cron_heartbeat row', async () => {
+    await db.seed('news_items', [
+      { id: 3, source_id: 1, title: 'Fresh for KV', url: 'https://h/3', category: 'tech', is_deleted: 0, created_at: new Date().toISOString() },
+    ]);
+    const originalGet = MOCK_ENV.KV.get;
+    MOCK_ENV.KV.get = async (key: string) =>
+      key === 'cron_hb:0 * * * *' ? new Date().toISOString() : null;
+    try {
+      const { status, body } = await request(app, db, '/api/health/feed');
+      expect(status).toBe(200);
+      expect(body.ok).toBe(true);
+      expect(body.problems).toEqual([]);
+      expect(body.lastFetchCronAt).toBeTruthy();
+    } finally {
+      MOCK_ENV.KV.get = originalGet;
+    }
   });
 });

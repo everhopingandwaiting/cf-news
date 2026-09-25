@@ -232,5 +232,11 @@ export class MockD1 {
         values,
       );
     }
+
+    // 直接 seed news_items 会绕过 saveNewsItems 的计数器维护：
+    // 删除计数缓存行，让 /api/news 在下次请求时重算真实值（与线上 TTL 自愈语义一致）
+    if (table === 'news_items') {
+      this._db.run("DELETE FROM kv_cache WHERE cache_key = 'news_items_active_count'");
+    }
   }
 }

@@ -97,4 +97,30 @@ describe('generatePendingSummaries filtering', () => {
     expect(fetchRichMock).toHaveBeenCalledTimes(1);
     expect(callAI).toHaveBeenCalled();
   });
+
+  it('skips the enrichment scan when the KV 15-minute throttle is fresh', async () => {
+    await seedNewsItem({ title: 'short', url: 'https://example.com/short', content: 'x'.repeat(50), description: null });
+    const kv = {
+      get: async () => String(Date.now()), // 刚扫过 → 门控关闭
+      put: async () => {},
+    };
+
+    await generatePendingSummaries(makeEnv({ KV: kv }));
+
+    expect(fetchRichMock).not.toHaveBeenCalled();
+  });
+
+  it('runs the enrichment scan and refreshes the KV timestamp when the throttle is stale', async () => {
+    await seedNewsItem({ title: 'short', url: 'https://example.com/short', content: 'x'.repeat(50), description: null });
+    const put = vi.fn(async () => {});
+    const kv = {
+      get: async () => String(Date.now() - 16 * 60 * 1000), // 超过 15 分钟 → 到期
+      put,
+    };
+
+    await generatePendingSummaries(makeEnv({ KV: kv }));
+
+    expect(fetchRichMock).toHaveBeenCalledTimes(1);
+    expect(put).toHaveBeenCalledTimes(1);
+  });
 });

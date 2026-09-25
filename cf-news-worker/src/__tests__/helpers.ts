@@ -4,6 +4,7 @@ import { sql, eq } from 'drizzle-orm';
 import { MockD1 } from './mock-d1';
 import { getDb } from '../db';
 import { newsItems, cronHeartbeat } from '../db/schema';
+import { resetStopWordsCache } from '../services/stopWordsCache';
 import authRoutes, { verifyJWT } from '../routes/auth';
 import newsRoutes from '../routes/news';
 import favoritesRoutes from '../routes/favorites';
@@ -56,6 +57,7 @@ export const MOCK_ENV: Record<string, any> = {
 
 /** Build a test Hono app with all routes and mock env */
 export function buildTestApp() {
+  resetStopWordsCache(); // isolate-level cache would leak stop_words across MockD1 seeds
   const db = new MockD1();
 
   const app = new Hono<{ Bindings: Record<string, any> }>();
@@ -103,17 +105,37 @@ export function buildTestApp() {
       return Number.isFinite(ms) ? ms : 0;
     };
 
-    const newsRow = await db.select({ ts: newsItems.created_at })
-      .from(newsItems).orderBy(sql`created_at DESC`).limit(1).get();
+    // Mirror production: D1 failure → 503 so monitors can distinguish transient quota errors
+    let newsRow;
+    try {
+      newsRow = await db.select({ ts: newsItems.created_at })
+        .from(newsItems).orderBy(sql`created_at DESC`).limit(1).get();
+    } catch (e) {
+      return c.json({ error: 'D1 unavailable', detail: String(e), timestamp: new Date().toISOString() }, 503);
+    }
     const lastNewsMs = parseTs(newsRow?.ts ?? null);
     const newsAgeMin = lastNewsMs ? Math.round((now - lastNewsMs) / 60000) : -1;
     if (newsAgeMin < 0 || newsAgeMin > 360) {
       problems.push(`news_items stale (age=${newsAgeMin}min)`);
     }
 
-    const hbRow = await db.select({ ts: cronHeartbeat.last_fired_at })
-      .from(cronHeartbeat).where(eq(cronHeartbeat.cron_name, '0 * * * *')).get();
-    const hbMs = parseTs(hbRow?.ts ?? null);
+    // KV-first heartbeat (cron write path puts cron_hb:{cron} first), D1 fallback on miss
+    let hbTs: string | null = null;
+    try {
+      hbTs = await c.env.KV.get('cron_hb:0 * * * *');
+    } catch {
+      // KV unavailable — fall through to D1
+    }
+    if (!hbTs) {
+      try {
+        const hbRow = await db.select({ ts: cronHeartbeat.last_fired_at })
+          .from(cronHeartbeat).where(eq(cronHeartbeat.cron_name, '0 * * * *')).get();
+        hbTs = hbRow?.ts || null;
+      } catch (e) {
+        return c.json({ error: 'D1 unavailable', detail: String(e), timestamp: new Date().toISOString() }, 503);
+      }
+    }
+    const hbMs = hbTs ? parseTs(hbTs) : 0;
     const hbAgeMin = hbMs ? Math.round((now - hbMs) / 60000) : -1;
     if (hbAgeMin < 0 || hbAgeMin > 120) {
       problems.push(`fetch cron heartbeat stale (age=${hbAgeMin}min)`);
@@ -123,7 +145,7 @@ export function buildTestApp() {
       ok: problems.length === 0,
       lastNewsAt: newsRow?.ts || null,
       newsAgeMinutes: newsAgeMin,
-      lastFetchCronAt: hbRow?.ts || null,
+      lastFetchCronAt: hbTs || null,
       fetchCronAgeMinutes: hbAgeMin,
       problems,
       timestamp: new Date().toISOString(),

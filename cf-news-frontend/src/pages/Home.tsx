@@ -45,6 +45,8 @@ export default function Home() {
   const [lang, setLang] = useState<string>('');
   const [filterSummary, setFilterSummary] = useState<string | undefined>(undefined);
   const [search, setSearch] = useState('');
+  // 防抖后的已应用搜索词：停止输入 400ms 后才生效，避免每个按键都触发一次搜索请求（CJK LIKE 全表扫描）
+  const [searchQuery, setSearchQuery] = useState('');
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState<Pagination | null>(null);
   const [loading, setLoading] = useState(true);
@@ -151,11 +153,17 @@ export default function Home() {
     }
   }, []);
 
-  // Load news when filters change
+  // 搜索防抖：输入停止 400ms 后才把 search 应用为 searchQuery（回车/面板搜索会立即应用，见 onSearch）
+  useEffect(() => {
+    const t = setTimeout(() => setSearchQuery(search), 400);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  // Load news when filters change（searchQuery = 防抖后的搜索词）
   useEffect(() => { (async () => {
     const items = await loadNews();
     if (items.length > 0 && page === 1) latestIdRef.current = Math.max(...items.map(n => n.id));
-  })(); }, [category, sourceId, search, filterSummary, page, lang]);
+  })(); }, [category, sourceId, searchQuery, filterSummary, page, lang]);
 
   function selectNews(item: NewsItem) {
     setSelectedNews(item);
@@ -172,7 +180,7 @@ export default function Home() {
   const loadNews = useCallback(async (pg?: number): Promise<NewsItem[]> => {
     setLoading(true);
     try {
-      const data = await getNews({ category: category === 'all' ? undefined : category, source_id: sourceId ?? undefined, search: search || undefined, lang, has_summary: filterSummary, page: pg || page, limit: 20 });
+      const data = await getNews({ category: category === 'all' ? undefined : category, source_id: sourceId ?? undefined, search: searchQuery || undefined, lang, has_summary: filterSummary, page: pg || page, limit: 20 });
       setNews(data.news); setPagination(data.pagination); return data.news;
     } catch (err: any) {
       const status = err?.response?.status;
@@ -186,7 +194,7 @@ export default function Home() {
       showToast(message, 'error');
       return [];
     } finally { setLoading(false); }
-  }, [category, sourceId, search, filterSummary, page, lang]);
+  }, [category, sourceId, searchQuery, filterSummary, page, lang]);
 
   useEffect(() => {
     const interval = setInterval(async () => {
@@ -358,7 +366,7 @@ export default function Home() {
         onQA={() => setShowQA(true)}
         onLogin={() => setShowAuth(true)} onRegister={() => setShowAuth(true)}
         onRefresh={handleRefresh} onLogout={handleLogout}
-        onSearchChange={setSearch} onSearch={() => { setPage(1); loadNews(); }}
+        onSearchChange={setSearch} onSearch={() => { setSearchQuery(search); setPage(1); }}
         onLangChange={v => { setLang(v); setPage(1); }}
         onSourceChange={id => { setSourceId(id); setPage(1); }}
         showManager={showManager} onManageSources={() => setShowManager(!showManager)}
@@ -468,8 +476,8 @@ export default function Home() {
       )}
       <AuthModal visible={showAuth} onClose={() => setShowAuth(false)} onLoginSuccess={handleLoginSuccess} />
       <Suspense fallback={null}><NewsQA visible={showQA} onClose={() => setShowQA(false)} token={token} /></Suspense>
-      <Suspense fallback={null}><ExplorePanel visible={showExplore} token={token} search={search} activeCategory={category} onClose={() => setShowExplore(false)} onSelectArticle={selectNews} onSearch={keyword => { setSearch(keyword); setPage(1); }} onAuthRequired={() => setShowAuth(true)} /></Suspense>
-      <TrendingPanel visible={showTrending} onClose={() => setShowTrending(false)} onSearch={keyword => { setSearch(keyword); setPage(1); }} onSelectArticle={selectNews} />
+      <Suspense fallback={null}><ExplorePanel visible={showExplore} token={token} search={search} activeCategory={category} onClose={() => setShowExplore(false)} onSelectArticle={selectNews} onSearch={keyword => { setSearch(keyword); setSearchQuery(keyword); setPage(1); }} onAuthRequired={() => setShowAuth(true)} /></Suspense>
+      <TrendingPanel visible={showTrending} onClose={() => setShowTrending(false)} onSearch={keyword => { setSearch(keyword); setSearchQuery(keyword); setPage(1); }} onSelectArticle={selectNews} />
       <NewsDetailModal item={selectedNews} token={token} onClose={closeNews} onOpenUrl={url => window.open(url, '_blank')} onSummaryGenerated={() => { loadNews(); }} />
       <Footer />
       {toast && <div className={`fixed bottom-5 right-5 px-5 py-3 rounded-lg text-[13px] shadow-lg z-50 animate-[slideIn_0.2s_ease] ${toast.type === 'success' ? 'bg-white border border-emerald-500 text-gray-900' : 'bg-white border border-red-500 text-gray-900'}`}>{toast.msg}</div>}

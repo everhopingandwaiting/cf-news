@@ -26,9 +26,11 @@ beforeEach(() => {
 
 describe('Trending API - topics', () => {
   it('GET /api/news/trending/topics - returns empty array when no data', async () => {
-    const { status, body } = await request(app, db, '/api/news/trending/topics');
+    const { status, body, headers } = await request(app, db, '/api/news/trending/topics');
     expect(status).toBe(200);
     expect(body.topics).toEqual([]);
+    // 早期空返回不入边缘缓存（只缓存成功路径）
+    expect(headers.get('Cache-Control')).toBeNull();
   });
 
   it('GET /api/news/trending/topics - returns topics with data', async () => {
@@ -36,8 +38,9 @@ describe('Trending API - topics', () => {
       { keyword: 'AI', date_hour: shanghaiDateHour(1), count: 5 },
       { keyword: 'AI', date_hour: shanghaiDateHour(2), count: 3 },
     ]);
-    const { status, body } = await request(app, db, '/api/news/trending/topics');
+    const { status, body, headers } = await request(app, db, '/api/news/trending/topics');
     expect(status).toBe(200);
+    expect(headers.get('Cache-Control')).toContain('max-age=180');
     expect(body.topics.length).toBeGreaterThan(0);
     expect(body.topics[0].keyword).toBe('AI');
   });
@@ -56,8 +59,9 @@ describe('Trending API - keywords', () => {
       { keyword: 'GPT5', date_hour: shanghaiDateHour(2), count: 8 },
       { keyword: 'GPT5', date_hour: shanghaiDateHour(1), count: 12 },
     ]);
-    const { status, body } = await request(app, db, '/api/news/trending?hours=48');
+    const { status, body, headers } = await request(app, db, '/api/news/trending?hours=48');
     expect(status).toBe(200);
+    expect(headers.get('Cache-Control')).toContain('max-age=180');
     expect(body.trending.length).toBeGreaterThan(0);
     const entry = body.trending.find((t: any) => t.word === 'GPT5');
     expect(entry).toBeDefined();
@@ -87,8 +91,9 @@ describe('Trending API - themes', () => {
     await db.seed('news_items', [
       { id: 20, source_id: 1, title: 'AI model launches today', url: 'https://ai', description: 'AI model news', category: 'tech', created_at: utcDateTime(1), is_deleted: 0 },
     ]);
-    const { status, body } = await request(app, db, '/api/news/trending/themes?hours=48');
+    const { status, body, headers } = await request(app, db, '/api/news/trending/themes?hours=48');
     expect(status).toBe(200);
+    expect(headers.get('Cache-Control')).toContain('max-age=300');
     expect(body.themes.length).toBeGreaterThan(0);
     expect(body.themes[0]).toHaveProperty('label');
     expect(body.themes[0]).toHaveProperty('status');
@@ -123,8 +128,9 @@ describe('Trending API - categories', () => {
       { id: 10, source_id: 1, title: 'LLM News', url: 'https://a', category: 'tech', created_at: utcDateTime(1), is_deleted: 0 },
       { id: 11, source_id: 1, title: 'LLM More', url: 'https://b', category: 'tech', created_at: utcDateTime(2), is_deleted: 0 },
     ]);
-    const { status, body } = await request(app, db, '/api/news/trending/categories?hours=48');
+    const { status, body, headers } = await request(app, db, '/api/news/trending/categories?hours=48');
     expect(status).toBe(200);
+    expect(headers.get('Cache-Control')).toContain('max-age=300');
     expect(body.categories.length).toBeGreaterThan(0);
     expect(body.total).toBeGreaterThan(0);
     expect(body.categories[0]).toHaveProperty('name');
@@ -168,8 +174,9 @@ describe('Trending API - hourly', () => {
       { id: 1, source_id: 1, title: 'News 1', url: 'https://n1', category: 'tech', created_at: utcDateTime(1), is_deleted: 0 },
       { id: 2, source_id: 1, title: 'News 2', url: 'https://n2', category: 'tech', created_at: utcDateTime(2), is_deleted: 0 },
     ]);
-    const { status, body } = await request(app, db, '/api/news/trending/hourly?hours=48');
+    const { status, body, headers } = await request(app, db, '/api/news/trending/hourly?hours=48');
     expect(status).toBe(200);
+    expect(headers.get('Cache-Control')).toContain('max-age=300');
     expect(body.sources.length).toBeGreaterThan(0);
     expect(body.categories.length).toBeGreaterThan(0);
     expect(body.sources[0]).toHaveProperty('hour');

@@ -2,6 +2,7 @@ import { Bindings, NewsSource } from '../types';
 import { indexNewsItem } from './tokenizer';
 import { checkDuplicate, storeDedupHash } from './dedup';
 import { uploadNewsItem } from './aiSearch';
+import { incrementCache, NEWS_ACTIVE_COUNT_KEY } from './cache';
 import { fetchWithBrowser, needsBrowser } from './browserFetcher';
 import { getScraper } from './scraper';
 import { eq, sql } from 'drizzle-orm';
@@ -356,6 +357,13 @@ async function saveNewsItems(
         } catch (error) {
             if (!String(error).includes('UNIQUE')) console.error(`Error saving item:`, error);
         }
+    }
+
+    if (savedCount > 0) {
+        // 维护新闻总数计数器（kv_cache）：默认列表页 total 在 TTL 内免于全表 COUNT；
+        // 增量只加值不动 TTL，过期后由路由侧 remember() 自动重算真实值
+        incrementCache(getDb(env), NEWS_ACTIVE_COUNT_KEY, savedCount)
+            .catch(e => console.error('Counter increment failed:', e));
     }
 
     if (newItems.length > 0 && !skipSummary) {

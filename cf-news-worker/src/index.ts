@@ -23,6 +23,7 @@ import { refreshTrendingTopics } from './services/trending';
 import { checkRadarPush } from './services/radarPush';
 import { generatePendingSummaries } from './services/summarizer';
 import { refreshModelCatalog } from './services/modelRefresher';
+import { runRetention } from './services/retention';
 
 import { handleImageProxy } from './routes/image';
 import { handleScreenshot } from './routes/screenshot';
@@ -110,17 +111,39 @@ app.get('/api/health/feed', async (c) => {
     const now = Date.now();
     const problems: string[] = [];
 
-    const newsRow = await db.select({ ts: newsItems.created_at })
-        .from(newsItems).orderBy(sql`created_at DESC`).limit(1).get();
+    // D1 失效（如配额耗尽）→ 503 而非 500/200 假健康，供监控区分瞬时故障
+    let newsRow;
+    try {
+        newsRow = await db.select({ ts: newsItems.created_at })
+            .from(newsItems).orderBy(sql`created_at DESC`).limit(1).get();
+    } catch (e) {
+        console.error('health/feed news query failed:', e);
+        return c.json({ error: 'D1 unavailable', detail: String(e), timestamp: new Date().toISOString() }, 503);
+    }
     const lastNewsMs = newsRow?.ts ? parseDbTs(newsRow.ts) : 0;
     const newsAgeMin = lastNewsMs ? Math.round((now - lastNewsMs) / 60000) : -1;
     if (newsAgeMin < 0 || newsAgeMin > 360) {
         problems.push(`news_items stale (age=${newsAgeMin}min)`);
     }
 
-    const hbRow = await db.select({ ts: cronHeartbeat.last_fired_at })
-        .from(cronHeartbeat).where(eq(cronHeartbeat.cron_name, '0 * * * *')).get();
-    const hbMs = hbRow?.ts ? parseDbTs(hbRow.ts) : 0;
+    // 心跳读取：KV 优先（cron 写路径已先写 KV），miss 时回退 D1
+    let hbTs: string | null = null;
+    try {
+        hbTs = await c.env.KV.get('cron_hb:0 * * * *');
+    } catch (e) {
+        console.error('health/feed KV heartbeat read failed:', e);
+    }
+    if (!hbTs) {
+        try {
+            const hbRow = await db.select({ ts: cronHeartbeat.last_fired_at })
+                .from(cronHeartbeat).where(eq(cronHeartbeat.cron_name, '0 * * * *')).get();
+            hbTs = hbRow?.ts || null;
+        } catch (e) {
+            console.error('health/feed D1 heartbeat query failed:', e);
+            return c.json({ error: 'D1 unavailable', detail: String(e), timestamp: new Date().toISOString() }, 503);
+        }
+    }
+    const hbMs = hbTs ? parseDbTs(hbTs) : 0;
     const hbAgeMin = hbMs ? Math.round((now - hbMs) / 60000) : -1;
     if (hbAgeMin < 0 || hbAgeMin > 120) {
         problems.push(`fetch cron heartbeat stale (age=${hbAgeMin}min)`);
@@ -130,7 +153,7 @@ app.get('/api/health/feed', async (c) => {
         ok: problems.length === 0,
         lastNewsAt: newsRow?.ts || null,
         newsAgeMinutes: newsAgeMin,
-        lastFetchCronAt: hbRow?.ts || null,
+        lastFetchCronAt: hbTs || null,
         fetchCronAgeMinutes: hbAgeMin,
         problems,
         timestamp: new Date().toISOString(),
@@ -261,6 +284,13 @@ export default {
             // 新闻雷达关键词命中检查 → 触发 Web Push 通知
             ctx.waitUntil(checkRadarPush(env));
         } else if (event.cron === '0 8 * * *') {
+            // Retention 复用每日 digest 触发器：Workers Free 每账号限 5 个 cron
+            // triggers（fetch/summary/trending/digest/model-sync 已占满），无法注册
+            // 独立的 `10 4 * * *`。纯 D1 删除/更新不占 fetch 子请求预算；失败次日重试。
+            console.log('Retention (piggyback on daily digest): pruning old content...');
+            ctx.waitUntil(runRetention(env).then(r =>
+                console.log(`Retention: contentCleared=${r.contentCleared}, logsDeleted=${r.logsDeleted}, batches=${r.batches}`)
+            ));
             console.log('Daily digest cron fired, generating digest...');
             ctx.waitUntil(generateDailyDigest(env).then(r => console.log(`Digest: ${r ? 'generated' : 'skipped'}`)));
             console.log('Daily digest email cron fired, sending emails...');
@@ -282,7 +312,7 @@ export default {
             console.log(`Unknown cron fired: ${event.cron}`);
         }
         // 记录 cron 触发心跳，供 /api/health/feed 检测调度停摆（best-effort）
-        ctx.waitUntil(recordCronHeartbeat(env, event.cron).catch(() => {}));
+        ctx.waitUntil(recordCronHeartbeat(env, event.cron).catch((e) => console.error('heartbeat write failed:', e)));
     },
 
     async queue(batch: MessageBatch<any>, env: Bindings): Promise<void> {
@@ -295,10 +325,20 @@ export default {
     }
 };
 
-/** 记录 cron 触发心跳到 cron_heartbeat 表（best-effort，失败不影响主流程） */
+/** 记录 cron 心跳：先写 KV（读路径首选），再写 D1（回退），两步都 best-effort */
 async function recordCronHeartbeat(env: Bindings, cron: string): Promise<void> {
-    const db = getDb(env);
-    await db.run(sql`INSERT OR REPLACE INTO cron_heartbeat (cron_name, last_fired_at) VALUES (${cron}, ${new Date().toISOString()})`);
+    const ts = new Date().toISOString();
+    try {
+        await env.KV.put(`cron_hb:${cron}`, ts);
+    } catch (e) {
+        console.error('KV heartbeat write failed:', e);
+    }
+    try {
+        const db = getDb(env);
+        await db.run(sql`INSERT OR REPLACE INTO cron_heartbeat (cron_name, last_fired_at) VALUES (${cron}, ${ts})`);
+    } catch (e) {
+        console.error('D1 heartbeat write failed:', e);
+    }
 }
 
 /** 解析 D1 存储的时间戳：兼容 ISO 带 Z 与 "YYYY-MM-DD HH:MM:SS"（无时区后缀按 UTC 处理） */

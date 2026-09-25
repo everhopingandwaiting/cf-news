@@ -5,6 +5,7 @@ import { verifyJWT } from './auth';
 import { eq, sql, like, and, ne, or, desc, isNotNull } from 'drizzle-orm';
 import { getDb } from '../db';
 import { newsItems, newsSources } from '../db/schema';
+import { loadStopWords } from '../services/stopWordsCache';
 
 const router = new Hono<{ Bindings: Bindings }>();
 
@@ -86,13 +87,9 @@ router.post('/digest/generate', async (c) => {
     }
 });
 
-let _stopWords: Set<string> | null = null;
 async function getStopWords(env: Bindings): Promise<Set<string>> {
-    if (_stopWords) return _stopWords;
-    const db = getDb(env);
-    const rows = await db.all<{ word: string }>(sql`SELECT word FROM stop_words`);
-    _stopWords = new Set(rows.map(r => r.word.toLowerCase()));
-    return _stopWords;
+    const rows = await loadStopWords(getDb(env));
+    return new Set(rows.map(w => w.toLowerCase()));
 }
 
 function stem(w: string): string {

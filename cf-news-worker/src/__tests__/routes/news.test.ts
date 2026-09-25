@@ -92,6 +92,20 @@ describe('News API', () => {
     expect(body.pagination.totalPages).toBe(1);
   });
 
+  it('GET /api/news - limit=1 skips the full COUNT (hasMore via peek row)', async () => {
+    // 单条模式不再执行 COUNT(*)：数据查询多取 1 行用于判断是否还有下一页
+    const page1 = await request(app, db, '/api/news?page=1&limit=1');
+    expect(page1.status).toBe(200);
+    expect(page1.body.news).toHaveLength(1);
+    expect(page1.body.pagination.total).toBeGreaterThanOrEqual(1);
+    expect(page1.body.pagination.hasMore).toBe(true);
+
+    const last = await request(app, db, '/api/news?page=3&limit=1');
+    expect(last.status).toBe(200);
+    expect(last.body.news).toHaveLength(1);
+    expect(last.body.pagination.hasMore).toBe(false);
+  });
+
   it('GET /api/news - LIKE injection % is escaped', async () => {
     const { status, body } = await request(app, db, '/api/news?search=%25');
     expect(status).toBe(200);
@@ -214,6 +228,60 @@ describe('News API', () => {
     expect(typeof body.score).toBe('number');
     expect(body.related_count).toBeGreaterThan(0);
     expect(Array.isArray(body.signals)).toBe(true);
+  });
+
+  it('GET /api/news?search= - search responses are edge-cached', async () => {
+    const { status, headers } = await request(app, db, '/api/news?search=NVIDIA');
+    expect(status).toBe(200);
+    expect(headers.get('Cache-Control')).toContain('max-age=60');
+  });
+
+  it('GET /api/news/fresh-view - anonymous is edge-cached, Authorization bypasses cache', async () => {
+    const anon = await request(app, db, '/api/news/fresh-view?exclude=health&limit=5');
+    expect(anon.status).toBe(200);
+    expect(anon.headers.get('Cache-Control')).toContain('max-age=120');
+
+    const authed = await request(app, db, '/api/news/fresh-view?exclude=health&limit=5', {
+      headers: { Authorization: 'Bearer invalid-token' },
+    });
+    expect(authed.status).toBe(200);
+    expect(authed.headers.get('Cache-Control')).toBeNull();
+  });
+
+  it('GET /api/news/:id/credibility - response is edge-cached', async () => {
+    const { status, headers } = await request(app, db, '/api/news/131/credibility');
+    expect(status).toBe(200);
+    expect(headers.get('Cache-Control')).toContain('max-age=600');
+  });
+
+  it('GET /api/news/categories/list - counts are remembered in kv_cache', async () => {
+    const first = await request(app, db, '/api/news/categories/list');
+    expect(first.status).toBe(200);
+
+    await db.seed('news_items', [
+      { id: 901, source_id: 1, title: 'Remember probe', url: 'https://remember/901', category: 'remember-probe', created_at: new Date().toISOString().substring(0, 19).replace('T', ' '), is_deleted: 0 },
+    ]);
+
+    // remember() TTL 600s：新增分类 10 分钟内不触发新的全表 GROUP BY
+    const second = await request(app, db, '/api/news/categories/list');
+    expect(second.status).toBe(200);
+    expect(second.body.categories.map((c: any) => c.category)).not.toContain('remember-probe');
+  });
+
+  it('GET /api/news - filtered count is remembered in kv_cache', async () => {
+    const first = await request(app, db, '/api/news?category=remember-count');
+    expect(first.status).toBe(200);
+    expect(first.body.pagination.total).toBe(0);
+
+    await db.seed('news_items', [
+      { id: 902, source_id: 1, title: 'Count probe', url: 'https://remember/902', category: 'remember-count', created_at: new Date().toISOString().substring(0, 19).replace('T', ' '), is_deleted: 0 },
+    ]);
+
+    // total 来自 kv_cache（TTL 600s）→ 仍为 0；数据行实时查询 → news 已包含新行
+    const second = await request(app, db, '/api/news?category=remember-count');
+    expect(second.status).toBe(200);
+    expect(second.body.pagination.total).toBe(0);
+    expect(second.body.news.map((n: any) => n.id)).toContain(902);
   });
 
 });

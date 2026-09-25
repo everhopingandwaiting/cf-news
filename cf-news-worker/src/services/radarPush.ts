@@ -30,16 +30,20 @@ function dedupKey(userId: number, keyword: string): string {
  * 查询某个关键词在最近 N 小时内匹配的新闻 id（按 id 倒序，最多 50 条）。
  * SQL 复刻自 routes/user.ts GET /radar：LIKE 匹配 title 或 description，
  * 转义 LIKE 通配符 % _ \ 防止用户输入被当作通配符。
+ * afterId（已推送水位线）非空时下推 AND n.id > afterId：主键范围扫描
+ * 只读水位线之后的新行，而不是每次全扫 6 小时窗口（D1 行读大户）。
  */
 async function findRecentNewsIds(
     db: ReturnType<typeof getDb>,
-    keyword: string
+    keyword: string,
+    afterId: number | null
 ): Promise<number[]> {
     const escaped = keyword.replace(/[%_\\]/g, '\\$&');
     const rows = await db.all<{ id: number }>(sql`
         SELECT n.id
         FROM news_items n
         WHERE n.is_deleted = 0
+          ${afterId !== null ? sql`AND n.id > ${afterId}` : sql``}
           AND n.created_at >= datetime('now', '-' || ${PUSH_WINDOW_HOURS} || ' hours')
           AND (n.title LIKE ${'%' + escaped + '%'} ESCAPE '\\' OR n.description LIKE ${'%' + escaped + '%'} ESCAPE '\\')
         ORDER BY n.id DESC
@@ -109,8 +113,11 @@ export async function checkRadarPush(env: Bindings): Promise<{ sent: number; fai
                     const stored = await env.KV.get(dedupKey(userId, keyword)).catch(() => null);
                     const storedMax = stored ? parseInt(stored, 10) : null;
 
-                    // 3b. 查最近 6h 命中新闻，过滤掉已推送过的
-                    const recentIds = await findRecentNewsIds(db, keyword);
+                    // 3b. 查最近 6h 命中新闻：水位线下推到 SQL（AND id > afterId），
+                    //     主键范围扫描只读水位线之后的新行（此前每次全扫 6h 窗口 LIKE）；
+                    //     KV 值损坏（NaN）时下推失效，JS 过滤兜底保持原语义
+                    const afterId = storedMax !== null && Number.isFinite(storedMax) ? storedMax : null;
+                    const recentIds = await findRecentNewsIds(db, keyword, afterId);
                     const newIds = storedMax === null
                         ? recentIds
                         : recentIds.filter(id => id > storedMax);

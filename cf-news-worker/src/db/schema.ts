@@ -247,3 +247,9 @@ export const cronHeartbeat = sqliteTable('cron_heartbeat', {
     cron_name: text('cron_name').primaryKey(),
     last_fired_at: text('last_fired_at').notNull(),
 });
+
+export const kvCache = sqliteTable('kv_cache', {
+    cache_key: text('cache_key').primaryKey(),
+    value: text('value').notNull(),
+    expires_at: integer('expires_at').notNull().default(0),
+});

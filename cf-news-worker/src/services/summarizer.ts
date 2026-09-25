@@ -4,6 +4,7 @@ import { fetchRichArticleContent } from './contentFetcher';
 import { eq, and, sql } from 'drizzle-orm';
 import { getDb } from '../db';
 import { newsSummaries, newsAiTake, newsPerspectives, newsItems } from '../db/schema';
+import { loadStopWords } from './stopWordsCache';
 
 function cleanText(text: string): string {
     return text.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
@@ -358,8 +359,8 @@ function stem(w: string): string {
 
 async function buildPerspectiveFtsQuery(env: Bindings, title: string): Promise<string | null> {
     const db = getDb(env);
-    const stopRows = await db.all<{ word: string }>(sql`SELECT word FROM stop_words`);
-    const stopWords = new Set(stopRows.map(r => r.word.toLowerCase()));
+    const stopWordsRaw = await loadStopWords(db);
+    const stopWords = new Set(stopWordsRaw.map(w => w.toLowerCase()));
     const keywords = title
         .replace(/[^\w\u4e00-\u9fff\s]/g, ' ')
         .split(/\s+/)
@@ -482,18 +483,38 @@ export async function generatePendingSummaries(env: Bindings): Promise<void> {
     console.log('Generating pending AI summaries...');
     const db = getDb(env);
 
+    // 富化扫描 KV 限流：下方 7 天窗口 LENGTH() 扫描原随每 5 分钟 cron 全量执行，
+    // 是 D1 行读主要来源之一；改为 15 分钟最多扫一次（KV 时间戳门控）。
+    // KV 缺失（部分测试环境）或读写异常 → 退化为每次照常扫描；下方摘要待处理查询不受门控。
+    const ENRICH_SCAN_KEY = 'summarizer:enrich:last_run';
+    const ENRICH_SCAN_INTERVAL_MS = 15 * 60 * 1000;
+    let shouldEnrich = true;
+    if (env.KV) {
+        try {
+            const last = await env.KV.get(ENRICH_SCAN_KEY);
+            const lastTs = last ? parseInt(last, 10) : 0;
+            if (lastTs > 0 && Date.now() - lastTs < ENRICH_SCAN_INTERVAL_MS) {
+                shouldEnrich = false;
+            } else {
+                await env.KV.put(ENRICH_SCAN_KEY, String(Date.now()), { expirationTtl: 3600 });
+            }
+        } catch {
+            shouldEnrich = true;
+        }
+    }
+
     // 并行富化短文：每个 fetch 自带 10s 超时，allSettled 单个源站失败不阻塞其余。
     // LENGTH() 谓词不可走索引——必须用 created_at 窗口 + ORDER BY created_at DESC 让
     // idx_news_items_created 把扫描限制在近 7 天（否则每 5 分钟全表扫 news_items，
     // D1 免费档 500 万行/天读配额会被烧穿，线上 500（08-31 曾因此停机）。
-    const shortItems = await db.all<{ id: number; title: string; url: string }>(sql`
+    const shortItems: { id: number; title: string; url: string }[] = shouldEnrich ? await db.all<{ id: number; title: string; url: string }>(sql`
         SELECT id, title, url FROM news_items 
         WHERE LENGTH(COALESCE(content,'')) < 300 AND LENGTH(COALESCE(description,'')) < 300
         AND url IS NOT NULL
         AND created_at >= datetime('now', '-7 days')
         ORDER BY created_at DESC
         LIMIT 5
-    `);
+    `) : [];
     if (shortItems.length > 0) {
         const results = await Promise.allSettled(shortItems.map(item =>
             fetchRichArticleContent(item.url).then(async (rich) => {

@@ -4,6 +4,7 @@ import { generatePerspectives } from '../services/summarizer';
 import { eq, sql, and, count, desc, like, SQL } from 'drizzle-orm';
 import { getDb } from '../db';
 import { newsItems, newsSources, newsSummaries, newsAiTake, newsComments, newsFts } from '../db/schema';
+import { NEWS_ACTIVE_COUNT_KEY, NEWS_ACTIVE_COUNT_TTL, NEWS_FILTERED_COUNT_TTL, NEWS_CATEGORIES_KEY, NEWS_CATEGORIES_TTL, remember } from '../services/cache';
 import { verifyJWT } from './auth';
 
 const news = new Hono<{ Bindings: Bindings }>();
@@ -66,6 +67,16 @@ async function searchNewsFTS(env: Bindings, query: string): Promise<number[] | n
 }
 
 news.get('/', async (c) => {
+    const search = c.req.query('search');
+    // 搜索热词遥测：先于边缘缓存判断——搜索结果也入边缘缓存后，缓存命中同样要记录热词（不 await）
+    if (search && c.env.ANALYTICS) {
+        c.env.ANALYTICS.writeDataPoint({
+            indexes: [],
+            blobs: ['search', search.toLowerCase().slice(0, 100)],
+            doubles: [],
+        });
+    }
+
     const cacheVer = await c.env.KV.get('news_cache_ver').catch(() => null) || '0';
     const cacheKey = new Request(c.req.url + '&_cv=' + cacheVer, { headers: { 'Accept': 'application/json' } });
     const cache = caches.default;
@@ -75,15 +86,6 @@ news.get('/', async (c) => {
     const page = parseInt(c.req.query('page') || '1');
     const limit = parseInt(c.req.query('limit') || '20');
     const category = c.req.query('category');
-    const search = c.req.query('search');
-    // 搜索热词遥测：非阻塞写入 Analytics Engine（不 await，避免影响响应延迟）
-    if (search && c.env.ANALYTICS) {
-        c.env.ANALYTICS.writeDataPoint({
-            indexes: [],
-            blobs: ['search', search.toLowerCase().slice(0, 100)],
-            doubles: [],
-        });
-    }
     const sourceId = c.req.query('source_id');
     const lang = c.req.query('lang');
     const hasSummary = c.req.query('has_summary');
@@ -128,15 +130,14 @@ news.get('/', async (c) => {
         const countJoins: SQL[] = [];
         if (lang) countJoins.push(sql`LEFT JOIN news_sources s ON n.source_id = s.id`);
         if (hasSummary === '1' || hasSummary === '0') countJoins.push(sql`LEFT JOIN news_summaries ns ON ns.news_id = n.id`);
-        const countResult = await db.all<{ total: number }>(sql`
-            SELECT COUNT(*) as total
-            FROM news_items n
-            ${countJoins.length > 0 ? sql.join(countJoins, sql` `) : sql``}
-            WHERE ${whereClause}
-        `);
-        const total = countResult[0]?.total || 0;
-        const totalPages = Math.ceil(total / limit);
 
+        // 默认列表（无有效过滤条件，category=all 视同默认）的 total 走 kv_cache 计数器：
+        // saveNewsItems 增量维护 + TTL 过期后由 remember() 重算真实值，避免每次全表 COUNT(*)
+        const isDefaultList = !search && (!category || category === 'all') && !sourceId && !lang && hasSummary === undefined;
+        // 单条模式（limit=1）多取 1 行判定 hasMore，同样跳过 COUNT(*)
+        const usePeekRow = limit === 1;
+
+        // 数据查询：peek 模式下多取 1 行用于判断是否还有下一页
         const newsData = await db.all<any>(sql`
             SELECT n.*, s.name as source_name, s.language as source_lang,
                    (SELECT COUNT(*) FROM news_comments nc WHERE nc.news_id = n.id AND nc.is_deleted = 0) as comments_count,
@@ -147,19 +148,59 @@ news.get('/', async (c) => {
             LEFT JOIN news_ai_take nt ON nt.news_id = n.id
             WHERE ${whereClause}
             ORDER BY n.created_at DESC
-            LIMIT ${limit} OFFSET ${offset}
+            LIMIT ${usePeekRow ? limit + 1 : limit} OFFSET ${offset}
         `);
 
+        let total: number;
+        if (isDefaultList) {
+            const computeCount = async () => {
+                const countResult = await db.all<{ total: number }>(sql`
+                    SELECT COUNT(*) as total
+                    FROM news_items n
+                    WHERE ${whereClause}
+                `);
+                return countResult[0]?.total || 0;
+            };
+            total = await remember(db, NEWS_ACTIVE_COUNT_KEY, NEWS_ACTIVE_COUNT_TTL, computeCount);
+        } else if (usePeekRow) {
+            // 过滤列表 + 单条模式：由 peek 行推导 total（末页精确，中间页为下界估计）
+            total = newsData.length > limit
+                ? (page - 1) * limit + limit + 1
+                : (page - 1) * limit + newsData.length;
+        } else {
+            const computeCount = async () => {
+                const countResult = await db.all<{ total: number }>(sql`
+                    SELECT COUNT(*) as total
+                    FROM news_items n
+                    ${countJoins.length > 0 ? sql.join(countJoins, sql` `) : sql``}
+                    WHERE ${whereClause}
+                `);
+                return countResult[0]?.total || 0;
+            };
+            if (search) {
+                // 搜索词键空间无界 → 不写 kv_cache（防键表膨胀），靠 60s 边缘缓存去重
+                total = await computeCount();
+            } else {
+                // 结构化过滤（category/source/lang/has_summary）键空间有界 → remember() 跨 colo 全局去重，
+                // 同一组合 10 分钟内只全表 COUNT 一次（total 允许 ≤10 分钟滞后）
+                const countKey = `news_count:${category || ''}:${sourceId || ''}:${lang || ''}:${hasSummary || ''}`;
+                total = await remember(db, countKey, NEWS_FILTERED_COUNT_TTL, computeCount);
+            }
+        }
+
+        const totalPages = Math.ceil(total / limit);
+        const hasMore = usePeekRow ? newsData.length > limit : page < totalPages;
+        const news = usePeekRow ? newsData.slice(0, limit) : newsData;
+
         const result = {
-            news: newsData,
-            pagination: { page, limit, total, totalPages, hasMore: page < totalPages },
+            news,
+            pagination: { page, limit, total, totalPages, hasMore },
         };
 
         const response = c.json(result);
-        if (!search) {
-            response.headers.set('Cache-Control', 'public, max-age=60, s-maxage=60');
-            c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
-        }
+        // 搜索结果同样入边缘缓存 60s：cacheKey 含完整 URL（search 词）+ cacheVer，新数据入库即失效
+        response.headers.set('Cache-Control', 'public, max-age=60, s-maxage=60');
+        c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
         return response;
     } catch (error) {
         console.error('Error fetching news:', error);
@@ -169,6 +210,12 @@ news.get('/', async (c) => {
 
 // GET /timeline — Event timeline for a search term or recent important news
 news.get('/timeline', async (c) => {
+    const cacheVer = await c.env.KV.get('news_cache_ver').catch(() => null) || '0';
+    const cacheKey = new Request(c.req.url + '&_cv=' + cacheVer, { headers: { 'Accept': 'application/json' } });
+    const cache = caches.default;
+    const cached = await cache.match(cacheKey);
+    if (cached) return cached;
+
     const keyword = normalizeKeyword(c.req.query('keyword') || '');
     const hours = parseHours(c.req.query('hours'), keyword ? 168 : 48);
     const db = getDb(c.env);
@@ -196,7 +243,10 @@ news.get('/timeline', async (c) => {
             time: row.published_at || row.created_at,
             stage: index === 0 ? 'latest' : index === rows.length - 1 ? 'first' : 'update',
         }));
-        return c.json({ keyword: keyword || null, events });
+        const response = c.json({ keyword: keyword || null, events });
+        response.headers.set('Cache-Control', 'public, max-age=180, s-maxage=180');
+        c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+        return response;
     } catch (error) {
         console.error('timeline error:', error);
         return c.json({ error: '获取新闻时间线失败' }, 500);
@@ -205,6 +255,12 @@ news.get('/timeline', async (c) => {
 
 // GET /map — Region distribution inferred from titles/descriptions
 news.get('/map', async (c) => {
+    const cacheVer = await c.env.KV.get('news_cache_ver').catch(() => null) || '0';
+    const cacheKey = new Request(c.req.url + '&_cv=' + cacheVer, { headers: { 'Accept': 'application/json' } });
+    const cache = caches.default;
+    const cached = await cache.match(cacheKey);
+    if (cached) return cached;
+
     const hours = parseHours(c.req.query('hours'), 24);
     const db = getDb(c.env);
     try {
@@ -226,7 +282,10 @@ news.get('/map', async (c) => {
                 byRegion.set(region.code, current);
             }
         }
-        return c.json({ regions: Array.from(byRegion.values()).sort((a, b) => b.count - a.count) });
+        const response = c.json({ regions: Array.from(byRegion.values()).sort((a, b) => b.count - a.count) });
+        response.headers.set('Cache-Control', 'public, max-age=180, s-maxage=180');
+        c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+        return response;
     } catch (error) {
         console.error('map error:', error);
         return c.json({ error: '获取新闻地图失败' }, 500);
@@ -238,11 +297,21 @@ news.get('/map', async (c) => {
 news.get('/fresh-view', async (c) => {
     const exclude = (c.req.query('exclude') || '').split(',').map(v => v.trim()).filter(Boolean).slice(0, 8);
     const limit = Math.min(parseInt(c.req.query('limit') || '8', 10) || 8, 12);
+    const authHeader = c.req.header('Authorization') || '';
+    // 个性化响应（带 Authorization）不读不写边缘缓存；匿名请求缓存 120s（key 含 exclude/limit + cacheVer）
+    const anonymous = !authHeader.startsWith('Bearer ');
+    const cache = caches.default;
+    let cacheKey: Request | null = null;
+    if (anonymous) {
+        const cacheVer = await c.env.KV.get('news_cache_ver').catch(() => null) || '0';
+        cacheKey = new Request(c.req.url + '&_cv=' + cacheVer, { headers: { 'Accept': 'application/json' } });
+        const cached = await cache.match(cacheKey);
+        if (cached) return cached;
+    }
     const db = getDb(c.env);
     try {
         // 可选 JWT：有有效 token 则读取阅读历史计算个性化新颖度；无 token 时仅按时效性排序
         let userId: number | null = null;
-        const authHeader = c.req.header('Authorization') || '';
         if (authHeader.startsWith('Bearer ')) {
             const payload = await verifyJWT(authHeader.slice(7).trim(), c.env.JWT_SECRET);
             if (payload) userId = payload.sub;
@@ -306,7 +375,12 @@ news.get('/fresh-view', async (c) => {
 
         // 按新颖度降序排列，截取请求的条数
         recommendations.sort((a: any, b: any) => b.novelty_score - a.novelty_score);
-        return c.json({ recommendations: recommendations.slice(0, limit) });
+        const response = c.json({ recommendations: recommendations.slice(0, limit) });
+        if (cacheKey) {
+            response.headers.set('Cache-Control', 'public, max-age=120, s-maxage=120');
+            c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+        }
+        return response;
     } catch (error) {
         console.error('fresh-view error:', error);
         return c.json({ error: '获取反信息茧房推荐失败' }, 500);
@@ -352,6 +426,13 @@ news.get('/:id/perspectives', async (c) => {
 news.get('/:id/credibility', async (c) => {
     const id = parseInt(c.req.param('id'), 10);
     if (!Number.isFinite(id)) return c.json({ error: 'Invalid id' }, 400);
+    // 边缘缓存 600s：±72h 佐证窗口相对文章固定，新文章入库由 cacheVer 失效
+    const cacheVer = await c.env.KV.get('news_cache_ver').catch(() => null) || '0';
+    const cacheKey = new Request(c.req.url + '&_cv=' + cacheVer, { headers: { 'Accept': 'application/json' } });
+    const cache = caches.default;
+    const cached = await cache.match(cacheKey);
+    if (cached) return cached;
+
     const db = getDb(c.env);
     try {
         const item = await db.all<any>(sql`
@@ -391,7 +472,7 @@ news.get('/:id/credibility', async (c) => {
         const sourceNames = new Set(matches.map((row: any) => row.source_name).filter(Boolean));
         const languages = new Set(matches.map((row: any) => row.source_lang).filter(Boolean));
         const score = Math.min(100, 25 + sourceNames.size * 18 + languages.size * 10 + Math.min(matches.length, 8) * 3);
-        return c.json({
+        const response = c.json({
             score,
             level: score >= 75 ? 'strong' : score >= 50 ? 'medium' : 'weak',
             source_count: sourceNames.size + (item[0].source_name ? 1 : 0),
@@ -404,6 +485,9 @@ news.get('/:id/credibility', async (c) => {
             ],
             articles: matches.slice(0, 6),
         });
+        response.headers.set('Cache-Control', 'public, max-age=600, s-maxage=600');
+        c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+        return response;
     } catch (error) {
         console.error('credibility error:', error);
         return c.json({ error: '获取可信度分析失败' }, 500);
@@ -446,13 +530,16 @@ news.get('/categories/list', async (c) => {
 
     const db = getDb(c.env);
     try {
-        const categories = await db.all<{ category: string; count: number }>(sql`
-            SELECT category, COUNT(*) as count
-            FROM news_items
-            WHERE is_deleted = 0
-            GROUP BY category
-            ORDER BY count DESC
-        `);
+        // kv_cache 第二层（边缘缓存之上）：跨 colo 全局最多 10 分钟执行一次全表 GROUP BY
+        const categories = await remember(db, NEWS_CATEGORIES_KEY, NEWS_CATEGORIES_TTL, () =>
+            db.all<{ category: string; count: number }>(sql`
+                SELECT category, COUNT(*) as count
+                FROM news_items
+                WHERE is_deleted = 0
+                GROUP BY category
+                ORDER BY count DESC
+            `)
+        );
         const response = c.json({ categories });
         response.headers.set('Cache-Control', 'public, max-age=600, s-maxage=600');
         c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));

@@ -1,7 +1,8 @@
 import { Bindings } from '../types';
 import { eq, sql, desc, and, like, gte } from 'drizzle-orm';
 import { getDb } from '../db';
-import { newsItems, stopWords, trendingTopics, newsSources } from '../db/schema';
+import { newsItems, trendingTopics, newsSources } from '../db/schema';
+import { loadStopWords } from './stopWordsCache';
 
 // Asia/Shanghai hour bucket string "YYYY-MM-DD HH:00:00". trending_topics.date_hour
 // is stored in Shanghai time so the 24h window aligns with the user's local day.
@@ -51,10 +52,8 @@ export async function refreshTrendingTopics(env: Bindings): Promise<{ status: st
 
         const titles = rows.map(r => r.title);
 
-        const stopRows = await db.select({ word: stopWords.word })
-            .from(stopWords)
-            .all();
-        const stopSet = new Set(stopRows.map(r => normalizeKeyword(r.word)));
+        const stopWordsRaw = await loadStopWords(db);
+        const stopSet = new Set(stopWordsRaw.map(normalizeKeyword));
 
         const prompt = `分析以下新闻标题，提取当前最热门的10-15个话题/关键词。
 要求：

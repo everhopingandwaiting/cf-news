@@ -51,10 +51,11 @@ AI-generated summary of today's top news, sorted by time with language markers (
 - **Source manager** — Admin panel to add, edit, delete, and reorder RSS sources
 - **Email digest** — Subscribe to daily news summaries
 - **Auto-update** — Cron triggers fetch new articles every hour
+- **D1 storage hygiene** — Daily retention job (runs with the 08:00 UTC digest cron; Workers Free caps each account at 5 cron triggers) deletes AI call logs older than 7 days and clears article content older than 30 days, keeping D1 under the free-tier 500MB limit
 - **News voice playback** — Browser-native SpeechSynthesis, free, no API calls
 - **AI classification** — LLaMA 3.1 8B classifies news by content, not source defaults
 - **Bot protection** — Turnstile verification on login/register
-- **Edge caching** — News list cached on CF edge (60s) + Cache Rules (hashed assets 1y, image proxy 7d)
+- **Edge caching** — News list/search (60s), fresh-view (120s), timeline/map (180s), trending (180–300s), credibility (600s) cached on CF edge + Cache Rules (hashed assets 1y, image proxy 7d)
 - **Image proxy with R2 cache** — External images proxied through CF edge and cached in R2 (10GB free, 0 egress)
 - **AI illustration persistence** — AI-generated illustrations stored in R2, never broken by expiring temp URLs
 - **Pixabay stock illustration** — Image-less news cards auto-filled with relevant Pixabay illustrations (downloaded to R2, hotlink-compliant). Cards show a 「配图」badge so auto-generated images are clearly distinguished from original source images
@@ -81,7 +82,7 @@ AI-generated summary of today's top news, sorted by time with language markers (
 | AI Search | Cloudflare AI Search (semantic + keyword) |
 | AI Cache | AI Gateway (caches classification, Q&A) |
 | Bot Protection | Turnstile (free, no CAPTCHA) |
-| Edge Cache | Cache API (news list 60s) |
+| Edge Cache | Cache API (list/search 60s, trending 180–300s, credibility 600s) |
 | Summaries | OpenRouter, NVIDIA, Mango, Zen (1M-context large-batch), OrcaRouter, Zhipu GLM (free), SenseNova APIs |
 | Vector | Vectorize for semantic dedup |
 | Object Storage | R2 (image proxy cache + AI illustrations) |

@@ -57,6 +57,13 @@ function buildThemeClusters(keywords: ThemeKeyword[]) {
 
 // GET /trending/topics — Time series of trending topics (from AI-populated table)
 trending.get('/trending/topics', async (c) => {
+    // 边缘缓存 180s：热门话题时间序列（全站共享读）；key 含 cacheVer，新文章入库即失效
+    const cacheVer = await c.env.KV.get('news_cache_ver').catch(() => null) || '0';
+    const cache = caches.default;
+    const cacheKey = new Request(c.req.url + '&_cv=' + cacheVer, { headers: { 'Accept': 'application/json' } });
+    const cached = await cache.match(cacheKey);
+    if (cached) return cached;
+
     const hours = parseInt(c.req.query('hours') || '', 10);
     const days = parseInt(c.req.query('days') || '2', 10);
     const period = !isNaN(hours) ? hours : days * 24;
@@ -83,7 +90,10 @@ trending.get('/trending/topics', async (c) => {
         const sorted = Object.entries(series)
             .map(([keyword, points]) => ({ keyword, total: points.reduce((s, p) => s + p.count, 0), points }))
             .sort((a, b) => b.total - a.total).slice(0, 20);
-        return c.json({ topics: sorted });
+        const response = c.json({ topics: sorted });
+        response.headers.set('Cache-Control', 'public, max-age=180, s-maxage=180');
+        c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+        return response;
     } catch (error) {
         console.error('trending/topics error:', error);
         return c.json({ topics: [] });
@@ -92,6 +102,13 @@ trending.get('/trending/topics', async (c) => {
 
 // GET /trending — Aggregate trending_topics with exponential time decay
 trending.get('/trending', async (c) => {
+    // 边缘缓存 180s：热门榜全站共享读；key 含 cacheVer，新文章入库即失效
+    const cacheVer = await c.env.KV.get('news_cache_ver').catch(() => null) || '0';
+    const cache = caches.default;
+    const cacheKey = new Request(c.req.url + '&_cv=' + cacheVer, { headers: { 'Accept': 'application/json' } });
+    const cached = await cache.match(cacheKey);
+    if (cached) return cached;
+
     const hours = parseInt(c.req.query('hours') || '24', 10);
     const db = getDb(c.env);
     try {
@@ -205,7 +222,10 @@ trending.get('/trending', async (c) => {
         } catch (e) {
             console.error('dropped keywords query error:', e);
         }
-        return c.json({ trending: trendingData, dropped });
+        const response = c.json({ trending: trendingData, dropped });
+        response.headers.set('Cache-Control', 'public, max-age=180, s-maxage=180');
+        c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+        return response;
     } catch (error) {
         console.error('trending error:', error);
         return c.json({ trending: [] });
@@ -214,6 +234,13 @@ trending.get('/trending', async (c) => {
 
 // GET /trending/themes — Topic clusters with representative news
 trending.get('/trending/themes', async (c) => {
+    // 边缘缓存 300s：主题簇窗口聚合 + 代表文章关键词 LIKE 查询
+    const cacheVer = await c.env.KV.get('news_cache_ver').catch(() => null) || '0';
+    const cache = caches.default;
+    const cacheKey = new Request(c.req.url + '&_cv=' + cacheVer, { headers: { 'Accept': 'application/json' } });
+    const cached = await cache.match(cacheKey);
+    if (cached) return cached;
+
     const hours = parseThemeHours(c.req.query('hours'));
     const db = getDb(c.env);
     try {
@@ -286,7 +313,10 @@ trending.get('/trending/themes', async (c) => {
             });
         }
 
-        return c.json({ themes });
+        const response = c.json({ themes });
+        response.headers.set('Cache-Control', 'public, max-age=300, s-maxage=300');
+        c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+        return response;
     } catch (error) {
         console.error('trending/themes error:', error);
         return c.json({ themes: [] });
@@ -295,6 +325,13 @@ trending.get('/trending/themes', async (c) => {
 
 // GET /trending/categories — Category distribution of trending keywords
 trending.get('/trending/categories', async (c) => {
+    // 边缘缓存 300s：全部窗口关键词 OR LIKE + GROUP BY（关键词多时窗口全扫）
+    const cacheVer = await c.env.KV.get('news_cache_ver').catch(() => null) || '0';
+    const cache = caches.default;
+    const cacheKey = new Request(c.req.url + '&_cv=' + cacheVer, { headers: { 'Accept': 'application/json' } });
+    const cached = await cache.match(cacheKey);
+    if (cached) return cached;
+
     const hours = parseInt(c.req.query('hours') || '24', 10);
     const db = getDb(c.env);
     try {
@@ -326,7 +363,10 @@ trending.get('/trending/categories', async (c) => {
             name: r.category, count: r.count,
             pct: total > 0 ? Math.round((r.count / total) * 100) : 0,
         }));
-        return c.json({ categories, total });
+        const response = c.json({ categories, total });
+        response.headers.set('Cache-Control', 'public, max-age=300, s-maxage=300');
+        c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+        return response;
     } catch (error) {
         console.error('trending/categories error:', error);
         return c.json({ categories: [], total: 0 });
@@ -370,6 +410,13 @@ trending.get('/trending/compare', async (c) => {
 
 // GET /trending/hourly — 每小时来源和分类分布
 trending.get('/trending/hourly', async (c) => {
+    // 边缘缓存 300s：24h 窗口两个 GROUP BY（source × hour + category × hour）
+    const cacheVer = await c.env.KV.get('news_cache_ver').catch(() => null) || '0';
+    const cache = caches.default;
+    const cacheKey = new Request(c.req.url + '&_cv=' + cacheVer, { headers: { 'Accept': 'application/json' } });
+    const cached = await cache.match(cacheKey);
+    if (cached) return cached;
+
     const hours = parseInt(c.req.query('hours') || '24');
     const db = getDb(c.env);
     try {
@@ -390,7 +437,10 @@ trending.get('/trending/hourly', async (c) => {
                 ORDER BY hour, category
             `),
         ]);
-        return c.json({ sources: sourceRows, categories: catRows });
+        const response = c.json({ sources: sourceRows, categories: catRows });
+        response.headers.set('Cache-Control', 'public, max-age=300, s-maxage=300');
+        c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+        return response;
     } catch (e: any) {
         console.error('Hourly stats error:', e);
         return c.json({ error: String(e) }, 500);

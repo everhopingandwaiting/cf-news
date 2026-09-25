@@ -337,4 +337,12 @@ CREATE TABLE IF NOT EXISTS cron_heartbeat (
     last_fired_at DATETIME NOT NULL
 );
 
+-- KV 风格缓存表：低频高成本计算（新闻总数计数器、趋势聚合等）的 TTL 缓存；
+-- cache_key 即业务键，value 存 JSON/字符串，expires_at 为 Unix 秒，过期后由调用方重算回填
+CREATE TABLE IF NOT EXISTS kv_cache (
+    cache_key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    expires_at INTEGER NOT NULL DEFAULT 0
+);
+
 INSERT OR REPLACE INTO app_config (key, value) VALUES ('schema_version', '1');

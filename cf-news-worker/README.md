@@ -160,9 +160,9 @@ docker run --rm -v $(pwd):/app -v /app/node_modules --network=host cf-news-worke
 
 | 文件 | 说明 | 用例数 |
 |------|------|--------|
-| `src/__tests__/routes/health.test.ts` | 健康检查端点 | 1 |
+| `src/__tests__/routes/health.test.ts` | 健康检查端点 | 6 |
 | `src/__tests__/routes/auth.test.ts` | 用户注册/登录/个人信息 | 7 |
-| `src/__tests__/routes/news.test.ts` | 新闻列表/详情/分类/来源/搜索 | 9 |
+| `src/__tests__/routes/news.test.ts` | 新闻列表/详情/分类/来源/搜索 | 24 |
 | `src/__tests__/routes/favorites.test.ts` | 收藏 CRUD | 5 |
 | `src/__tests__/routes/history.test.ts` | 阅读历史 CRUD | 5 |
 | `src/__tests__/routes/comments.test.ts` | 评论 CRUD | 5 |
@@ -173,7 +173,11 @@ docker run --rm -v $(pwd):/app -v /app/node_modules --network=host cf-news-worke
 | `src/__tests__/routes/screenshot.test.ts` | 页面截图 | 3 |
 | `src/__tests__/routes/share.test.ts` | 分享 OG 卡片 | 3 |
 | `src/__tests__/routes/operations.test.ts` | 手动操作 | 2 |
-| `src/__tests__/routes/trending.test.ts` | 趋势数据 | 2 |
+| `src/__tests__/routes/trending.test.ts` | 趋势数据 | 13 |
+| `src/__tests__/services/cache.test.ts` | 缓存工具（`kv_cache` 计数缓存） | 5 |
+| `src/__tests__/services/summarizer-pending.test.ts` | 摘要批量生成（含 KV 扫描节流） | 4 |
+| `src/__tests__/services/retention.test.ts` | D1 保留清理（>30 天正文、>7 天日志） | 3 |
+| `src/__tests__/services/radarPush.test.ts` | 雷达命中推送（KV 去重水位下推） | 4 |
 
 ### 测试架构
 
