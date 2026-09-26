@@ -9,6 +9,21 @@ interface Props {
 
 type Mode = 'login' | 'register';
 
+// 轮询等待 index.html 异步加载的 Turnstile 脚本就绪；超时静默返回（由调用方按
+// best-effort 降级），避免弱网/广告拦截下 window.turnstile 永远 undefined。
+function waitForTurnstileScript(timeoutMs: number): Promise<void> {
+  return new Promise(resolve => {
+    const start = Date.now();
+    const tick = () => {
+      const ts = (window as any).turnstile;
+      if (ts && typeof ts.render === 'function') return resolve();
+      if (Date.now() - start >= timeoutMs) return resolve();
+      setTimeout(tick, 100);
+    };
+    tick();
+  });
+}
+
 export default function AuthModal({ visible, onClose, onLoginSuccess }: Props) {
   const [mode, setMode] = useState<Mode>('login');
   const [username, setUsername] = useState('');
@@ -21,13 +36,22 @@ export default function AuthModal({ visible, onClose, onLoginSuccess }: Props) {
   const turnstileTokenRef = useRef('');
   const turnstileResolveRef = useRef<((token: string) => void) | null>(null);
 
-  // Render Turnstile widget after we have the site key
+  // Render Turnstile widget after we have the site key AND the async script is
+  // ready. 之前直接 `window.turnstile?.render`：脚本未就绪时静默跳过、永不重试，
+  // 提交必然失败。现在脚本与 /api/config 并行等待（各 8s 上限），渲染加 try/catch。
   useEffect(() => {
     if (!visible) return;
-    fetch('/api/config').then(r => r.json()).then(c => {
-      if (c.turnstileSiteKey && turnstileRef.current && !widgetIdRef.current) {
-        widgetIdRef.current = (window as any).turnstile?.render(turnstileRef.current, {
-          sitekey: c.turnstileSiteKey,
+    let cancelled = false;
+    const setup = async () => {
+      const [cfg] = await Promise.all([
+        fetch('/api/config').then(r => r.json()).catch(() => null),
+        waitForTurnstileScript(8000),
+      ]);
+      const ts = (window as any).turnstile;
+      if (cancelled || !cfg?.turnstileSiteKey || !ts || !turnstileRef.current || widgetIdRef.current) return;
+      try {
+        widgetIdRef.current = ts.render(turnstileRef.current, {
+          sitekey: cfg.turnstileSiteKey,
           callback: (token: string) => {
             turnstileTokenRef.current = token;
             if (turnstileResolveRef.current) {
@@ -35,10 +59,14 @@ export default function AuthModal({ visible, onClose, onLoginSuccess }: Props) {
               turnstileResolveRef.current = null;
             }
           },
-        });
+        }) || null;
+      } catch {
+        widgetIdRef.current = null;
       }
-    }).catch(() => {});
+    };
+    setup();
     return () => {
+      cancelled = true;
       if (widgetIdRef.current) {
         try { (window as any).turnstile?.remove(widgetIdRef.current); } catch {}
         widgetIdRef.current = null;
@@ -52,14 +80,23 @@ export default function AuthModal({ visible, onClose, onLoginSuccess }: Props) {
   // The widget is Invisible mode: render() alone produces no token. It only
   // issues one after execute() (the submit click is the user interaction), so
   // wait for the callback before proceeding. Guard against a hung widget so the
-  // submit button never spins forever.
+  // submit button never spins forever. 返回 '' 表示拿不到 token（脚本被拦截/
+  // widget 未就绪/挑战超时）——按 best-effort 语义交由调用方降级放行，不阻塞登录。
   async function ensureTurnstileToken(): Promise<string> {
     if (turnstileTokenRef.current) return turnstileTokenRef.current;
+    const ts = (window as any).turnstile;
+    if (!ts) return ''; // 脚本未加载（弱网/广告拦截）：直接降级，不白等
+    // widget 可能仍在等 /api/config 或脚本，提交时最多再等 3s 就绪
+    const deadline = Date.now() + 3000;
+    while (!widgetIdRef.current && Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 100));
+    }
     if (!widgetIdRef.current) return '';
     return new Promise(resolve => {
-      const timer = setTimeout(() => { turnstileResolveRef.current = null; resolve(''); }, 5000);
+      // 挑战网络差时 5s 经常不够（CF APAC 劣化实测），放宽到 12s
+      const timer = setTimeout(() => { turnstileResolveRef.current = null; resolve(''); }, 12000);
       turnstileResolveRef.current = (token: string) => { clearTimeout(timer); resolve(token); };
-      (window as any).turnstile?.execute(widgetIdRef.current);
+      try { ts.execute(widgetIdRef.current); } catch { clearTimeout(timer); turnstileResolveRef.current = null; resolve(''); }
     });
   }
 
@@ -68,17 +105,14 @@ export default function AuthModal({ visible, onClose, onLoginSuccess }: Props) {
     setError('');
     setLoading(true);
     const token = await ensureTurnstileToken();
-    if (!token) {
-      setError('人机验证加载失败，请刷新页面重试');
-      setLoading(false);
-      return;
-    }
+    // Turnstile best-effort（与 auth.ts 登录/注册语义一致）：拿得到 token 就带上、
+    // 由后端强校验 siteverify；拿不到不阻塞——验证服务弱网/被拦截时不应锁死用户。
     try {
       if (mode === 'register') {
-        await register(username, email, password, token);
+        await register(username, email, password, token || undefined);
         setMode('login'); setUsername(''); setPassword('');
       } else {
-        const data = await login(email, password, token);
+        const data = await login(email, password, token || undefined);
         localStorage.setItem('token', data.token);
         onLoginSuccess(data.token);
         onClose();
