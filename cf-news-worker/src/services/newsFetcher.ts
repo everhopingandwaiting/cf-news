@@ -1,6 +1,7 @@
 import { Bindings, NewsSource } from '../types';
 import { indexNewsItem } from './tokenizer';
 import { checkDuplicate, storeDedupHash } from './dedup';
+import { existsArchivedUrl } from './archive';
 import { uploadNewsItem } from './aiSearch';
 import { incrementCache, NEWS_ACTIVE_COUNT_KEY } from './cache';
 import { fetchWithBrowser, needsBrowser } from './browserFetcher';
@@ -325,6 +326,9 @@ async function saveNewsItems(
         try {
             const isDup = await checkDuplicate(env, item.title, item.description);
             if (isDup) continue;
+            // 冷热分库：URL 最终防线——归档侧已有同 URL 时跳过（主库 UNIQUE(url) 只
+            // 保护单侧，改写过标题的旧文若重生会造成同 URL 双份）
+            if (await existsArchivedUrl(env, item.link)) continue;
 
             const category = categories[i] || source.category;
             const publishedAt = normalizePublishedAt(item.pubDate, source);

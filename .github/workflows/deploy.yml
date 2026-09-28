@@ -25,6 +25,7 @@ jobs:
         run: |
           cd cf-news-worker
           export D1_DATABASE_ID="${{ secrets.D1_DATABASE_ID }}"
+          export ARCHIVE_DATABASE_ID="${{ secrets.ARCHIVE_DATABASE_ID }}"
           export KV_NAMESPACE_ID="${{ secrets.KV_NAMESPACE_ID }}"
           export ZONE_ID="${{ secrets.ZONE_ID }}"
           export ROUTE_PATTERN="${{ secrets.ROUTE_PATTERN }}"

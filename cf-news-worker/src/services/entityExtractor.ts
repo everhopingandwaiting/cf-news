@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { Bindings } from '../types';
-import { getDb } from '../db';
 import { callAI, getProviderOrder } from './aiProvider';
+import { dbForNews } from './archive';
 
 const ENTITY_PROMPT = '从以下新闻中提取关键实体。输出JSON数组，每项格式: {"type":"person|organization|location|number|event","value":"实体名称","context":"一句话说明"}。提取人物、组织机构、地点、关键数字/金额、重要事件。最多提取15项。\n\n新闻标题：{{TITLE}}\n内容：{{TEXT}}';
 const VALID_TYPES = new Set(['person', 'organization', 'location', 'number', 'event']);
@@ -83,7 +83,9 @@ export async function extractEntities(env: Bindings, newsId: number, item: NewsE
     const entities = parseEntities(result);
     if (!entities) return;
 
-    const db = getDb(env);
+    // 冷热分库：实体写在新闻所在侧；文章行缺失时回落主库（不新增前置条件，
+    // 与旧行为一致——生产中该场景由 news_id 外键在写入时报错）
+    const { db } = await dbForNews(env, newsId);
     await db.run(sql`DELETE FROM news_entities WHERE news_id = ${newsId}`);
     for (const entity of entities) {
         await db.run(sql`

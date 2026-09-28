@@ -3,7 +3,8 @@ import { Bindings } from '../types';
 import { verifyJWT } from './auth';
 import { eq, desc, sql, count } from 'drizzle-orm';
 import { getDb } from '../db';
-import { userReadHistory, newsItems, newsSources } from '../db/schema';
+import { userReadHistory } from '../db/schema';
+import { fetchNewsBundle } from '../services/archive';
 
 const history = new Hono<{ Bindings: Bindings }>();
 
@@ -25,28 +26,23 @@ history.get('/', async (c) => {
 
     try {
         const db = getDb(c.env);
-        const result = await db.select({
-            id: newsItems.id,
-            source_id: newsItems.source_id,
-            title: newsItems.title,
-            url: newsItems.url,
-            description: newsItems.description,
-            content: newsItems.content,
-            image_url: newsItems.image_url,
-            category: newsItems.category,
-            published_at: newsItems.published_at,
-            is_deleted: newsItems.is_deleted,
-            created_at: newsItems.created_at,
-            source_name: newsSources.name,
+        // 冷热分库：用户表分页+计数 → 批量水合新闻（主库优先、缺失补归档）
+        const histRows = await db.select({
+            news_id: userReadHistory.news_id,
             read_at: userReadHistory.read_at,
         })
             .from(userReadHistory)
-            .innerJoin(newsItems, eq(userReadHistory.news_id, newsItems.id))
-            .leftJoin(newsSources, eq(newsItems.source_id, newsSources.id))
             .where(eq(userReadHistory.user_id, userId))
             .orderBy(desc(userReadHistory.read_at))
             .limit(limit)
             .offset(offset);
+
+        const bundle = await fetchNewsBundle(c.env, histRows.map(r => r.news_id), {
+            withSummary: false, withTake: false,
+        });
+        const result = histRows
+            .filter(r => bundle.has(r.news_id))
+            .map(r => ({ ...bundle.get(r.news_id), read_at: r.read_at }));
 
         const countResult = await db.select({ total: count() })
             .from(userReadHistory)

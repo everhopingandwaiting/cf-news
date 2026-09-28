@@ -1,6 +1,6 @@
 import { Bindings } from '../types';
 import { eq, sql } from 'drizzle-orm';
-import { getDb } from '../db';
+import { getDb, getArchiveDb } from '../db';
 import { newsItems } from '../db/schema';
 import { checkQuota, recordUsage, estimateEmbeddingNeurons } from './quota';
 
@@ -30,7 +30,19 @@ async function checkByHash(env: Bindings, hash: string): Promise<boolean> {
         .where(sql`dedup_hash = ${hash} AND is_deleted = 0`)
         .limit(1)
         .get();
-    return !!existing;
+    if (existing) return true;
+    // 冷热分库：老文章被驱逐后 hash 只在归档侧——新条目（主库 miss）才多这一次探测；
+    // 热库命中仍零额外开销。
+    const arch = getArchiveDb(env);
+    if (arch) {
+        const archived = await arch.select({ id: newsItems.id })
+            .from(newsItems)
+            .where(sql`dedup_hash = ${hash} AND is_deleted = 0`)
+            .limit(1)
+            .get();
+        if (archived) return true;
+    }
+    return false;
 }
 
 async function generateEmbedding(env: Bindings, text: string): Promise<number[] | null> {

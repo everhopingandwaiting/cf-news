@@ -44,6 +44,7 @@
 - **邮件摘要** — 订阅每日新闻邮件
 - **自动更新** — Cron Triggers 每小时抓取新文章
 - **D1 存储自愈** — 每日保留任务（随每日 08:00 UTC 摘要任务执行；Workers Free 每账号限 5 个 cron 触发器）删除 7 天前 AI 调用日志、清空 30 天前文章正文，确保 D1 不超出免费档 500MB 上限
+- **冷热归档分库** — 超过热窗口（默认 90 天）的新闻内容域每日驱逐进第二个 D1 数据库（`cf-news-archive`）；列表、搜索、详情、收藏、相关阅读等视图跨两库透明扇出，主库体积在免费档内保持有界
 - **语音播报** — 浏览器原生 SpeechSynthesis，免费离线
 - **AI 分类** — LLaMA 按内容准确分类，不依赖 RSS 源
 - **机器人防护** — Turnstile 验证码保护注册/登录
@@ -136,9 +137,13 @@
 ```bash
 docker run --rm -e CLOUDFLARE_API_TOKEN=你的Token \
   cf-news-worker npx wrangler d1 create news-db
+
+# 归档库（冷热分库：超过热窗口的新闻内容域迁入此库）
+docker run --rm -e CLOUDFLARE_API_TOKEN=你的Token \
+  cf-news-worker npx wrangler d1 create cf-news-archive
 ```
 
-从输出中复制 `database_id`，后面配置 `.env` 需要。
+从输出中复制两个 `database_id`，后面配置 `.env` 需要。
 
 ### 第五步：创建 KV 命名空间
 
@@ -163,6 +168,7 @@ docker run --rm -e CLOUDFLARE_API_TOKEN=你的Token \
 ```bash
 CLOUDFLARE_API_TOKEN=第二步获取的Token
 D1_DATABASE_ID=第四步获取的database_id
+ARCHIVE_DATABASE_ID=第四步获取的归档库database_id
 KV_NAMESPACE_ID=第五步获取的id
 ZONE_ID=第三步获取的Zone ID
 ROUTE_PATTERN=你的域名.com/*
@@ -262,6 +268,7 @@ curl -X POST -H "Authorization: Bearer <管理员token>" \
 |-------------|------|
 | `CF_API_TOKEN` | Cloudflare API Token |
 | `D1_DATABASE_ID` | D1 数据库 ID |
+| `ARCHIVE_DATABASE_ID` | D1 归档数据库 ID（冷热分库） |
 | `KV_NAMESPACE_ID` | KV 命名空间 ID |
 | `ZONE_ID` | Cloudflare Zone ID |
 | `ROUTE_PATTERN` | 域名路由（如 `yourdomain.com/*`） |
@@ -331,7 +338,7 @@ docker run --rm --env-file .env \
 cd ..
 ```
 
-首次初始化后，使用 `cf-news-worker/scripts/migrate.sh` 或 `./deploy.sh` 应用增量 D1 schema 变更。`deploy.sh` 会自动执行待应用的 migrations。
+首次初始化后，使用 `cf-news-worker/scripts/migrate.sh` 或 `./deploy.sh` 应用增量 D1 schema 变更。`deploy.sh` 会自动执行待应用的 migrations。`migrate.sh` 默认**同时维护两个数据库**（主库 `news-db` ← `migrations/`，归档库 `cf-news-archive` ← `migrations-archive/`；用 `--database news-db|cf-news-archive` 指定单个目标）。
 
 ## 项目结构
 

@@ -18,6 +18,21 @@ export function getDb(env: { DB: D1Database }): DbClient {
     return db;
 }
 
+/**
+ * 冷热分库归档库访问器（archive DB 只含 news 内容域表：news_items/fts/summaries/
+ * ai_take/entities/perspectives/sources/app_config）。缺失绑定返回 null —— 调用方
+ * 必须按"仅主库"降级（P1 基建：行为与单库时代完全一致）。
+ */
+export function getArchiveDb(env: { DB_ARCHIVE?: D1Database }): DbClient | null {
+    if (!env.DB_ARCHIVE) return null;
+    let db = _clients.get(env.DB_ARCHIVE);
+    if (!db) {
+        db = drizzle(env.DB_ARCHIVE, { schema });
+        _clients.set(env.DB_ARCHIVE, db);
+    }
+    return db;
+}
+
 /** Reset cached DB clients — used in tests to isolate MockD1 instances */
 export function resetDb(): void {
     _clients = new WeakMap();

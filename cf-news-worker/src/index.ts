@@ -24,6 +24,7 @@ import { checkRadarPush } from './services/radarPush';
 import { generatePendingSummaries } from './services/summarizer';
 import { refreshModelCatalog } from './services/modelRefresher';
 import { runRetention } from './services/retention';
+import { evictBatch } from './services/archive';
 
 import { handleImageProxy } from './routes/image';
 import { handleScreenshot } from './routes/screenshot';
@@ -288,9 +289,18 @@ export default {
             // triggers（fetch/summary/trending/digest/model-sync 已占满），无法注册
             // 独立的 `10 4 * * *`。纯 D1 删除/更新不占 fetch 子请求预算；失败次日重试。
             console.log('Retention (piggyback on daily digest): pruning old content...');
-            ctx.waitUntil(runRetention(env).then(r =>
-                console.log(`Retention: contentCleared=${r.contentCleared}, logsDeleted=${r.logsDeleted}, batches=${r.batches}`)
-            ));
+            // 冷热分库驱逐挂在 retention 之后（顺序依赖）：retention 先把 >30d 的
+            // content 置 NULL，evict 再搬 >热窗口 的行 → 归档库不背正文大字段。
+            // evict 自带 enabled 开关 + 日额度帽，未开启/超帽时立即返回。
+            ctx.waitUntil(
+                runRetention(env)
+                    .then(r => {
+                        console.log(`Retention: contentCleared=${r.contentCleared}, logsDeleted=${r.logsDeleted}, batches=${r.batches}`);
+                        return evictBatch(env);
+                    })
+                    .then(r => console.log(`Archive evict: moved=${r.moved}, batches=${r.batches}${r.reason ? `, reason=${r.reason}` : ''}${r.error ? `, error=${r.error}` : ''}`))
+                    .catch(e => console.error('Retention/archive evict failed:', e))
+            );
             console.log('Daily digest cron fired, generating digest...');
             ctx.waitUntil(generateDailyDigest(env).then(r => console.log(`Digest: ${r ? 'generated' : 'skipped'}`)));
             console.log('Daily digest email cron fired, sending emails...');

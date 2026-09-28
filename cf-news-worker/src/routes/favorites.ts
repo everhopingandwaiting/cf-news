@@ -3,7 +3,8 @@ import { Bindings } from '../types';
 import { verifyJWT } from './auth';
 import { eq, desc, count, and, sql } from 'drizzle-orm';
 import { getDb } from '../db';
-import { userFavorites, newsItems, newsSources, newsSummaries } from '../db/schema';
+import { userFavorites } from '../db/schema';
+import { fetchNewsBundle } from '../services/archive';
 
 const favorites = new Hono<{ Bindings: Bindings }>();
 
@@ -25,28 +26,24 @@ favorites.get('/', async (c) => {
 
     try {
         const db = getDb(c.env);
-        const result = await db.select({
-            id: newsItems.id,
-            source_id: newsItems.source_id,
-            title: newsItems.title,
-            url: newsItems.url,
-            description: newsItems.description,
-            content: newsItems.content,
-            image_url: newsItems.image_url,
-            category: newsItems.category,
-            published_at: newsItems.published_at,
-            is_deleted: newsItems.is_deleted,
-            created_at: newsItems.created_at,
-            source_name: newsSources.name,
+        // 冷热分库：先在用户表上分页+计数（不依赖 news 所在侧），再批量水合新闻
+        //（主库优先、缺失补归档）——原 INNER JOIN 单库写法在驱逐后会丢归档行。
+        const favRows = await db.select({
+            news_id: userFavorites.news_id,
             favorited_at: userFavorites.created_at,
         })
             .from(userFavorites)
-            .innerJoin(newsItems, eq(userFavorites.news_id, newsItems.id))
-            .leftJoin(newsSources, eq(newsItems.source_id, newsSources.id))
             .where(eq(userFavorites.user_id, userId))
             .orderBy(desc(userFavorites.created_at))
             .limit(limit)
             .offset(offset);
+
+        const bundle = await fetchNewsBundle(c.env, favRows.map(r => r.news_id), {
+            withSummary: false, withTake: false,
+        });
+        const favorites = favRows
+            .filter(r => bundle.has(r.news_id))
+            .map(r => ({ ...bundle.get(r.news_id), favorited_at: r.favorited_at }));
 
         const countResult = await db.select({ total: count() })
             .from(userFavorites)
@@ -56,7 +53,7 @@ favorites.get('/', async (c) => {
         const total = countResult?.total || 0;
 
         return c.json({
-            favorites: result,
+            favorites,
             pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
         });
     } catch (error) {
@@ -71,22 +68,31 @@ favorites.get('/export', async (c) => {
 
     try {
         const db = getDb(c.env);
-        const items = await db.select({
-            title: newsItems.title,
-            url: newsItems.url,
-            description: newsItems.description,
-            aiSummary: newsSummaries.summary,
-            sourceName: newsSources.name,
-            category: newsItems.category,
-            published_at: newsItems.published_at,
+        // 冷热分库：用户表全量取行 → 批量水合（含摘要，导出需要 aiSummary）
+        const favRows = await db.select({
+            news_id: userFavorites.news_id,
             favorited_at: userFavorites.created_at,
         })
             .from(userFavorites)
-            .innerJoin(newsItems, eq(userFavorites.news_id, newsItems.id))
-            .leftJoin(newsSources, eq(newsItems.source_id, newsSources.id))
-            .leftJoin(newsSummaries, eq(newsSummaries.news_id, newsItems.id))
             .where(and(eq(userFavorites.user_id, userId), eq(userFavorites.is_deleted, 0)))
             .orderBy(desc(userFavorites.created_at));
+
+        const bundle = await fetchNewsBundle(c.env, favRows.map(r => r.news_id), { withTake: false });
+        const items = favRows
+            .filter(r => bundle.has(r.news_id))
+            .map(r => {
+                const n = bundle.get(r.news_id);
+                return {
+                    title: n.title,
+                    url: n.url,
+                    description: n.description,
+                    aiSummary: n.ai_summary || null,
+                    sourceName: n.source_name || null,
+                    category: n.category,
+                    published_at: n.published_at,
+                    favorited_at: r.favorited_at,
+                };
+            });
 
         const now = new Date().toISOString().split('T')[0];
         let md = `# 我的收藏\n\n导出时间: ${now} | 共 ${items.length} 条\n\n---\n\n`;

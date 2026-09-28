@@ -3,6 +3,7 @@ import { cors } from 'hono/cors';
 import { sql, eq } from 'drizzle-orm';
 import { MockD1 } from './mock-d1';
 import { getDb } from '../db';
+import { clearMemCache } from '../services/cache';
 import { newsItems, cronHeartbeat } from '../db/schema';
 import { resetStopWordsCache } from '../services/stopWordsCache';
 import authRoutes, { verifyJWT } from '../routes/auth';
@@ -59,8 +60,12 @@ export const MOCK_ENV: Record<string, any> = {
 export function buildTestApp() {
   resetStopWordsCache(); // isolate-level cache would leak stop_words across MockD1 seeds
   const db = new MockD1();
+  // 冷热分库：默认附带一个空的归档库 MockD1 —— 现有测试自动覆盖"已绑定、库为空"
+  // 的双库读路径（与生产初始态一致）；归档相关测试可通过 archiveDb 注入数据。
+  const archiveDb = new MockD1();
 
   const app = new Hono<{ Bindings: Record<string, any> }>();
+  (app as any)._archiveDb = archiveDb;
   app.use('/api/*', cors({
     origin: '*',
     allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -152,7 +157,7 @@ export function buildTestApp() {
     });
   });
 
-  return { app, db };
+  return { app, db, archive: archiveDb };
 }
 
 /** Make a JSON request to the test app, returns parsed response */
@@ -180,7 +185,10 @@ export async function request(
     exports: {},
     tracing: {},
   } as unknown as ExecutionContext;
-  const res = await app.fetch(req, { ...MOCK_ENV, DB: db }, execCtx);
+  // 每个请求清一次进程内 remember 记忆：测试要的是"每次请求如新"，
+  // 与生产多 isolate/多 colo 的记忆隔离语义对齐（生产靠 TTL 自然过期）
+  clearMemCache();
+  const res = await app.fetch(req, { ...MOCK_ENV, DB: db, DB_ARCHIVE: (app as any)._archiveDb ?? null }, execCtx);
   const body: any = await res.clone().json().catch(() => res.text().catch(() => null));
   return { status: res.status, body, headers: res.headers };
 }

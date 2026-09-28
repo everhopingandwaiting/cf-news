@@ -4,7 +4,8 @@ import { verifyJWT } from './auth';
 import { getRecommendations } from '../services/recommender';
 import { eq, and, sql, count, desc } from 'drizzle-orm';
 import { getDb } from '../db';
-import { userPreferences, pushSubscriptions, users, userFavorites, userReadHistory, userReadLater, userAlertKeywords, newsItems, newsSources, newsSummaries, newsAiTake } from '../db/schema';
+import { userPreferences, pushSubscriptions, users, userFavorites, userReadHistory, userReadLater, userAlertKeywords } from '../db/schema';
+import { fetchNewsBundle } from '../services/archive';
 
 const user = new Hono<{ Bindings: Bindings }>();
 
@@ -97,29 +98,40 @@ user.get('/read-later', async (c) => {
     const limit = Math.min(parseInt(c.req.query('limit') || '20', 10) || 20, 50);
     try {
         const db = getDb(c.env);
-        const rows = await db.select({
-            id: newsItems.id,
-            source_id: newsItems.source_id,
-            title: newsItems.title,
-            url: newsItems.url,
-            description: newsItems.description,
-            image_url: newsItems.image_url,
-            category: newsItems.category,
-            published_at: newsItems.published_at,
-            created_at: newsItems.created_at,
-            source_name: newsSources.name,
-            ai_summary: newsSummaries.summary,
-            ai_take: newsAiTake.take,
+        // 冷热分库：稍后读分页在用户表完成 → 水合新闻（含摘要/吐槽，归档回落）
+        const laterRows = await db.select({
+            news_id: userReadLater.news_id,
             saved_at: userReadLater.created_at,
         })
             .from(userReadLater)
-            .innerJoin(newsItems, eq(userReadLater.news_id, newsItems.id))
-            .leftJoin(newsSources, eq(newsItems.source_id, newsSources.id))
-            .leftJoin(newsSummaries, eq(newsSummaries.news_id, newsItems.id))
-            .leftJoin(newsAiTake, eq(newsAiTake.news_id, newsItems.id))
-            .where(and(eq(userReadLater.user_id, userId), eq(newsItems.is_deleted, 0)))
+            .where(eq(userReadLater.user_id, userId))
             .orderBy(desc(userReadLater.created_at))
             .limit(limit);
+
+        const bundle = await fetchNewsBundle(c.env, laterRows.map(r => r.news_id));
+        const rows = laterRows
+            .filter(r => {
+                const n = bundle.get(r.news_id);
+                return n && Number(n.is_deleted) === 0;
+            })
+            .map(r => {
+                const n = bundle.get(r.news_id);
+                return {
+                    id: n.id,
+                    source_id: n.source_id,
+                    title: n.title,
+                    url: n.url,
+                    description: n.description,
+                    image_url: n.image_url,
+                    category: n.category,
+                    published_at: n.published_at,
+                    created_at: n.created_at,
+                    source_name: n.source_name,
+                    ai_summary: n.ai_summary ?? null,
+                    ai_take: n.ai_take ?? null,
+                    saved_at: r.saved_at,
+                };
+            });
         return c.json({ items: rows });
     } catch (error) {
         console.error('read-later list error:', error);

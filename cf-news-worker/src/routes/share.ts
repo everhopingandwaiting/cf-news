@@ -1,6 +1,6 @@
 import { Bindings } from '../types';
 import { eq } from 'drizzle-orm';
-import { getDb } from '../db';
+import { getDb, getArchiveDb } from '../db';
 import { newsItems, newsSummaries } from '../db/schema';
 
 const CRAWLER_RE = /facebookexternalhit|twitterbot|linkedinbot|slackbot|discordbot|telegrambot|whatsapp|pinterest|baiduspider|googlebot|bingbot|yandexbot/i;
@@ -18,7 +18,7 @@ export async function handleShare(request: Request, env: Bindings): Promise<Resp
     if (isCrawler) {
         try {
             const db = getDb(env);
-            const item = await db.select({
+            const pick = (target: typeof db) => target.select({
                 title: newsItems.title,
                 description: newsItems.description,
                 image_url: newsItems.image_url,
@@ -27,8 +27,19 @@ export async function handleShare(request: Request, env: Bindings): Promise<Resp
                 .where(eq(newsItems.id, Number(id)))
                 .get();
 
+            // 冷热分库：主库 miss 回落归档；摘要与详情同侧读取
+            let item = await pick(db);
+            let sideDb = db;
+            if (!item) {
+                const arch = getArchiveDb(env);
+                if (arch) {
+                    const archived = await pick(arch);
+                    if (archived) { item = archived; sideDb = arch; }
+                }
+            }
+
             if (item) {
-                const summary = await db.select({ summary: newsSummaries.summary })
+                const summary = await sideDb.select({ summary: newsSummaries.summary })
                     .from(newsSummaries)
                     .where(eq(newsSummaries.news_id, Number(id)))
                     .get();

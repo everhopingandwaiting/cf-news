@@ -25,21 +25,62 @@ export async function setCache(db: DbClient, key: string, value: string, ttlSeco
 }
 
 export async function remember<T>(db: DbClient, key: string, ttlSeconds: number, compute: () => Promise<T>): Promise<T> {
-    const cached = await getCache(db, key);
-    if (cached !== null) {
+    // 同进程内存层：① 常态省掉一次 kv_cache 往返；② D1 写配额耗尽(kv 写不进)时
+    // 兜底——否则缓存永远冷、每个请求都全表 COUNT，把 5M/日读配额几小时内打爆
+    //（2026-09-26 双配额耗尽事故的读侧放大器）。只在本地 compute 后写入（值必然新鲜，
+    // 滞后 ≤ TTL，与 kv_cache 语义一致）；kv 命中路径不回填内存（避免叠加剩余 TTL）。
+    const now = Date.now();
+    const hit = memCache.get(key);
+    if (hit && hit.exp > now) {
         try {
-            return JSON.parse(cached) as T;
+            return JSON.parse(hit.v) as T;
         } catch {
-            // fall through and recompute on parse failure
+            memCache.delete(key);
         }
     }
+
+    try {
+        const cached = await getCache(db, key);
+        if (cached !== null) {
+            try {
+                return JSON.parse(cached) as T;
+            } catch {
+                // fall through and recompute on parse failure
+            }
+        }
+    } catch (e) {
+        // 缓存读失败不阻断：跳到重算（真实数据的读取在 compute 内）
+        console.error(`remember: cache read skipped (${key}):`, e);
+    }
     const value = await compute();
-    await setCache(db, key, JSON.stringify(value), ttlSeconds);
+    const payload = JSON.stringify(value);
+    if (memCache.size >= MEM_CACHE_CAP) {
+        const oldest = memCache.keys().next();
+        if (!oldest.done) memCache.delete(oldest.value);
+    }
+    memCache.set(key, { v: payload, exp: now + ttlSeconds * 1000 });
+    try {
+        await setCache(db, key, payload, ttlSeconds);
+    } catch (e) {
+        // 缓存写失败（D1 日写配额耗尽/存储触顶等平台错误）绝不能把只读端点打成 500：
+        // 本次照常返回计算值，内存层承接后续请求，下次到期重算——2026-09-26
+        // 免费档写配额被打爆时 /api/news 与 /categories/list 连续 500 的教训。
+        console.error(`remember: cache write skipped (${key}):`, e);
+    }
     return value;
+}
+
+/** 测试/失效场景清空内存层（kv_cache 行级失效无法触达其他 colo 的内存，最长滞后 = TTL） */
+export function clearMemCache(): void {
+    memCache.clear();
 }
 
 /** 新闻总数计数器：默认新闻列表 total 的缓存键（TTL 过期后由路由侧重算真实 COUNT） */
 export const NEWS_ACTIVE_COUNT_KEY = 'news_items_active_count';
+
+// 进程内缓存（Map 按插入序淘汰，封顶防无界增长）：见 remember() 注释
+const memCache = new Map<string, { v: string; exp: number }>();
+const MEM_CACHE_CAP = 500;
 /** 计数器 TTL：1 小时——由 saveNewsItems 增量维护 + TTL 到期重算，避免长窗口内总数失真 */
 export const NEWS_ACTIVE_COUNT_TTL = 3600;
 
@@ -50,6 +91,8 @@ export const NEWS_FILTERED_COUNT_TTL = 600;
 export const NEWS_CATEGORIES_KEY = 'news_categories_list';
 /** 分类聚合缓存 TTL：10 分钟——分类计数允许 ≤10 分钟滞后 */
 export const NEWS_CATEGORIES_TTL = 600;
+/** 冷热分库归档侧新闻计数键（NEWS_ACTIVE_COUNT_KEY 只计主库热行，两者求和 = 全量） */
+export const NEWS_ARCHIVE_COUNT_KEY = 'news_archive_count';
 
 /**
  * 原子递增缓存值（仅整数语义）。

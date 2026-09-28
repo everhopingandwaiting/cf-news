@@ -52,6 +52,7 @@ AI-generated summary of today's top news, sorted by time with language markers (
 - **Email digest** — Subscribe to daily news summaries
 - **Auto-update** — Cron triggers fetch new articles every hour
 - **D1 storage hygiene** — Daily retention job (runs with the 08:00 UTC digest cron; Workers Free caps each account at 5 cron triggers) deletes AI call logs older than 7 days and clears article content older than 30 days, keeping D1 under the free-tier 500MB limit
+- **Hot/cold archive sharding** — News content older than the hot window (default 90 days) is evicted daily into a second D1 database (`cf-news-archive`); feeds, search, detail, favorites and related views fan out across both databases transparently, so the main DB stays bounded on the free tier
 - **News voice playback** — Browser-native SpeechSynthesis, free, no API calls
 - **AI classification** — LLaMA 3.1 8B classifies news by content, not source defaults
 - **Bot protection** — Turnstile verification on login/register
@@ -145,9 +146,13 @@ This is the most important step. The token needs specific permissions.
 ```bash
 docker run --rm -e CLOUDFLARE_API_TOKEN=your-token-here \
   cf-news-worker npx wrangler d1 create news-db
+
+# 归档库（冷热分库：超过热窗口的新闻内容域迁入此库）
+docker run --rm -e CLOUDFLARE_API_TOKEN=your-token-here \
+  cf-news-worker npx wrangler d1 create cf-news-archive
 ```
 
-Copy the `database_id` from the output — you'll need it for `.env`.
+Copy both `database_id`s from the output — you'll need them for `.env`.
 
 ### Step 5: Create KV Namespace
 
@@ -172,6 +177,7 @@ Edit `cf-news-worker/.env` with your values:
 ```bash
 CLOUDFLARE_API_TOKEN=your-api-token-from-step-2
 D1_DATABASE_ID=your-d1-database-id-from-step-4
+ARCHIVE_DATABASE_ID=your-archive-d1-database-id-from-step-4
 KV_NAMESPACE_ID=your-kv-namespace-id-from-step-5
 ZONE_ID=your-zone-id-from-step-3
 ROUTE_PATTERN=your-domain.com/*
@@ -271,6 +277,7 @@ The project includes a GitHub Actions workflow for automatic deployment. To use 
 |-------------|-------------|
 | `CF_API_TOKEN` | Cloudflare API Token (from Step 2) |
 | `D1_DATABASE_ID` | D1 database ID |
+| `ARCHIVE_DATABASE_ID` | D1 archive database ID (hot/cold sharding) |
 | `KV_NAMESPACE_ID` | KV namespace ID |
 | `ZONE_ID` | Cloudflare Zone ID |
 | `ROUTE_PATTERN` | Your domain route (e.g., `yourdomain.com/*`) |
@@ -340,7 +347,7 @@ docker run --rm --env-file .env \
 cd ..
 ```
 
-After the first initialization, use `cf-news-worker/scripts/migrate.sh` or `./deploy.sh` to apply incremental D1 schema changes. `deploy.sh` runs pending migrations automatically.
+After the first initialization, use `cf-news-worker/scripts/migrate.sh` or `./deploy.sh` to apply incremental D1 schema changes. `deploy.sh` runs pending migrations automatically. `migrate.sh` maintains **both databases** by default (`news-db` from `migrations/`, `cf-news-archive` from `migrations-archive/`; target one with `--database news-db|cf-news-archive`).
 
 ## Project Structure
 

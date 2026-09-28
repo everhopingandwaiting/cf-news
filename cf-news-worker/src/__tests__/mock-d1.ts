@@ -5,6 +5,7 @@
 import { readFileSync, readdirSync } from 'fs';
 import initSqlJs, { Database as SqlJsDatabase, SqlJsStatic } from 'sql.js';
 import { resolve } from 'path';
+import { clearMemCache } from '../services/cache';
 
 // Module-level singleton — WASM loaded once
 let sqlJsPromise: Promise<SqlJsStatic> | null = null;
@@ -238,5 +239,8 @@ export class MockD1 {
     if (table === 'news_items') {
       this._db.run("DELETE FROM kv_cache WHERE cache_key = 'news_items_active_count'");
     }
+    // 记忆层与 kv_cache 同生命周期：seed 改变数据后必须同时清进程内记忆，
+    // 否则 remember() 会跨 MockD1 实例复用旧计数（同进程模块级 Map）
+    clearMemCache();
   }
 }

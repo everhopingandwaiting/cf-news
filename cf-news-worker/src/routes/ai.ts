@@ -3,7 +3,7 @@ import { Bindings } from '../types';
 import { askQuestion, findRelated, getDailyDigest, generateDailyDigest, listDigestDates } from '../services/aiSearch';
 import { verifyJWT } from './auth';
 import { eq, sql, like, and, ne, or, desc, isNotNull } from 'drizzle-orm';
-import { getDb } from '../db';
+import { getDb, getArchiveDb } from '../db';
 import { newsItems, newsSources } from '../db/schema';
 import { loadStopWords } from '../services/stopWordsCache';
 
@@ -117,11 +117,21 @@ router.get('/related/:id', async (c) => {
         if (cached) return cached;
 
         const db = getDb(c.env);
-        const item = await db.select({
+        const pick = (target: typeof db) => target.select({
             id: newsItems.id, title: newsItems.title, category: newsItems.category,
         }).from(newsItems)
             .where(and(eq(newsItems.id, id), eq(newsItems.is_deleted, 0)))
             .get();
+        // 冷热分库：文章所在侧即兜底检索侧——老文章的 FTS/同分类相关文全在归档侧
+        let item = await pick(db);
+        let sideDb: typeof db = db;
+        if (!item) {
+            const arch = getArchiveDb(c.env);
+            if (arch) {
+                const archived = await pick(arch);
+                if (archived) { item = archived; sideDb = arch; }
+            }
+        }
         if (!item) return c.json({ error: 'News not found' }, 404);
 
         let related: any[] = [];
@@ -146,13 +156,13 @@ router.get('/related/:id', async (c) => {
                 try {
                     // FTS5 MATCH cannot take a bound parameter on D1 — inline
                     // the sanitized query (keywords are word-chars only).
-                    const ftsIds = await db.all<{ rowid: number }>(
+                    const ftsIds = await sideDb.all<{ rowid: number }>(
                         sql`SELECT rowid FROM news_fts WHERE news_fts MATCH ${sql.raw(`'${ftsQuery}'`)} LIMIT 20`
                     );
                     if (ftsIds.length > 0) {
                         const matchedIds = ftsIds.map(r => r.rowid).filter(rid => rid !== id);
                         if (matchedIds.length > 0) {
-                            related = await db.select({
+                            related = await sideDb.select({
                                 id: newsItems.id, title: newsItems.title,
                                 description: newsItems.description, image_url: newsItems.image_url,
                                 published_at: newsItems.published_at,
@@ -177,7 +187,7 @@ router.get('/related/:id', async (c) => {
 
         // 3) Same category fallback
         if (related.length === 0) {
-            related = await db.select({
+            related = await sideDb.select({
                 id: newsItems.id, title: newsItems.title,
                 description: newsItems.description, image_url: newsItems.image_url,
                 published_at: newsItems.published_at,

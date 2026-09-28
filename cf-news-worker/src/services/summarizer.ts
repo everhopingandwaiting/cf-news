@@ -2,9 +2,10 @@ import { Bindings, NewsQueueMessage } from '../types';
 import { getConfig, getConfigInt, getAvailableModels, getAvailableModelSpecs, getProviderInfo, getProviderOrder, callAI, doOpenAICompat as aiDoOpenAICompat, doCF as aiDoCF } from './aiProvider';
 import { fetchRichArticleContent } from './contentFetcher';
 import { eq, and, sql } from 'drizzle-orm';
-import { getDb } from '../db';
+import { getDb, type DbClient } from '../db';
 import { newsSummaries, newsAiTake, newsPerspectives, newsItems } from '../db/schema';
 import { loadStopWords } from './stopWordsCache';
+import { dbForNews, fetchNewsBundle } from './archive';
 
 function cleanText(text: string): string {
     return text.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
@@ -103,7 +104,9 @@ function enqueueTakeAndEntities(env: Bindings, newsId: number, item: { title: st
 export async function generateSummaryForNews(env: Bindings, newsId: number, item: { title: string; description?: string; content?: string }): Promise<boolean> {
     const summary = await generateSummary(env, { ...item, id: newsId });
     if (!summary || summary.length < 10) return false;
-    const db = getDb(env);
+    // 冷热分库：摘要与 pending 标志写在新闻所在侧（热文路径 = 原行为 +1 次 id 探测）
+    const { db, side } = await dbForNews(env, newsId);
+    if (!side) return false;
     const existing = await db.select({ id: newsSummaries.id })
         .from(newsSummaries)
         .where(eq(newsSummaries.news_id, newsId))
@@ -251,10 +254,12 @@ Return: [{"summary":"<article1 summary>"},{"summary":"<article2 summary>"},...]`
     if (result) {
         const summaries = parseBatchResult(result, items.length);
         if (summaries) {
-            const db = getDb(env);
             let count = 0;
             for (let i = 0; i < items.length; i++) {
                 if (summaries[i]) {
+                    // 冷热分库：逐条按新闻所在侧写入（手动 by-id 可能命中归档文章）
+                    const { db, side } = await dbForNews(env, items[i].id);
+                    if (!side) continue;
                     await db.run(sql`INSERT OR REPLACE INTO news_summaries (news_id, summary) VALUES (${items[i].id}, ${summaries[i]!.substring(0, 500)})`);
                     await db.update(newsItems)
                         .set({ summary_pending: 0 })
@@ -300,7 +305,9 @@ function parseBatchResult(text: string, expectedCount: number): (string | null)[
 const TAKE_PROMPT = '你是一个毒舌但有趣的新闻评论员。用一句中文吐槽这篇新闻，幽默犀利，一针见血，不超过40字。不要用表情符号。\n\n新闻标题：{{TITLE}}\n\n吐槽：';
 
 export async function generateAITake(env: Bindings, newsId: number, item: { title: string; description?: string; content?: string }): Promise<void> {
-    const db = getDb(env);
+    // 冷热分库：吐槽读写都在新闻所在侧
+    const { db, side } = await dbForNews(env, newsId);
+    if (!side) return;
     const existing = await db.select({ take: newsAiTake.take })
         .from(newsAiTake)
         .where(eq(newsAiTake.news_id, newsId))
@@ -371,8 +378,9 @@ async function buildPerspectiveFtsQuery(env: Bindings, title: string): Promise<s
     return keywords.map(k => `"${k.replace(/"/g, '')}"`).join(' OR ');
 }
 
-async function findRelatedByFts(env: Bindings, newsId: number, title: string, category?: string | null): Promise<{ id: number; source_name: string; title: string; description: string | null }[]> {
-    const db = getDb(env);
+async function findRelatedByFts(env: Bindings, db: DbClient, newsId: number, title: string, category?: string | null): Promise<{ id: number; source_name: string; title: string; description: string | null }[]> {
+    // stop_words 只在主库（buildPerspectiveFtsQuery 内部固定 getDb(env)）；
+    // FTS 与结果行按调用方给定侧执行——冷热分库下同事件报道与目标文章同侧
     const ftsQuery = await buildPerspectiveFtsQuery(env, title);
     if (!ftsQuery) return [];
 
@@ -399,7 +407,10 @@ async function findRelatedByFts(env: Bindings, newsId: number, title: string, ca
 }
 
 export async function generatePerspectives(env: Bindings, newsId: number): Promise<{ related: { id: number; source: string; title: string }[]; perspective: string } | null> {
-    const db = getDb(env);
+    // 冷热分库：缓存读取 / 文章 / 同事件检索 / 结果写入都在新闻所在侧；
+    // related ids 用 fetchNewsBundle 水合（历史 related 可能已跨侧漂移）
+    const { db, side } = await dbForNews(env, newsId);
+    if (!side) return null;
     const cached = await db.select({
         relatedIds: newsPerspectives.related_ids,
         perspective: newsPerspectives.perspective,
@@ -408,13 +419,13 @@ export async function generatePerspectives(env: Bindings, newsId: number): Promi
         .get();
 
     if (cached) {
-        const ids = cached.relatedIds.split(',').map(Number);
-        const rows = await db.all<{ id: number; source_name: string; title: string }>(sql`
-            SELECT n.id, s.name as source_name, n.title
-            FROM news_items n LEFT JOIN news_sources s ON n.source_id = s.id
-            WHERE n.id IN (${sql.raw(ids.join(','))})
-        `);
-        return { related: rows.map(r => ({ id: r.id, source: r.source_name, title: r.title })), perspective: cached.perspective };
+        const ids = cached.relatedIds.split(',').map(Number).filter(id => Number.isFinite(id));
+        const bundle = await fetchNewsBundle(env, ids, { withSummary: false, withTake: false });
+        const related = ids
+            .map(id => bundle.get(id))
+            .filter((r): r is any => !!r)
+            .map(r => ({ id: r.id, source: r.source_name, title: r.title }));
+        return { related, perspective: cached.perspective };
     }
 
     const item = await db.select({
@@ -429,7 +440,7 @@ export async function generatePerspectives(env: Bindings, newsId: number): Promi
     if (text.length < 20) return null;
 
     try {
-        const rows = await findRelatedByFts(env, newsId, item.title, item.category);
+        const rows = await findRelatedByFts(env, db, newsId, item.title, item.category);
         if (rows.length === 0) return null;
 
         const articles = rows.map((r, i) => `【来源${i + 1}】${r.source_name || '未知'}\n标题：${r.title}\n摘要：${(r.description || '').substring(0, 200)}`).join('\n\n');

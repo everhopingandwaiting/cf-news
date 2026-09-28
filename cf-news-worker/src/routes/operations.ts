@@ -4,32 +4,44 @@ import { fetchNews } from '../services/newsFetcher';
 import { generateSummaryForNews, generateBatchSummariesForNews, generateAITake } from '../services/summarizer';
 import { translateText } from '../services/translator';
 import { eq, sql, isNull, and } from 'drizzle-orm';
-import { getDb } from '../db';
+import { getDb, getArchiveDb, type DbClient } from '../db';
 import { appConfig, newsItems, newsSummaries, newsAiTake, providers, providerModels } from '../db/schema';
 import { getConfig, getProviderOrder } from '../services/aiProvider';
+import { fetchNewsBundle } from '../services/archive';
 
 type NewsRow = { id: number; title: string; description: string | null; content: string | null };
 
-async function loadSummarizeItemsByIds(db: ReturnType<typeof getDb>, ids: number[]): Promise<NewsRow[]> {
-    const rows = await Promise.all(
-        ids.map(async (id) => {
-            const item = await db.select({
-                id: newsItems.id,
-                title: newsItems.title,
-                description: newsItems.description,
-                content: newsItems.content,
-            }).from(newsItems).where(eq(newsItems.id, id)).get();
-            if (!item) return null;
+/**
+ * 冷热分库：按 id 水合待摘要文章（主库优先、归档回落），已有摘要的跳过。
+ * 原实现逐 id 查主库 + 查 news_summaries；水合结果里 ai_summary 即同侧摘要行
+ * （LEFT JOIN 无行 → null；illustrate 直写的空串 summary ≠ null，与原"行存在即跳过"一致）。
+ */
+async function loadSummarizeItemsByIds(env: Bindings, ids: number[]): Promise<NewsRow[]> {
+    const bundle = await fetchNewsBundle(env, ids, { withTake: false });
+    const out: NewsRow[] = [];
+    for (const id of ids) {
+        const row = bundle.get(id);
+        if (!row) continue;
+        if (row.ai_summary != null) continue;
+        out.push({ id: row.id, title: row.title, description: row.description, content: row.content });
+    }
+    return out;
+}
 
-            const existing = await db.select({ id: newsSummaries.id })
-                .from(newsSummaries).where(eq(newsSummaries.news_id, id)).get();
-            if (existing) return null;
-
-            return item;
-        })
-    );
-
-    return rows.filter((row): row is NewsRow => row !== null);
+/** 主库 miss → 归档回落的单条取行（by-id 手动操作统一入口） */
+async function pickNewsItem(
+    env: Bindings,
+    selectCols: (target: DbClient) => Promise<any | undefined>,
+): Promise<{ item: any; db: DbClient } | null> {
+    const main = getDb(env);
+    const item = await selectCols(main);
+    if (item) return { item, db: main };
+    const arch = getArchiveDb(env);
+    if (arch) {
+        const archived = await selectCols(arch);
+        if (archived) return { item: archived, db: arch };
+    }
+    return null;
 }
 
 const operations = new Hono<{ Bindings: Bindings }>();
@@ -74,7 +86,7 @@ operations.post('/summarize', async (c) => {
 
         let items: NewsRow[];
         if (ids && ids.length > 0) {
-            items = await loadSummarizeItemsByIds(db, ids);
+            items = await loadSummarizeItemsByIds(c.env, ids);
         } else {
             items = await db.select({
                 id: newsItems.id, title: newsItems.title,
@@ -113,7 +125,10 @@ operations.post('/summarize', async (c) => {
 operations.post('/summarize/clear', async (c) => {
     const db = getDb(c.env);
     try {
+        // 冷热分库：摘要清空覆盖两侧（归档文章的摘要也在归档侧）
         await db.delete(newsSummaries);
+        const arch = getArchiveDb(c.env);
+        if (arch) await arch.delete(newsSummaries);
         return c.json({ success: true, message: '所有摘要已清空' });
     } catch (error) {
         return c.json({ success: false, error: String(error) }, 500);
@@ -122,15 +137,17 @@ operations.post('/summarize/clear', async (c) => {
 
 operations.post('/summarize/:newsId', async (c) => {
     const newsId = parseInt(c.req.param('newsId'));
-    const db = getDb(c.env);
+    if (!Number.isFinite(newsId)) return c.json({ success: false, error: 'Invalid news id' }, 400);
     try {
-        const item = await db.select({
+        // 冷热分库：取行与"已有摘要"判断都在文章所在侧
+        const found = await pickNewsItem(c.env, (t) => t.select({
             id: newsItems.id, title: newsItems.title,
             description: newsItems.description, content: newsItems.content,
-        }).from(newsItems).where(eq(newsItems.id, newsId)).get();
-        if (!item) return c.json({ success: false, error: '新闻不存在' }, 404);
+        }).from(newsItems).where(eq(newsItems.id, newsId)).get());
+        if (!found) return c.json({ success: false, error: '新闻不存在' }, 404);
+        const { item, db: sideDb } = found;
 
-        const existing = await db.select({ id: newsSummaries.id })
+        const existing = await sideDb.select({ id: newsSummaries.id })
             .from(newsSummaries).where(eq(newsSummaries.news_id, newsId)).get();
         if (existing) return c.json({ success: true, generated: 0, skipped: true });
 
@@ -143,16 +160,17 @@ operations.post('/summarize/:newsId', async (c) => {
 
 operations.post('/take/:newsId', async (c) => {
     const newsId = parseInt(c.req.param('newsId'));
-    const db = getDb(c.env);
+    if (!Number.isFinite(newsId)) return c.json({ success: false, error: 'Invalid news id' }, 400);
     try {
-        const item = await db.select({
+        const found = await pickNewsItem(c.env, (t) => t.select({
             id: newsItems.id, title: newsItems.title,
             description: newsItems.description, content: newsItems.content,
-        }).from(newsItems).where(eq(newsItems.id, newsId)).get();
-        if (!item) return c.json({ success: false, error: '新闻不存在' }, 404);
+        }).from(newsItems).where(eq(newsItems.id, newsId)).get());
+        if (!found) return c.json({ success: false, error: '新闻不存在' }, 404);
+        const { item, db: sideDb } = found;
 
         await generateAITake(c.env, newsId, item as any);
-        const row = await db.select({ take: newsAiTake.take })
+        const row = await sideDb.select({ take: newsAiTake.take })
             .from(newsAiTake).where(eq(newsAiTake.news_id, newsId)).get();
         return c.json({ success: true, take: row?.take || null });
     } catch (error) {
@@ -162,16 +180,19 @@ operations.post('/take/:newsId', async (c) => {
 
 operations.post('/illustrate/:newsId', async (c) => {
     const newsId = parseInt(c.req.param('newsId'));
+    if (!Number.isFinite(newsId)) return c.json({ success: false, error: 'Invalid news id' }, 400);
     const db = getDb(c.env);
     try {
-        const item = await db.select({
+        // 冷热分库：取行/已有插画判断/落库都在文章所在侧；providers 配置表只在主库
+        const found = await pickNewsItem(c.env, (t) => t.select({
             id: newsItems.id, title: newsItems.title,
             description: newsItems.description, content: newsItems.content,
             category: newsItems.category,
-        }).from(newsItems).where(eq(newsItems.id, newsId)).get();
-        if (!item) return c.json({ success: false, error: '新闻不存在' }, 404);
+        }).from(newsItems).where(eq(newsItems.id, newsId)).get());
+        if (!found) return c.json({ success: false, error: '新闻不存在' }, 404);
+        const { item, db: sideDb } = found;
 
-        const existing = await db.select({ illustration_url: newsSummaries.illustration_url })
+        const existing = await sideDb.select({ illustration_url: newsSummaries.illustration_url })
             .from(newsSummaries)
             .where(eq(newsSummaries.news_id, newsId))
             .get() as { illustration_url: string | null } | undefined;
@@ -250,11 +271,11 @@ Requirements:
             }
         }
 
-        await db.run(sql`INSERT OR REPLACE INTO news_summaries (news_id, summary, illustration_url)
+        await sideDb.run(sql`INSERT OR REPLACE INTO news_summaries (news_id, summary, illustration_url)
             VALUES (${newsId}, '', ${storedUrl})`);
         // 插画直写后该条已不再需要摘要队列处理；清掉 pending 以免后续
         // 批量摘要的 INSERT OR REPLACE 覆盖本行、丢掉 illustration_url
-        await db.update(newsItems)
+        await sideDb.update(newsItems)
             .set({ summary_pending: 0 })
             .where(eq(newsItems.id, newsId));
         return c.json({ success: true, image_url: storedUrl, cached: false });
@@ -265,13 +286,15 @@ Requirements:
 
 operations.post('/illustrate-stock/:newsId', async (c) => {
     const newsId = parseInt(c.req.param('newsId'));
-    const db = getDb(c.env);
+    if (!Number.isFinite(newsId)) return c.json({ success: false, error: 'Invalid news id' }, 400);
     try {
-        const item = await db.select({
+        // 冷热分库：取行与 image_url 回写在文章所在侧
+        const found = await pickNewsItem(c.env, (t) => t.select({
             id: newsItems.id, title: newsItems.title,
             category: newsItems.category, image_url: newsItems.image_url,
-        }).from(newsItems).where(eq(newsItems.id, newsId)).get();
-        if (!item) return c.json({ success: false, error: '新闻不存在' }, 404);
+        }).from(newsItems).where(eq(newsItems.id, newsId)).get());
+        if (!found) return c.json({ success: false, error: '新闻不存在' }, 404);
+        const { item, db: sideDb } = found;
         if (item.image_url) {
             return c.json({ success: true, image_url: item.image_url, cached: true });
         }
@@ -282,7 +305,7 @@ operations.post('/illustrate-stock/:newsId', async (c) => {
             return c.json({ success: false, error: 'Pixabay 配图失败（未配置 key、无匹配结果或下载失败）' }, 502);
         }
 
-        await db.update(newsItems)
+        await sideDb.update(newsItems)
             .set({ image_url: proxyUrl })
             .where(eq(newsItems.id, newsId));
         return c.json({ success: true, image_url: proxyUrl, cached: false });

@@ -5,7 +5,7 @@ import { storeDedupHash } from '../services/dedup';
 import { extractEntities } from '../services/entityExtractor';
 import { refreshModelCatalog } from '../services/modelRefresher';
 import { eq, desc, sql, and, ne } from 'drizzle-orm';
-import { getDb } from '../db';
+import { getDb, getArchiveDb } from '../db';
 import { newsSources, newsItems, newsFts } from '../db/schema';
 
 const admin = new Hono<{ Bindings: Bindings }>();
@@ -197,6 +197,7 @@ admin.get('/debug/fetch', async (c) => {
 });
 
 // Rebuild FTS5 search index from all existing news items (async, runs in background)
+// 冷热分库：主库与归档库各自重建（两侧 news_fts 独立，rowid 都对齐本侧 news_items）
 admin.post('/rebuild-index', async (c) => {
     const db = getDb(c.env);
     c.executionCtx.waitUntil((async () => {
@@ -206,7 +207,16 @@ admin.post('/rebuild-index', async (c) => {
                 INSERT INTO news_fts(rowid, title, description)
                 SELECT id, title, COALESCE(description, '') FROM news_items WHERE is_deleted = 0
             `);
-            console.log(`FTS5 index rebuild complete: ${result.meta.changes || 0} items`);
+            console.log(`FTS5 index rebuild complete (main): ${result.meta.changes || 0} items`);
+            const arch = getArchiveDb(c.env);
+            if (arch) {
+                await arch.run(sql`DELETE FROM news_fts`);
+                const archResult = await arch.run(sql`
+                    INSERT INTO news_fts(rowid, title, description)
+                    SELECT id, title, COALESCE(description, '') FROM news_items WHERE is_deleted = 0
+                `);
+                console.log(`FTS5 index rebuild complete (archive): ${archResult.meta.changes || 0} items`);
+            }
         } catch (e) {
             console.error('FTS5 index rebuild failed:', e);
         }

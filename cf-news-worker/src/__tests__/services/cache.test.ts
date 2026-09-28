@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { MockD1 } from '../mock-d1';
 import { getDb, resetDb } from '../../db';
-import { NEWS_ACTIVE_COUNT_KEY, getCache, setCache, remember, incrementCache } from '../../services/cache';
+import { NEWS_ACTIVE_COUNT_KEY, getCache, setCache, remember, incrementCache, clearMemCache } from '../../services/cache';
 
 beforeAll(() => {
   resetDb();
@@ -56,5 +56,26 @@ describe('kv_cache helpers', () => {
     await setCache(db, 'zero', '0', 60);
     await incrementCache(db, 'zero', 0);
     expect(await getCache(db, 'zero')).toBe('0');
+  });
+
+  it('remember tolerates cache read/write failures — 写配额耗尽时只读端点不 500，内存层承接', async () => {
+    resetDb();
+    const env = newEnv();
+    const db = getDb(env);
+    // 模拟平台级写拒绝：缓存表不可用 → getCache/setCache 都抛错
+    await db.run(sql`DROP TABLE kv_cache`);
+    let calls = 0;
+    const compute = async () => { calls++; return 'ok'; };
+    // 读失败跳过缓存、写失败静默吞掉，照常返回计算值
+    expect(await remember(db, 'robust', 60, compute)).toBe('ok');
+    expect(calls).toBe(1);
+    // 内存层承接后续请求：kv 写不进也只算一次（防全表 COUNT 风暴打爆读配额）
+    expect(await remember(db, 'robust', 60, compute)).toBe('ok');
+    expect(await remember(db, 'robust', 60, compute)).toBe('ok');
+    expect(calls).toBe(1);
+    // clearMemCache 后强制重算（seed 钩子/request 钩子同款语义）
+    clearMemCache();
+    expect(await remember(db, 'robust', 60, compute)).toBe('ok');
+    expect(calls).toBe(2);
   });
 });

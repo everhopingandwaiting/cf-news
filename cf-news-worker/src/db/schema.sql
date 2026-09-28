@@ -56,6 +56,8 @@ ALTER TABLE news_items ADD COLUMN dedup_hash TEXT;
 ALTER TABLE news_items ADD COLUMN summary_pending INTEGER NOT NULL DEFAULT 1;
 
 -- 用户收藏表
+-- 注: 不建 news_id → news_items 外键（迁移 028 同款）——冷热分库驱逐需 DELETE
+-- 父行，用户引用由应用层路由（main→archive 回落）保证，users 外键保留。
 CREATE TABLE IF NOT EXISTS user_favorites (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
@@ -64,7 +66,6 @@ CREATE TABLE IF NOT EXISTS user_favorites (
     deleted_at DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id),
-    FOREIGN KEY (news_id) REFERENCES news_items(id),
     UNIQUE(user_id, news_id)
 );
 
@@ -77,7 +78,6 @@ CREATE TABLE IF NOT EXISTS user_read_history (
     deleted_at DATETIME,
     read_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id),
-    FOREIGN KEY (news_id) REFERENCES news_items(id),
     UNIQUE(user_id, news_id)
 );
 
@@ -88,7 +88,6 @@ CREATE TABLE IF NOT EXISTS user_read_later (
     news_id INTEGER NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id),
-    FOREIGN KEY (news_id) REFERENCES news_items(id),
     UNIQUE(user_id, news_id)
 );
 
@@ -111,7 +110,6 @@ CREATE TABLE IF NOT EXISTS news_comments (
     is_deleted INTEGER DEFAULT 0,
     deleted_at DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (news_id) REFERENCES news_items(id),
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
 

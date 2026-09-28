@@ -4,6 +4,7 @@ import { resetDb } from '../../db';
 
 let app: ReturnType<typeof buildTestApp>['app'];
 let db: ReturnType<typeof buildTestApp>['db'];
+let archive: ReturnType<typeof buildTestApp>['archive'];
 let token: string;
 
 beforeAll(async () => {
@@ -13,6 +14,7 @@ beforeAll(async () => {
   const built = buildTestApp();
   app = built.app;
   db = built.db;
+  archive = built.archive;
 
   const reg = await request(app, db, '/api/auth/register', {
     method: 'POST',
@@ -91,5 +93,27 @@ describe('Favorites API', () => {
     });
     expect(status).toBe(200);
     expect(body.favorites).toHaveLength(0);
+  });
+
+  it('GET /api/user/favorites - 归档文章收藏也能列出（冷热双库水合）', async () => {
+    await archive.seed('news_sources', [{ id: 1, name: 'Src', feed_url: 'https://rss', category: 'tech', language: 'en' }]);
+    await archive.seed('news_items', [
+      { id: 900, source_id: 1, title: 'Cold Favorite', url: 'https://cold/fav', category: 'news', is_deleted: 0 },
+    ]);
+    const add = await request(app, db, '/api/user/favorites/900', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(add.status).toBe(201);
+
+    const { status, body } = await request(app, db, '/api/user/favorites', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(status).toBe(200);
+    const cold = body.favorites.find((f: any) => f.id === 900);
+    expect(cold).toBeDefined();
+    expect(cold.title).toBe('Cold Favorite');
+    expect(cold.source_name).toBe('Src');
+    expect(body.pagination.total).toBe(1);
   });
 });

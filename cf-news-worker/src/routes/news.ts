@@ -2,9 +2,10 @@ import { Hono } from 'hono';
 import { Bindings, NewsItem } from '../types';
 import { generatePerspectives } from '../services/summarizer';
 import { eq, sql, and, count, desc, like, SQL } from 'drizzle-orm';
-import { getDb } from '../db';
+import { getDb, getArchiveDb, type DbClient } from '../db';
 import { newsItems, newsSources, newsSummaries, newsAiTake, newsComments, newsFts } from '../db/schema';
-import { NEWS_ACTIVE_COUNT_KEY, NEWS_ACTIVE_COUNT_TTL, NEWS_FILTERED_COUNT_TTL, NEWS_CATEGORIES_KEY, NEWS_CATEGORIES_TTL, remember } from '../services/cache';
+import { NEWS_ACTIVE_COUNT_KEY, NEWS_ACTIVE_COUNT_TTL, NEWS_ARCHIVE_COUNT_KEY, NEWS_FILTERED_COUNT_TTL, NEWS_CATEGORIES_KEY, NEWS_CATEGORIES_TTL, remember } from '../services/cache';
+import { fetchNewsDetail, fetchCommentCounts, searchFtsBoth, dbForNews } from '../services/archive';
 import { verifyJWT } from './auth';
 
 const news = new Hono<{ Bindings: Bindings }>();
@@ -49,21 +50,14 @@ async function searchNewsFTS(env: Bindings, query: string): Promise<number[] | n
     const hasCJK = /[\u4e00-\u9fff]/.test(sanitized);
     if (hasCJK) return null;
 
-    let ids: number[] = [];
+    // 冷热分库：双库 FTS 扇出取 id 并集（searchFtsBoth 内部逐侧容错）
+    const ftsQuery = sanitized.split(/\s+/).map(w => w + '*').join(' ');
     try {
-        const ftsQuery = sanitized.split(/\s+/).map(w => w + '*').join(' ');
-        const db = getDb(env);
-        // FTS5 MATCH cannot take a bound parameter on D1 — inline the sanitized
-        // query (query is restricted to word chars above, so no injection).
-        const result = await db.all<{ rowid: number }>(
-            sql`SELECT rowid FROM news_fts WHERE news_fts MATCH ${sql.raw(`'${ftsQuery}'`)} LIMIT 200`
-        );
-        ids = result.map(r => r.rowid);
+        return await searchFtsBoth(env, ftsQuery, 200);
     } catch (e) {
         console.error('FTS5 search error:', e);
         return null;
     }
-    return ids.length > 0 ? ids : null;
 }
 
 news.get('/', async (c) => {
@@ -83,8 +77,9 @@ news.get('/', async (c) => {
     const cached = await cache.match(cacheKey);
     if (cached) return cached;
 
-    const page = parseInt(c.req.query('page') || '1');
-    const limit = parseInt(c.req.query('limit') || '20');
+    const page = Math.max(1, parseInt(c.req.query('page') || '1', 10) || 1);
+    // 上限 100：防 limit=999999 单请求扫爆读配额（2026-09-26 读配额事故的教训）
+    const limit = Math.min(Math.max(1, parseInt(c.req.query('limit') || '20', 10) || 20), 100);
     const category = c.req.query('category');
     const sourceId = c.req.query('source_id');
     const lang = c.req.query('lang');
@@ -92,6 +87,8 @@ news.get('/', async (c) => {
     const offset = (page - 1) * limit;
 
     const db = getDb(c.env);
+    // 冷热分库：null → 仅主库降级（归档未绑定/未启用时行为与单库时代一致）
+    const arch = getArchiveDb(c.env);
 
     const conds: SQL[] = [sql`n.is_deleted = 0`];
 
@@ -136,57 +133,128 @@ news.get('/', async (c) => {
         const isDefaultList = !search && (!category || category === 'all') && !sourceId && !lang && hasSummary === undefined;
         // 单条模式（limit=1）多取 1 行判定 hasMore，同样跳过 COUNT(*)
         const usePeekRow = limit === 1;
+        const fetchLimit = usePeekRow ? limit + 1 : limit;
 
-        // 数据查询：peek 模式下多取 1 行用于判断是否还有下一页
-        const newsData = await db.all<any>(sql`
-            SELECT n.*, s.name as source_name, s.language as source_lang,
-                   (SELECT COUNT(*) FROM news_comments nc WHERE nc.news_id = n.id AND nc.is_deleted = 0) as comments_count,
-                   ns.summary as ai_summary, ns.illustration_url as ai_illustration, nt.take as ai_take
+        // 单侧数据查询。归档侧无 comments 表（评论永驻主库）→ comments_count 恒 0，
+        // 合并后由 fetchCommentCounts 回主库纠正归档行。
+        const runQuery = (target: DbClient, side: 'main' | 'archive', lim: number, off: number) =>
+            target.all<any>(sql`
+                SELECT n.*, s.name as source_name, s.language as source_lang,
+                       ${side === 'archive'
+                           ? sql`0 as comments_count`
+                           : sql`(SELECT COUNT(*) FROM news_comments nc WHERE nc.news_id = n.id AND nc.is_deleted = 0) as comments_count`},
+                       ns.summary as ai_summary, ns.illustration_url as ai_illustration, nt.take as ai_take
+                FROM news_items n
+                LEFT JOIN news_sources s ON n.source_id = s.id
+                LEFT JOIN news_summaries ns ON ns.news_id = n.id
+                LEFT JOIN news_ai_take nt ON nt.news_id = n.id
+                WHERE ${whereClause}
+                ORDER BY n.created_at DESC
+                LIMIT ${lim} OFFSET ${off}
+            `);
+
+        const runCount = (target: DbClient) => target.all<{ total: number }>(sql`
+            SELECT COUNT(*) as total
             FROM news_items n
-            LEFT JOIN news_sources s ON n.source_id = s.id
-            LEFT JOIN news_summaries ns ON ns.news_id = n.id
-            LEFT JOIN news_ai_take nt ON nt.news_id = n.id
+            ${countJoins.length > 0 ? sql.join(countJoins, sql` `) : sql``}
             WHERE ${whereClause}
-            ORDER BY n.created_at DESC
-            LIMIT ${usePeekRow ? limit + 1 : limit} OFFSET ${offset}
         `);
+        const countMain = async () => (await runCount(db))[0]?.total || 0;
+        // 归档侧计数失败降级为 0（total 暂缺归档部分 ≤TTL，优于整页 500）
+        const countArch = async () => {
+            if (!arch) return 0;
+            try {
+                return (await runCount(arch))[0]?.total || 0;
+            } catch (e) {
+                console.error('list count: archive read skipped:', e);
+                return 0;
+            }
+        };
 
+        // 两侧计数（remember 跨 colo 去重）：默认列表主库侧沿用增量维护的
+        // news_items_active_count，归档侧独立 key，两者求和 = 全量 total
+        const computeCounts = async (): Promise<{ mc: number; ac: number }> => {
+            if (isDefaultList) {
+                const [mc, ac] = await Promise.all([
+                    remember(db, NEWS_ACTIVE_COUNT_KEY, NEWS_ACTIVE_COUNT_TTL, countMain),
+                    remember(db, NEWS_ARCHIVE_COUNT_KEY, NEWS_ACTIVE_COUNT_TTL, countArch),
+                ]);
+                return { mc, ac };
+            }
+            if (search) {
+                // 搜索词键空间无界 → 不写 kv_cache（防键表膨胀），靠 60s 边缘缓存去重
+                const [mc, ac] = await Promise.all([countMain(), countArch()]);
+                return { mc, ac };
+            }
+            // 结构化过滤（category/source/lang/has_summary）键空间有界 → 10 分钟内只各 COUNT 一次
+            const countKey = `news_count:${category || ''}:${sourceId || ''}:${lang || ''}:${hasSummary || ''}`;
+            const [mc, ac] = await Promise.all([
+                remember(db, `${countKey}:main`, NEWS_FILTERED_COUNT_TTL, countMain),
+                remember(db, `${countKey}:arch`, NEWS_FILTERED_COUNT_TTL, countArch),
+            ]);
+            return { mc, ac };
+        };
+
+        // 冷热分片拼接：驱逐按 created_at 从旧到新 → 主库行恒新于归档行，
+        // 全局 [O, O+L) 落在主库 [O, O+L)，越界部分落到归档 [O-mainCount, ...)。
+        // mainCount 以"主库实际返回行数"观测推导优先（精确）；仅当主库该偏移起
+        // 为空（深页/冷页）才回落 remember 计数（≤TTL 滞后，与既有 total 容忍度一致）。
+        let newsData: any[];
+        let archRows: any[] = [];
         let total: number;
-        if (isDefaultList) {
-            const computeCount = async () => {
-                const countResult = await db.all<{ total: number }>(sql`
-                    SELECT COUNT(*) as total
-                    FROM news_items n
-                    WHERE ${whereClause}
-                `);
-                return countResult[0]?.total || 0;
-            };
-            total = await remember(db, NEWS_ACTIVE_COUNT_KEY, NEWS_ACTIVE_COUNT_TTL, computeCount);
-        } else if (usePeekRow) {
-            // 过滤列表 + 单条模式：由 peek 行推导 total（末页精确，中间页为下界估计）
+
+        // 归档侧数据查询失败降级为空分片（冷行暂缺，主站可用性优先）
+        const queryArch = async (lim: number, off: number): Promise<any[]> => {
+            if (!arch) return [];
+            try {
+                return await runQuery(arch, 'archive', lim, off);
+            } catch (e) {
+                console.error('list data: archive read skipped:', e);
+                return [];
+            }
+        };
+
+        if (usePeekRow) {
+            const mainRows = await runQuery(db, 'main', fetchLimit, offset);
+            if (mainRows.length >= fetchLimit) {
+                newsData = mainRows;
+            } else if (mainRows.length > 0) {
+                // 主库在本偏移耗尽 → 下一页内容恰好从归档头开始（archOff=0）
+                archRows = await queryArch(fetchLimit - mainRows.length, 0);
+                newsData = [...mainRows, ...archRows];
+            } else {
+                const { mc } = await computeCounts();
+                archRows = await queryArch(fetchLimit, Math.max(0, offset - mc));
+                newsData = archRows;
+            }
             total = newsData.length > limit
                 ? (page - 1) * limit + limit + 1
                 : (page - 1) * limit + newsData.length;
         } else {
-            const computeCount = async () => {
-                const countResult = await db.all<{ total: number }>(sql`
-                    SELECT COUNT(*) as total
-                    FROM news_items n
-                    ${countJoins.length > 0 ? sql.join(countJoins, sql` `) : sql``}
-                    WHERE ${whereClause}
-                `);
-                return countResult[0]?.total || 0;
-            };
-            if (search) {
-                // 搜索词键空间无界 → 不写 kv_cache（防键表膨胀），靠 60s 边缘缓存去重
-                total = await computeCount();
-            } else {
-                // 结构化过滤（category/source/lang/has_summary）键空间有界 → remember() 跨 colo 全局去重，
-                // 同一组合 10 分钟内只全表 COUNT 一次（total 允许 ≤10 分钟滞后）
-                const countKey = `news_count:${category || ''}:${sourceId || ''}:${lang || ''}:${hasSummary || ''}`;
-                total = await remember(db, countKey, NEWS_FILTERED_COUNT_TTL, computeCount);
+            const { mc, ac } = await computeCounts();
+            total = mc + ac;
+            const mainRows = await runQuery(db, 'main', fetchLimit, offset);
+            let mcEff: number;
+            if (mainRows.length >= fetchLimit) mcEff = Math.max(mc, offset + fetchLimit);
+            else if (mainRows.length > 0) mcEff = offset + mainRows.length;
+            else mcEff = mc;
+            const archNeed = Math.max(0, offset + fetchLimit - mcEff);
+            if (archNeed > 0) {
+                archRows = await queryArch(archNeed, Math.max(0, offset - mcEff));
+            }
+            newsData = [...mainRows, ...archRows];
+        }
+
+        // 归档行的评论数回主库水合（归档侧 SQL 恒 0；仅动归档行）
+        if (archRows.length > 0) {
+            const commentCounts = await fetchCommentCounts(c.env, archRows.map((r: any) => r.id));
+            for (const row of archRows) {
+                const cc = commentCounts.get(row.id);
+                if (cc) row.comments_count = cc;
             }
         }
+        // 溢出保护：stale 计数下合并结果可能超 limit（只可能裁掉更旧的归档尾部）
+        if (newsData.length > fetchLimit) newsData = newsData.slice(0, fetchLimit);
 
         const totalPages = Math.ceil(total / limit);
         const hasMore = usePeekRow ? newsData.length > limit : page < totalPages;
@@ -389,21 +457,13 @@ news.get('/fresh-view', async (c) => {
 
 news.get('/:id', async (c) => {
     const id = c.req.param('id');
-    const db = getDb(c.env);
     try {
-        const item = await db.all<any>(sql`
-            SELECT n.*, s.name as source_name, s.language as source_lang,
-                   ns.summary as ai_summary, ns.illustration_url as ai_illustration, nt.take as ai_take
-            FROM news_items n
-            LEFT JOIN news_sources s ON n.source_id = s.id
-            LEFT JOIN news_summaries ns ON ns.news_id = n.id
-            LEFT JOIN news_ai_take nt ON nt.news_id = n.id
-            WHERE n.id = ${id}
-        `);
-        if (!item || item.length === 0) {
+        // 冷热分库：主库优先 → 归档回落（命中热数据零额外探测）
+        const item = await fetchNewsDetail(c.env, id);
+        if (!item) {
             return c.json({ error: '新闻不存在' }, 404);
         }
-        return c.json({ news: item[0] });
+        return c.json({ news: item });
     } catch (error) {
         console.error('Error fetching news item:', error);
         return c.json({ error: '获取新闻详情失败' }, 500);
@@ -433,9 +493,11 @@ news.get('/:id/credibility', async (c) => {
     const cached = await cache.match(cacheKey);
     if (cached) return cached;
 
-    const db = getDb(c.env);
     try {
-        const item = await db.all<any>(sql`
+        // 冷热分库：老文章的 ±72h 佐证窗口整体落在同侧 → 详情与佐证查询同库执行
+        const { db: sideDb, side } = await dbForNews(c.env, id);
+        if (!side) return c.json({ error: '新闻不存在' }, 404);
+        const item = await sideDb.all<any>(sql`
             SELECT n.id, n.title, n.description, n.category, n.created_at, s.name as source_name
             FROM news_items n
             LEFT JOIN news_sources s ON n.source_id = s.id
@@ -456,7 +518,7 @@ news.get('/:id/credibility', async (c) => {
             }), sql` OR `)
             : sql`n.category = ${item[0].category}`;
 
-        const matches = await db.all<any>(sql`
+        const matches = await sideDb.all<any>(sql`
             SELECT n.id, n.title, n.url, n.category, n.published_at, n.created_at,
                    s.name as source_name, s.language as source_lang
             FROM news_items n
@@ -530,16 +592,32 @@ news.get('/categories/list', async (c) => {
 
     const db = getDb(c.env);
     try {
-        // kv_cache 第二层（边缘缓存之上）：跨 colo 全局最多 10 分钟执行一次全表 GROUP BY
-        const categories = await remember(db, NEWS_CATEGORIES_KEY, NEWS_CATEGORIES_TTL, () =>
-            db.all<{ category: string; count: number }>(sql`
+        // kv_cache 第二层（边缘缓存之上）：跨 colo 全局最多 10 分钟执行一次全表 GROUP BY。
+        // 冷热分库：主库与归档库各 GROUP BY 后按 category 合并求和。
+        const categories = await remember(db, NEWS_CATEGORIES_KEY, NEWS_CATEGORIES_TTL, async () => {
+            const archDb = getArchiveDb(c.env);
+            const groupBy = (target: DbClient) => target.all<{ category: string; count: number }>(sql`
                 SELECT category, COUNT(*) as count
                 FROM news_items
                 WHERE is_deleted = 0
                 GROUP BY category
-                ORDER BY count DESC
-            `)
-        );
+            `);
+            const [mainGroups, archGroups] = await Promise.all([
+                groupBy(db),
+                archDb
+                    ? groupBy(archDb).catch(e => {
+                        console.error('categories: archive read skipped:', e);
+                        return [] as { category: string; count: number }[];
+                    })
+                    : Promise.resolve([]),
+            ]);
+            const merged = new Map<string, number>();
+            for (const g of mainGroups) merged.set(g.category, (merged.get(g.category) || 0) + g.count);
+            for (const g of archGroups) merged.set(g.category, (merged.get(g.category) || 0) + g.count);
+            return Array.from(merged.entries())
+                .map(([category, c2]) => ({ category, count: c2 }))
+                .sort((a, b) => b.count - a.count);
+        });
         const response = c.json({ categories });
         response.headers.set('Cache-Control', 'public, max-age=600, s-maxage=600');
         c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
@@ -554,12 +632,23 @@ news.get('/:id/content', async (c) => {
     const id = parseInt(c.req.param('id'));
     const db = getDb(c.env);
     try {
-        const item = await db.select({
+        const selectItem = (target: DbClient) => target.select({
             id: newsItems.id, title: newsItems.title, url: newsItems.url,
             content: newsItems.content, description: newsItems.description,
         }).from(newsItems)
             .where(and(eq(newsItems.id, id), eq(newsItems.is_deleted, 0)))
             .get();
+
+        // 冷热分库：主库 miss 回落归档；正文补抓的 UPDATE 写在新闻所在侧
+        let target: DbClient = db;
+        let item = await selectItem(db);
+        if (!item) {
+            const arch = getArchiveDb(c.env);
+            if (arch) {
+                const archived = await selectItem(arch);
+                if (archived) { item = archived; target = arch; }
+            }
+        }
 
         if (!item) return c.json({ error: '新闻不存在' }, 404);
 
@@ -570,7 +659,7 @@ news.get('/:id/content', async (c) => {
         const { fetchRichArticleContent } = await import('../services/contentFetcher');
         const rich = await fetchRichArticleContent(item.url);
         if (rich) {
-            await db.update(newsItems)
+            await target.update(newsItems)
                 .set({ content: rich.html })
                 .where(eq(newsItems.id, item.id));
             return c.json({ content: rich.html || rich.text });

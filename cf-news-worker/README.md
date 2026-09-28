@@ -65,7 +65,13 @@ cd cf-news-worker
 ./scripts/import-stopwords.sh              # 生成 stopwords-import.sql
 docker run --rm --env-file .env -v $(pwd)/src/db/stopwords-import.sql:/app/import.sql \
   cf-news-worker npx wrangler d1 execute news-db --remote --file=./import.sql
+
+# 归档库初始化（冷热分库：cf-news-archive 只含 news 内容域表）
+docker run --rm --env-file cf-news-worker/.env -v $(pwd)/cf-news-worker:/app -v /app/node_modules \
+  cf-news-worker npx wrangler d1 execute cf-news-archive --remote --file=/app/migrations-archive/001-init.sql
 ```
+
+后续增量变更用 `scripts/migrate.sh`（**默认双库**：主库 `news-db` ← `migrations/`、归档库 `cf-news-archive` ← `migrations-archive/`，`--database` 指定单个目标，`--check` 只看待应用清单）。
 
 ## 项目结构
 
@@ -160,24 +166,41 @@ docker run --rm -v $(pwd):/app -v /app/node_modules --network=host cf-news-worke
 
 | 文件 | 说明 | 用例数 |
 |------|------|--------|
-| `src/__tests__/routes/health.test.ts` | 健康检查端点 | 6 |
-| `src/__tests__/routes/auth.test.ts` | 用户注册/登录/个人信息 | 7 |
-| `src/__tests__/routes/news.test.ts` | 新闻列表/详情/分类/来源/搜索 | 24 |
-| `src/__tests__/routes/favorites.test.ts` | 收藏 CRUD | 5 |
-| `src/__tests__/routes/history.test.ts` | 阅读历史 CRUD | 5 |
-| `src/__tests__/routes/comments.test.ts` | 评论 CRUD | 5 |
-| `src/__tests__/routes/user.test.ts` | 用户设置/推送订阅 | 6 |
-| `src/__tests__/routes/admin.test.ts` | 管理后台 | 4 |
-| `src/__tests__/routes/ai.test.ts` | AI 摘要/问答 | 3 |
-| `src/__tests__/routes/image.test.ts` | 图片代理 | 3 |
-| `src/__tests__/routes/screenshot.test.ts` | 页面截图 | 3 |
-| `src/__tests__/routes/share.test.ts` | 分享 OG 卡片 | 3 |
-| `src/__tests__/routes/operations.test.ts` | 手动操作 | 2 |
-| `src/__tests__/routes/trending.test.ts` | 趋势数据 | 13 |
-| `src/__tests__/services/cache.test.ts` | 缓存工具（`kv_cache` 计数缓存） | 5 |
-| `src/__tests__/services/summarizer-pending.test.ts` | 摘要批量生成（含 KV 扫描节流） | 4 |
-| `src/__tests__/services/retention.test.ts` | D1 保留清理（>30 天正文、>7 天日志） | 3 |
-| `src/__tests__/services/radarPush.test.ts` | 雷达命中推送（KV 去重水位下推） | 4 |
+| `routes/health.test.ts` | 健康检查端点 | 6 |
+| `routes/auth.test.ts` | 用户注册/登录/个人信息 | 11 |
+| `routes/news.test.ts` | 新闻列表/详情/分类/来源/搜索 | 24 |
+| `routes/favorites.test.ts` | 收藏 CRUD（含归档文章水合） | 9 |
+| `routes/history.test.ts` | 阅读历史 CRUD | 5 |
+| `routes/comments.test.ts` | 评论 CRUD | 10 |
+| `routes/user.test.ts` | 用户设置/推送订阅/稍后读/雷达 | 12 |
+| `routes/admin.test.ts` | 管理后台 | 22 |
+| `routes/ai.test.ts` | AI 摘要/问答/相关阅读 | 14 |
+| `routes/entities.test.ts` | 结构化实体抽取 | 3 |
+| `routes/operations.test.ts` | 手动操作（抓取/摘要/配图/翻译） | 27 |
+| `routes/trending.test.ts` | 趋势数据 | 13 |
+| `routes/image.test.ts` | 图片代理 | 3 |
+| `routes/screenshot.test.ts` | 页面截图 | 3 |
+| `routes/share.test.ts` | 分享 OG 卡片 | 3 |
+| `routes/tts.test.ts` | TTS 代理 | 7 |
+| `routes/pixabay-kw.test.ts` | Pixabay 关键词抽取 | 16 |
+| `routes/pixabay-live.test.ts` | Pixabay 实时搜索 | 1 |
+| `routes/queue-stock.test.ts` | 队列消息处理（摘要/吐槽/实体/配图） | 5 |
+| `durable-objects/clipboard.test.ts` | 粘贴板 DO 协议 | 13 |
+| `durable-objects/comments.test.ts` | 实时评论 DO 协议 | 6 |
+| `durable-objects/piping.test.ts` | 文件传输 HTTP Piping | 7 |
+| `services/archive.test.ts` | **冷热分库（跨库解析/水合/HTTP 双库路由/驱逐）** | 20 |
+| `services/cache.test.ts` | 缓存工具（`kv_cache` 计数缓存 + 记忆层写容错） | 6 |
+| `services/summarizer-pending.test.ts` | 摘要批量生成（含 KV 扫描节流） | 4 |
+| `services/summarizer.test.ts` | 摘要/吐槽/多视角服务 | 5 |
+| `services/retention.test.ts` | D1 保留清理（>30 天正文、>7 天日志） | 3 |
+| `services/radarPush.test.ts` | 雷达命中推送（KV 去重水位下推） | 4 |
+| `services/aiProvider.test.ts` | Provider 链调度/配置/模型评分 | 27 |
+| `services/dedup.test.ts` | 哈希+向量去重（含跨库 URL 兜底） | 7 |
+| `services/entityExtractor.test.ts` | 实体抽取解析与写入 | 5 |
+| `services/newsFetcher.test.ts` | RSS 抓取管线 | 5 |
+| `services/modelRefresher.test.ts` | 模型目录刷新/探针 | 14 |
+| `services/trending.test.ts` | 趋势聚合辅助函数 | 7 |
+| **合计** | | **327** |
 
 ### 测试架构
 
@@ -189,7 +212,7 @@ docker run --rm -v $(pwd):/app -v /app/node_modules --network=host cf-news-worke
 ## 注意事项
 
 1. **RSS 源可用性**: 某些 RSS 源可能需要代理或有访问限制
-2. **数据库限制**: D1 免费版有存储和请求限制
+2. **数据库限制**: D1 免费版有存储和请求限制（单库 500MB、账户 5GB；每日 5M 行读 / 50k 行写、账户级共享）——冷热分库把内容域拆到两库共享同一账户配额，写入密集任务需关注日预算
 3. **Worker 限制**: 免费版每天 100,000 请求
 4. **新闻清理**: 自动清理 30 天前的旧新闻
 

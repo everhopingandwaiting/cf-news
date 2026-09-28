@@ -451,3 +451,23 @@ describe('Operations API - Translate', () => {
     expect(body.translated).toBeTruthy();
   });
 });
+
+describe('Operations API - 按 id 路由入参防御', () => {
+  it('POST /api/summarize/:newsId 非数字 id → 400 Invalid news id', async () => {
+    const { status, body } = await request(app, db, '/api/summarize/abc', { method: 'POST' });
+    expect(status).toBe(400);
+    expect(body.error).toContain('Invalid news id');
+  });
+
+  it('POST /api/take/:newsId 非数字 id → 400 Invalid news id', async () => {
+    const { status, body } = await request(app, db, '/api/take/xyz', { method: 'POST' });
+    expect(status).toBe(400);
+    expect(body.error).toContain('Invalid news id');
+  });
+
+  it('POST /api/illustrate-stock/:newsId 非数字 id → 400 Invalid news id', async () => {
+    const { status, body } = await request(app, db, '/api/illustrate-stock/nope', { method: 'POST' });
+    expect(status).toBe(400);
+    expect(body.error).toContain('Invalid news id');
+  });
+});

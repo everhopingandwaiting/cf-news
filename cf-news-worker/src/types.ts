@@ -1,5 +1,7 @@
 export interface Bindings {
     DB: D1Database;
+    /** 冷热分库归档库（可选：缺失时所有归档路由降级为仅主库） */
+    DB_ARCHIVE?: D1Database;
     KV: KVNamespace;
     AI: any;
     VECTORIZE: VectorizeIndex;
