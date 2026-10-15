@@ -8,7 +8,7 @@
 - **框架**: Hono (轻量级 Web 框架)
 - **数据库**: Cloudflare D1 (SQLite)
 - **缓存**: Cloudflare KV
-- **定时任务**: Cron Triggers (每小时更新)
+- **定时任务**: Cron Triggers (每 2 小时更新)
 
 ## 功能特性
 
@@ -23,7 +23,7 @@
 - 📖 阅读历史
 - 🔔 推送通知
 - 📱 响应式前端界面（React + Tailwind）
-- ⏰ 每小时自动更新
+- ⏰ 每 2 小时自动更新
 
 ## 快速开始
 
@@ -72,6 +72,18 @@ docker run --rm --env-file cf-news-worker/.env -v $(pwd)/cf-news-worker:/app -v 
 ```
 
 后续增量变更用 `scripts/migrate.sh`（**默认双库**：主库 `news-db` ← `migrations/`、归档库 `cf-news-archive` ← `migrations-archive/`，`--database` 指定单个目标，`--check` 只看待应用清单）。
+
+### 运维巡检
+
+```bash
+# D1 容量 + 驱逐健康（GitHub Actions 每日 07:00 UTC 也跑这个，见 .github/workflows/d1-capacity-check.yml）
+CF_API_TOKEN=xxx D1_DATABASE_ID=xxx ARCHIVE_DATABASE_ID=xxx ./scripts/check-d1-capacity.sh
+```
+
+读 `file_size` 占比告警（免费档 500MB，实测 501MB 即拒绝一切写入；超限后驱逐自己也救不了，
+它需要的 DELETE 同样被拒，只能先用 `wrangler d1 execute` 走管理 API 腾空间），
+并检查 `kv_cache['archive:evict:last']` / `['retention:last']` 快照是否停更——
+驱逐曾连续多日静默跳过且控制台日志不可读，快照 `at` 是唯一可靠信号。
 
 ## 项目结构
 
@@ -140,7 +152,7 @@ VALUES ('源名称', '网站URL', 'RSS地址', '分类', '语言');
 
 Cron Triggers 配置为每天 5 个任务：
 
-- `0 * * * *` — 每小时整点抓取所有启用的新闻源（入队异步处理，不阻塞）
+- `0 */2 * * *` — 每 2 小时抓取所有启用的新闻源（入队异步处理，不阻塞）。频率与健康检查阈值统一定义在 `src/cronSchedule.ts`，`routes/cron-schedule.test.ts` 断言其与 wrangler 配置一致、且阈值严格大于抓取间隔
 - `*/5 * * * *` — 每 5 分钟处理积压 AI 摘要（newest-first，只处理近 7 天文章）
 - `*/15 * * * *` — 每 15 分钟刷新趋势主题与雷达推送
 - `0 8 * * *` — 每天 8 点生成并发送日报摘要
@@ -150,7 +162,7 @@ Cron Triggers 配置为每天 5 个任务：
 
 ```toml
 [triggers]
-crons = ["0 * * * *", "*/5 * * * *", "*/15 * * * *", "0 8 * * *", "0 */6 * * *"]
+crons = ["0 */2 * * *", "*/5 * * * *", "*/15 * * * *", "0 8 * * *", "0 */6 * * *"]
 ```
 
 ## 测试

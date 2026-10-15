@@ -42,8 +42,10 @@
 - **评论系统** — WebSocket 实时评论，支持多设备同步
 - **源管理** — 后台管理面板，增删改排 RSS 源
 - **邮件摘要** — 订阅每日新闻邮件
-- **自动更新** — Cron Triggers 每小时抓取新文章
+- **自动更新** — Cron Triggers 每 2 小时抓取新文章
 - **D1 存储自愈** — 每日保留任务（随每日 08:00 UTC 摘要任务执行；Workers Free 每账号限 5 个 cron 触发器）删除 7 天前 AI 调用日志、清空 30 天前文章正文，确保 D1 不超出免费档 500MB 上限
+- **冷热归档分库** — 超过热窗口（`archive.hot_days`，默认 90 天）的文章由 `evictBatch` 每日迁入第二个 D1 库（`cf-news-archive`），每个 UTC 日上限 `archive.evict_max_rows` 行（默认 3000）。跨库读取在应用层扇出（D1 不支持 `ATTACH`）；驱逐采用"先归档后删除"且 `INSERT OR IGNORE` 幂等，中途崩溃可自愈。开关：`archive.enabled=0` 可关闭。触发有两处：UTC 08:00（retention 之后，与 digest 同一 invocation）+ **`*/5` cron 自愈重试**（仅 09:00 之后、当日额度未用满时执行）——08:00 那次可能被平台中途掐断且毫无痕迹，没有重试就会整天不驱逐。每次真实运行都把快照写入 `kv_cache['archive:evict:last']`（`at`/`moved`/`batches`/`error`），`POST /api/admin/archive/evict` 实时返回同样结果：`at` 停更即说明驱逐压根没跑，否则它与"没有候选"无法区分
+- **容量上限自救** — D1 超过免费档 500MB 后会拒绝 Worker 的所有写入（`D1_ERROR: Exceeded maximum DB size`），而驱逐恰恰依赖主库 DELETE，因此**驱逐无法自救超限的库**：必须先用管理 API（`wrangler d1 execute`，不受该限制）腾出空间，再执行 `POST /api/admin/archive/evict`。另注意 Workers 运行时读不到自身库体积（`PRAGMA page_count` 被 `SQLITE_AUTH` 拦截），容量监控只能在 Worker 之外做
 - **冷热归档分库** — 超过热窗口（默认 90 天）的新闻内容域每日驱逐进第二个 D1 数据库（`cf-news-archive`）；列表、搜索、详情、收藏、相关阅读等视图跨两库透明扇出，主库体积在免费档内保持有界
 - **语音播报** — 浏览器原生 SpeechSynthesis，免费离线
 - **AI 分类** — LLaMA 按内容准确分类，不依赖 RSS 源
@@ -288,6 +290,8 @@ curl -X POST -H "Authorization: Bearer <管理员token>" \
 
 工作流运行时会自动将这些值推到 Cloudflare Secrets（`wrangler secret put`），不会明文存储。
 
+**容量巡检（无需新增 Secret）。** `.github/workflows/d1-capacity-check.yml` 每日 07:00 UTC（当日驱逐之前，即库体积峰值时刻）运行 `cf-news-worker/scripts/check-d1-capacity.sh`：库体积超过免费档 500MB 的 90% 告警、96% 直接让 workflow 失败（GitHub 会通知仓库所有者），同时检查 `archive:evict:last` / `retention:last` 快照是否停更——即驱逐是否已静默停摆。巡检必须放在 Worker 之外：Workers 运行时读不到自身库体积（`PRAGMA page_count` 被 `SQLITE_AUTH` 拒绝），而超限的库会拒绝一切写入，连能救它的驱逐也一并被拒。
+
 ## 快速开始
 
 ### 前置条件
@@ -441,6 +445,7 @@ cf-news/
 | POST | `/api/admin/backfill-vectors` | 为旧新闻回填语义去重向量（后台，每批 500 条） |
 | POST | `/api/admin/backfill-entities` | 为缺少实体的新闻回填结构化实体抽取（后台，每批 50 条） |
 | POST | `/api/admin/refresh-models` | 手动触模型目录同步（校准 + 质量探针 + 证据裁剪，后台） |
+| POST | `/api/admin/archive/evict` | 手动执行冷热归档驱逐，返回 `{moved, batches, error, archiveItems}`（受 `archive.enabled` 与当日 `archive.evict_max_rows` 上限约束） |
 
 ## 添加 RSS 源
 

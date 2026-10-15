@@ -24,7 +24,13 @@ import { checkRadarPush } from './services/radarPush';
 import { generatePendingSummaries } from './services/summarizer';
 import { refreshModelCatalog } from './services/modelRefresher';
 import { runRetention } from './services/retention';
-import { evictBatch } from './services/archive';
+import { evictBatch, describeError } from './services/archive';
+import { setCache } from './services/cache';
+import {
+    FETCH_CRON,
+    FETCH_HEARTBEAT_STALE_MINUTES,
+    NEWS_STALE_MINUTES,
+} from './cronSchedule';
 
 import { handleImageProxy } from './routes/image';
 import { handleScreenshot } from './routes/screenshot';
@@ -123,21 +129,21 @@ app.get('/api/health/feed', async (c) => {
     }
     const lastNewsMs = newsRow?.ts ? parseDbTs(newsRow.ts) : 0;
     const newsAgeMin = lastNewsMs ? Math.round((now - lastNewsMs) / 60000) : -1;
-    if (newsAgeMin < 0 || newsAgeMin > 360) {
+    if (newsAgeMin < 0 || newsAgeMin > NEWS_STALE_MINUTES) {
         problems.push(`news_items stale (age=${newsAgeMin}min)`);
     }
 
     // 心跳读取：KV 优先（cron 写路径已先写 KV），miss 时回退 D1
     let hbTs: string | null = null;
     try {
-        hbTs = await c.env.KV.get('cron_hb:0 * * * *');
+        hbTs = await c.env.KV.get(`cron_hb:${FETCH_CRON}`);
     } catch (e) {
         console.error('health/feed KV heartbeat read failed:', e);
     }
     if (!hbTs) {
         try {
             const hbRow = await db.select({ ts: cronHeartbeat.last_fired_at })
-                .from(cronHeartbeat).where(eq(cronHeartbeat.cron_name, '0 * * * *')).get();
+                .from(cronHeartbeat).where(eq(cronHeartbeat.cron_name, FETCH_CRON)).get();
             hbTs = hbRow?.ts || null;
         } catch (e) {
             console.error('health/feed D1 heartbeat query failed:', e);
@@ -146,7 +152,7 @@ app.get('/api/health/feed', async (c) => {
     }
     const hbMs = hbTs ? parseDbTs(hbTs) : 0;
     const hbAgeMin = hbMs ? Math.round((now - hbMs) / 60000) : -1;
-    if (hbAgeMin < 0 || hbAgeMin > 120) {
+    if (hbAgeMin < 0 || hbAgeMin > FETCH_HEARTBEAT_STALE_MINUTES) {
         problems.push(`fetch cron heartbeat stale (age=${hbAgeMin}min)`);
     }
 
@@ -271,7 +277,7 @@ export default {
     },
 
     async scheduled(event: ScheduledEvent, env: Bindings, ctx: ExecutionContext): Promise<void> {
-        if (event.cron === '0 * * * *') {
+        if (event.cron === FETCH_CRON) {
             console.log('Fetch cron fired, fetching news...');
             // skipSummary=true：抓取只入队 fetch_source，摘要全部交给 summary cron
             // (*/5 * * * *)。之前 skipSummary=false 会让 saveNewsItems 为每条新文章同步
@@ -292,15 +298,36 @@ export default {
             // 冷热分库驱逐挂在 retention 之后（顺序依赖）：retention 先把 >30d 的
             // content 置 NULL，evict 再搬 >热窗口 的行 → 归档库不背正文大字段。
             // evict 自带 enabled 开关 + 日额度帽，未开启/超帽时立即返回。
-            ctx.waitUntil(
-                runRetention(env)
-                    .then(r => {
-                        console.log(`Retention: contentCleared=${r.contentCleared}, logsDeleted=${r.logsDeleted}, batches=${r.batches}`);
-                        return evictBatch(env);
-                    })
-                    .then(r => console.log(`Archive evict: moved=${r.moved}, batches=${r.batches}${r.reason ? `, reason=${r.reason}` : ''}${r.error ? `, error=${r.error}` : ''}`))
-                    .catch(e => console.error('Retention/archive evict failed:', e))
-            );
+            //
+            // 结果落盘 + 自愈：2026-10-15 观测到 08:00 这次调用里 retention 跑完
+            // 但驱逐段没执行（与 digest/email 同 invocation，被平台掐断），且无
+            // 任何痕迹。因此① 每步写 kv_cache 快照；② */5 cron 会重试驱逐直到
+            // 当日额度用满（见下方 summary cron 分支）。
+            ctx.waitUntil((async () => {
+                try {
+                    const r = await runRetention(env);
+                    console.log(`Retention: contentCleared=${r.contentCleared}, logsDeleted=${r.logsDeleted}, batches=${r.batches}`);
+                    await recordCronSnapshot(env, 'retention:last', { ...r });
+                } catch (e) {
+                    console.error('Retention failed:', e);
+                    // retention 失败则不驱逐：正文未清理，搬进归档库会背大字段
+                    await recordCronSnapshot(env, 'retention:last', { error: describeError(e) });
+                    await recordCronSnapshot(env, 'archive:evict:last', {
+                        moved: 0, batches: 0, error: `retention 失败，驱逐未执行: ${describeError(e)}`,
+                    });
+                    return;
+                }
+                try {
+                    const r = await evictBatch(env);
+                    console.log(`Archive evict: moved=${r.moved}, batches=${r.batches}${r.reason ? `, reason=${r.reason}` : ''}${r.error ? `, error=${r.error}` : ''}`);
+                } catch (e) {
+                    // evictBatch 内部已捕获并落盘，这里只兜底未预期异常
+                    console.error('Archive evict failed:', e);
+                    await recordCronSnapshot(env, 'archive:evict:last', {
+                        moved: 0, batches: 0, error: describeError(e),
+                    });
+                }
+            })());
             console.log('Daily digest cron fired, generating digest...');
             ctx.waitUntil(generateDailyDigest(env).then(r => console.log(`Digest: ${r ? 'generated' : 'skipped'}`)));
             console.log('Daily digest email cron fired, sending emails...');
@@ -310,6 +337,17 @@ export default {
             // 不再入队 generate_summary）。独立调度保证每次调用有自己的 subrequest 预算。
             console.log('Summary cron fired, generating pending summaries...');
             ctx.waitUntil(generatePendingSummaries(env));
+            // 归档驱逐自愈：08:00 那份（与 digest/email 同 invocation）可能被平台
+            // 掐断，此处每 5 分钟重试直到当日额度用满。窗口取 09:00 而非 08:00，
+            // 避免与 08:00 digest 链并发调用同一份驱逐（两份各自读旧计数器 → 日
+            // 额度被翻倍绕过）。超帽/未到点立即返回（≈2 次读），常态开销可忽略。
+            ctx.waitUntil(
+                evictBatch(env, { notBeforeHourUtc: 9 })
+                    .then(r => {
+                        if (r.moved > 0) console.log(`Archive evict (self-heal): moved=${r.moved}, batches=${r.batches}`);
+                    })
+                    .catch(e => console.error('Archive evict (self-heal) failed:', e))
+            );
         } else if (event.cron === '0 */6 * * *') {
             // Model-sync cron: 自动刷新 provider_models 目录（/models reconcile +
             // 质量探针 + 证据裁剪）。独立调度（与 fetch/summary cron 分开）保证
@@ -334,6 +372,21 @@ export default {
         await handleInboundEmail(message, env);
     }
 };
+
+/**
+ * 落盘 cron 子任务结果快照（best-effort）。
+ *
+ * 2026-10 事故：08:00 调用里 retention 跑完、驱逐未执行，而控制台日志在本环境
+ * 读不到（wrangler tail 超时）。快照让运维只看 kv_cache 就能判断子任务到底跑没跑、
+ * 跑失败的原因是什么——`retention:last` / `archive:evict:last` 的 `at` 停更即告警。
+ */
+async function recordCronSnapshot(env: Bindings, key: string, payload: Record<string, unknown>): Promise<void> {
+    try {
+        await setCache(getDb(env), key, JSON.stringify({ at: new Date().toISOString(), ...payload }), 7 * 24 * 3600);
+    } catch (e) {
+        console.error(`cron snapshot write failed (${key}):`, e);
+    }
+}
 
 /** 记录 cron 心跳：先写 KV（读路径首选），再写 D1（回退），两步都 best-effort */
 async function recordCronHeartbeat(env: Bindings, cron: string): Promise<void> {

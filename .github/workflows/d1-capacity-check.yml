@@ -1,0 +1,28 @@
+name: D1 Capacity Check
+
+# 每日巡检 D1 容量与驱逐健康。为什么不在 Worker 里做：运行时读不到自身库体积
+# （PRAGMA page_count 被 SQLITE_AUTH 拦截），而 2026-10 两次约 26 小时的静默停摆
+# 都是 "库超 500MB → 拒绝一切写入" 引起的，站内健康检查完全看不到。
+#
+# 07:00 UTC 跑（当日 08:00 驱逐之前，正是库体积峰值时刻）。
+# 失败（退出码 1）时 GitHub 会通知仓库所有者，即"库快满了/驱逐没在跑"的告警。
+
+on:
+  schedule:
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check D1 capacity + eviction health
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+          ARCHIVE_DATABASE_ID: ${{ secrets.ARCHIVE_DATABASE_ID }}
+        run: ./cf-news-worker/scripts/check-d1-capacity.sh

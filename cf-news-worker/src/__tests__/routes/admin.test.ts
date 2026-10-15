@@ -254,3 +254,52 @@ describe('Admin API - Advanced operations', () => {
     expect(body.success).toBe(true);
   });
 });
+
+describe('Admin API - 冷热归档驱逐', () => {
+  // 该端点会删主库数据，必须与其它 admin 端点同规格鉴权
+  it('POST /api/admin/archive/evict - returns 401 without auth header', async () => {
+    const { status } = await request(app, db, '/api/admin/archive/evict', { method: 'POST' });
+    expect(status).toBe(401);
+  });
+
+  it('POST /api/admin/archive/evict - returns 403 for non-admin token', async () => {
+    const userToken = await makeToken({ role: 'user' });
+    const { status } = await request(app, db, '/api/admin/archive/evict', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${userToken}` },
+    });
+    expect(status).toBe(403);
+  });
+
+  it('POST /api/admin/archive/evict - 回传迁移结果与归档库存（运维据此判断是否补跑）', async () => {
+    const built = buildTestApp();
+    await built.db.prepare("INSERT OR REPLACE INTO app_config (key, value) VALUES ('archive.enabled', '1')").run();
+    await built.db.seed('news_items', [
+      { id: 900, source_id: 1, title: 'Manual evict', url: 'https://old/900', category: 'tech', created_at: '2026-01-06 00:00:00', is_deleted: 0 },
+    ]);
+    const { status, body } = await request(built.app, built.db, '/api/admin/archive/evict', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    expect(status).toBe(200);
+    expect(body.moved).toBe(1);
+    expect(body.error).toBeUndefined();
+    expect(body.archiveItems).toBe(1);
+  });
+
+  it('POST /api/admin/archive/evict - 失败时 success=false 且回传 error', async () => {
+    const built = buildTestApp();
+    await built.db.prepare("INSERT OR REPLACE INTO app_config (key, value) VALUES ('archive.enabled', '1')").run();
+    await built.db.seed('news_items', [
+      { id: 901, source_id: 1, title: 'Broken archive', url: 'https://old/901', category: 'tech', created_at: '2026-01-07 00:00:00', is_deleted: 0 },
+    ]);
+    await built.archive.prepare('DROP TABLE news_items').run();
+    const { status, body } = await request(built.app, built.db, '/api/admin/archive/evict', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    expect(status).toBe(200);
+    expect(body.success).toBe(false);
+    expect(body.error).toBeTruthy();
+  });
+});

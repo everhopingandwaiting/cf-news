@@ -17,6 +17,11 @@ import operationsRoutes from '../routes/operations';
 import trendingRoutes from '../routes/trending';
 import adminRoutes from '../routes/admin';
 import aiRoutes from '../routes/ai';
+import {
+    FETCH_CRON,
+    FETCH_HEARTBEAT_STALE_MINUTES,
+    NEWS_STALE_MINUTES,
+} from '../cronSchedule';
 
 export const MOCK_ENV: Record<string, any> = {
   JWT_SECRET: 'test-jwt-secret',
@@ -120,21 +125,21 @@ export function buildTestApp() {
     }
     const lastNewsMs = parseTs(newsRow?.ts ?? null);
     const newsAgeMin = lastNewsMs ? Math.round((now - lastNewsMs) / 60000) : -1;
-    if (newsAgeMin < 0 || newsAgeMin > 360) {
+    if (newsAgeMin < 0 || newsAgeMin > NEWS_STALE_MINUTES) {
       problems.push(`news_items stale (age=${newsAgeMin}min)`);
     }
 
     // KV-first heartbeat (cron write path puts cron_hb:{cron} first), D1 fallback on miss
     let hbTs: string | null = null;
     try {
-      hbTs = await c.env.KV.get('cron_hb:0 * * * *');
+      hbTs = await c.env.KV.get(`cron_hb:${FETCH_CRON}`);
     } catch {
       // KV unavailable — fall through to D1
     }
     if (!hbTs) {
       try {
         const hbRow = await db.select({ ts: cronHeartbeat.last_fired_at })
-          .from(cronHeartbeat).where(eq(cronHeartbeat.cron_name, '0 * * * *')).get();
+          .from(cronHeartbeat).where(eq(cronHeartbeat.cron_name, FETCH_CRON)).get();
         hbTs = hbRow?.ts || null;
       } catch (e) {
         return c.json({ error: 'D1 unavailable', detail: String(e), timestamp: new Date().toISOString() }, 503);
@@ -142,7 +147,7 @@ export function buildTestApp() {
     }
     const hbMs = hbTs ? parseTs(hbTs) : 0;
     const hbAgeMin = hbMs ? Math.round((now - hbMs) / 60000) : -1;
-    if (hbAgeMin < 0 || hbAgeMin > 120) {
+    if (hbAgeMin < 0 || hbAgeMin > FETCH_HEARTBEAT_STALE_MINUTES) {
       problems.push(`fetch cron heartbeat stale (age=${hbAgeMin}min)`);
     }
 

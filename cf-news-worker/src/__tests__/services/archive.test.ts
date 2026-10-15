@@ -259,6 +259,116 @@ describe('archive service — evictBatch 驱逐', () => {
     const r = await evictBatch(noArchiveEnv);
     expect(r.reason).toBe('no-archive-binding');
   });
+
+  // 2026-10 事故：驱逐连续三日静默返回 0，console.log 是唯一出口且 wrangler
+  // tail 在本环境不可用，导致"没候选/被上限挡住/抛错"三者无法区分。
+  it('运行快照落库 — 成功时记录 moved/batches 且 error 为 null', async () => {
+    await db.prepare("INSERT OR REPLACE INTO app_config (key, value) VALUES ('archive.enabled', '1')").run();
+    await db.seed('news_items', [
+      { id: 800, source_id: 1, title: 'Snapshot me', url: 'https://old/800', category: 'tech', created_at: '2026-01-03 00:00:00', is_deleted: 0 },
+    ]);
+
+    const r = await evictBatch(env);
+    expect(r.error).toBeUndefined();
+    const snap = await db.prepare("SELECT value FROM kv_cache WHERE cache_key = 'archive:evict:last'").first() as any;
+    expect(snap).toBeTruthy();
+    const parsed = JSON.parse(snap.value);
+    expect(parsed.moved).toBe(r.moved);
+    expect(parsed.error).toBeNull();
+    expect(typeof parsed.at).toBe('string');
+  });
+
+  it('运行快照落库 — 抛错时记录 error 文本（不再静默）', async () => {
+    const b = buildTestApp();
+    const failEnv = { ...MOCK_ENV, DB: b.db, DB_ARCHIVE: b.archive } as any;
+    await b.db.prepare("INSERT OR REPLACE INTO app_config (key, value) VALUES ('archive.enabled', '1')").run();
+    await b.db.seed('news_items', [
+      { id: 810, source_id: 1, title: 'Boom', url: 'https://old/810', category: 'tech', created_at: '2026-01-04 00:00:00', is_deleted: 0 },
+    ]);
+    // 破坏归档侧表结构 → 跨库写入必然抛错（模拟生产上的 schema 漂移）
+    await b.archive.prepare('DROP TABLE news_items').run();
+
+    const r = await evictBatch(failEnv);
+    expect(r.error).toBeTruthy();
+    const snap = await b.db.prepare("SELECT value FROM kv_cache WHERE cache_key = 'archive:evict:last'").first() as any;
+    const parsed = JSON.parse(snap.value);
+    expect(parsed.error).toBeTruthy();
+    expect(parsed.error).toBe(r.error);
+  });
+
+  it('中途失败不虚增当日计数器 — 额度按实际搬走的行计', async () => {
+    const b = buildTestApp();
+    const failEnv = { ...MOCK_ENV, DB: b.db, DB_ARCHIVE: b.archive } as any;
+    await b.db.prepare("INSERT OR REPLACE INTO app_config (key, value) VALUES ('archive.enabled', '1')").run();
+    await b.db.seed('news_items', [
+      { id: 820, source_id: 1, title: 'Partial A', url: 'https://old/820', category: 'tech', created_at: '2026-01-05 00:00:00', is_deleted: 0 },
+      { id: 821, source_id: 1, title: 'Partial B', url: 'https://old/821', category: 'tech', created_at: '2026-01-05 00:00:00', is_deleted: 0 },
+    ]);
+    await b.archive.prepare('DROP TABLE news_items').run();
+
+    const r = await evictBatch(failEnv);
+    expect(r.error).toBeTruthy();
+    expect(r.moved).toBe(0); // 首批即失败，没有真正搬成的行
+    const counterKey = `archive:evict:${new Date().toISOString().slice(0, 10)}`;
+    const counter = await b.db.prepare('SELECT value FROM kv_cache WHERE cache_key = ?').bind(counterKey).first() as any;
+    expect(counter).toBeNull(); // 额度未被这次失败消耗
+    const snap = await b.db.prepare("SELECT value FROM kv_cache WHERE cache_key = 'archive:evict:last'").first() as any;
+    expect(JSON.parse(snap.value).error).toBeTruthy();
+  });
+
+  // 2026-10-15 事故：08:00 调用里 retention 跑完、驱逐段未执行（同 invocation 被
+  // 平台掐断）且毫无痕迹。*/5 cron 用 notBeforeHourUtc 重试补齐——未到点必须
+  // 快速跳过且不写快照，否则会盖掉当日真实运行记录。
+  it('not-due-yet — 未到自愈时间窗直接跳过，不迁移也不写快照', async () => {
+    const b = buildTestApp();
+    const e = { ...MOCK_ENV, DB: b.db, DB_ARCHIVE: b.archive } as any;
+    await b.db.prepare("INSERT OR REPLACE INTO app_config (key, value) VALUES ('archive.enabled', '1')").run();
+    await b.db.seed('news_items', [
+      { id: 830, source_id: 1, title: 'Not due', url: 'https://old/830', category: 'tech', created_at: '2026-01-08 00:00:00', is_deleted: 0 },
+    ]);
+
+    const r = await evictBatch(e, { notBeforeHourUtc: 24 }); // 24 > 任何 UTC 小时 → 必定未到点
+    expect(r.reason).toBe('not-due-yet');
+    expect(r.moved).toBe(0);
+    const snap = await b.db.prepare("SELECT value FROM kv_cache WHERE cache_key = 'archive:evict:last'").first();
+    expect(snap).toBeNull();
+    const stillMain = await b.db.prepare('SELECT COUNT(*) AS c FROM news_items WHERE id = 830').first() as any;
+    expect(stillMain.c).toBe(1); // 行仍在主库
+  });
+
+  it('每批落盘当日计数器 — 迁移后计数器等于已迁行数（被掐断也不丢账）', async () => {
+    const b = buildTestApp();
+    const e = { ...MOCK_ENV, DB: b.db, DB_ARCHIVE: b.archive } as any;
+    await b.db.prepare("INSERT OR REPLACE INTO app_config (key, value) VALUES ('archive.enabled', '1')").run();
+    await b.db.seed('news_items', [
+      { id: 840, source_id: 1, title: 'Count A', url: 'https://old/840', category: 'tech', created_at: '2026-01-09 00:00:00', is_deleted: 0 },
+      { id: 841, source_id: 1, title: 'Count B', url: 'https://old/841', category: 'tech', created_at: '2026-01-09 00:00:00', is_deleted: 0 },
+    ]);
+
+    const r = await evictBatch(e);
+    expect(r.moved).toBe(2);
+    const counterKey = `archive:evict:${new Date().toISOString().slice(0, 10)}`;
+    const counter = await b.db.prepare('SELECT value FROM kv_cache WHERE cache_key = ?').bind(counterKey).first() as any;
+    expect(Number(counter.value)).toBe(2);
+  });
+
+  it('超帽早退不覆盖当日快照 — */5 自愈不得盖掉真实运行记录', async () => {
+    const b = buildTestApp();
+    const e = { ...MOCK_ENV, DB: b.db, DB_ARCHIVE: b.archive } as any;
+    await b.db.prepare("INSERT OR REPLACE INTO app_config (key, value) VALUES ('archive.enabled', '1')").run();
+    await b.db.prepare("INSERT OR REPLACE INTO app_config (key, value) VALUES ('archive.evict_max_rows', '1')").run();
+    await b.db.seed('news_items', [
+      { id: 850, source_id: 1, title: 'Cap A', url: 'https://old/850', category: 'tech', created_at: '2026-01-10 00:00:00', is_deleted: 0 },
+    ]);
+    const first = await evictBatch(e);
+    expect(first.moved).toBe(1);
+    const snapBefore = await b.db.prepare("SELECT value FROM kv_cache WHERE cache_key = 'archive:evict:last'").first() as any;
+
+    const second = await evictBatch(e); // 当日额度已用满
+    expect(second.reason).toBe('daily-cap');
+    const snapAfter = await b.db.prepare("SELECT value FROM kv_cache WHERE cache_key = 'archive:evict:last'").first() as any;
+    expect(snapAfter.value).toBe(snapBefore.value);
+  });
 });
 
 describe('健壮性 — 归档库故障降级', () => {

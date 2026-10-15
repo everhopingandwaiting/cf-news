@@ -52,6 +52,8 @@ AI-generated summary of today's top news, sorted by time with language markers (
 - **Email digest** — Subscribe to daily news summaries
 - **Auto-update** — Cron triggers fetch new articles every hour
 - **D1 storage hygiene** — Daily retention job (runs with the 08:00 UTC digest cron; Workers Free caps each account at 5 cron triggers) deletes AI call logs older than 7 days and clears article content older than 30 days, keeping D1 under the free-tier 500MB limit
+- **Hot/cold archive sharding** — Articles older than the hot window (`archive.hot_days`, default 90d) are migrated daily into a second D1 database (`cf-news-archive`) by `evictBatch`, capped at `archive.evict_max_rows` per UTC day (default 3000). Cross-database reads fan out at the app layer (D1 `ATTACH` is unavailable); eviction is copy-then-delete with idempotent `INSERT OR IGNORE`, so a mid-run crash self-heals. Kill switch: `archive.enabled=0`. Eviction is triggered twice: at 08:00 UTC (after retention, same invocation as the digest) and as a **self-healing retry from the `*/5` cron** (only after 09:00 UTC, stopping once the daily cap is used) — the 08:00 invocation can be killed mid-flight by the platform, and that is invisible without a retry. Every real attempt writes a snapshot to `kv_cache['archive:evict:last']` (`at`/`moved`/`batches`/`error`) and `POST /api/admin/archive/evict` returns the same result live: a stale `at` means eviction never ran, which is otherwise indistinguishable from "no candidates"
+- **Storage-limit recovery** — A D1 database over the free-tier 500MB limit rejects every Worker write (`D1_ERROR: Exceeded maximum DB size`), which also blocks eviction itself: the deletes it needs are rejected too. Eviction therefore **cannot** rescue an over-limit database; free space first through the admin API (`wrangler d1 execute`, which bypasses the limit), then re-run `POST /api/admin/archive/evict`. Note the Workers runtime cannot read its own database size (`PRAGMA page_count` is blocked by `SQLITE_AUTH`), so capacity monitoring must run outside the Worker
 - **Hot/cold archive sharding** — News content older than the hot window (default 90 days) is evicted daily into a second D1 database (`cf-news-archive`); feeds, search, detail, favorites and related views fan out across both databases transparently, so the main DB stays bounded on the free tier
 - **News voice playback** — Browser-native SpeechSynthesis, free, no API calls
 - **AI classification** — LLaMA 3.1 8B classifies news by content, not source defaults
@@ -297,6 +299,8 @@ The project includes a GitHub Actions workflow for automatic deployment. To use 
 
 Secrets are automatically pushed to Cloudflare Secrets (`wrangler secret put`) during the workflow run.
 
+**Capacity monitoring (no extra secret needed).** `.github/workflows/d1-capacity-check.yml` runs `cf-news-worker/scripts/check-d1-capacity.sh` daily at 07:00 UTC (just before the daily eviction, i.e. at peak database size). It warns at 90% of the D1 free-tier 500MB limit and *fails the run* (which notifies the repo owner) at 96%, and it also fails when the `archive:evict:last` / `retention:last` snapshots go stale — i.e. when eviction silently stopped running. This has to live outside the Worker: the Workers runtime cannot read its own database size (`PRAGMA page_count` is rejected with `SQLITE_AUTH`), and a database over the limit rejects every write while also blocking the eviction that would fix it.
+
 ## Quick Start
 
 ### Prerequisites
@@ -450,6 +454,7 @@ cf-news/
 | POST | `/api/admin/backfill-vectors` | Backfill semantic dedup vectors for old items (background, 500/batch) |
 | POST | `/api/admin/backfill-entities` | Backfill structured entity extraction for items missing entities (background, 50/batch) |
 | POST | `/api/admin/refresh-models` | Manually trigger model-catalog sync (reconcile + quality probe + evidence pruning, background) |
+| POST | `/api/admin/archive/evict` | Manually run hot→cold archive eviction; returns `{moved, batches, error, archiveItems}` (respects `archive.enabled` + daily `archive.evict_max_rows` cap) |
 
 ## Adding RSS Sources
 

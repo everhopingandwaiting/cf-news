@@ -4,6 +4,7 @@ import { fetchSourceNews } from '../services/newsFetcher';
 import { storeDedupHash } from '../services/dedup';
 import { extractEntities } from '../services/entityExtractor';
 import { refreshModelCatalog } from '../services/modelRefresher';
+import { evictBatch, describeError } from '../services/archive';
 import { eq, desc, sql, and, ne } from 'drizzle-orm';
 import { getDb, getArchiveDb } from '../db';
 import { newsSources, newsItems, newsFts } from '../db/schema';
@@ -156,6 +157,32 @@ admin.post('/sources/:id/fetch', async (c) => {
         return c.json({ success: true, saved });
     } catch (e: any) {
         return c.json({ success: false, error: String(e) }, 500);
+    }
+});
+
+/**
+ * 手动触发冷热归档驱逐（admin only）。
+ *
+ * 驱逐平时只挂在每日 08:00 retention 链上，出问题时既看不到 error 也没法立刻
+ * 补跑——2026-10 连续三日静默返回 0 正是因此无法定位。本端点回传 evictBatch
+ * 的完整结果（含 error），供主库逼近 500MB 时手动腾空间；仍受 archive.enabled
+ * 与当日 evict_max_rows 双重约束，不会突破写配额。
+ */
+admin.post('/archive/evict', async (c) => {
+    try {
+        const result = await evictBatch(c.env);
+        // 归档库存是辅助信息：查不到也不能盖掉 evictBatch 本身的 error
+        let archiveItems: number | null = null;
+        try {
+            const arch = getArchiveDb(c.env);
+            const counts = arch
+                ? await arch.all<{ items: number }>(sql`SELECT (SELECT COUNT(*) FROM news_items) AS items`)
+                : [];
+            archiveItems = counts[0]?.items ?? null;
+        } catch { /* 归档侧不可读时留空 */ }
+        return c.json({ success: !result.error, ...result, archiveItems });
+    } catch (e: any) {
+        return c.json({ success: false, error: describeError(e) }, 500);
     }
 });
 

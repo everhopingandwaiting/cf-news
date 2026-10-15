@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { buildTestApp, request, MOCK_ENV } from '../helpers';
+import { FETCH_CRON } from '../../cronSchedule';
 
 describe('Health endpoint', () => {
   let app: ReturnType<typeof buildTestApp>['app'];
@@ -42,7 +43,7 @@ describe('Health endpoint', () => {
       { id: 2, source_id: 1, title: 'Fresh news', url: 'https://h/2', category: 'tech', is_deleted: 0, created_at: new Date().toISOString() },
     ]);
     await db.seed('cron_heartbeat', [
-      { cron_name: '0 * * * *', last_fired_at: new Date().toISOString() },
+      { cron_name: FETCH_CRON, last_fired_at: new Date().toISOString() },
     ]);
     const { status, body } = await request(app, db, '/api/health/feed');
     expect(status).toBe(200);
@@ -68,7 +69,7 @@ describe('Health endpoint', () => {
     ]);
     const originalGet = MOCK_ENV.KV.get;
     MOCK_ENV.KV.get = async (key: string) =>
-      key === 'cron_hb:0 * * * *' ? new Date().toISOString() : null;
+      key === `cron_hb:${FETCH_CRON}` ? new Date().toISOString() : null;
     try {
       const { status, body } = await request(app, db, '/api/health/feed');
       expect(status).toBe(200);

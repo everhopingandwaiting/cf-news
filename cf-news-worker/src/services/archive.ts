@@ -216,6 +216,22 @@ export async function fetchCommentCounts(env: Bindings, ids: number[]): Promise<
 
 /* ─── 驱逐（evict） ─── */
 
+/**
+ * 展开错误链：Drizzle 把底层平台错误（配额耗尽 / 查询超时 / SQL 过长）包进
+ * `cause`，只取 `e.message` 会得到"Failed query: DELETE …"这种没有诊断价值的
+ * 文本——这正是 2026-10 驱逐连续三日静默为 0 却无从定位的原因。
+ */
+export function describeError(e: unknown): string {
+    const parts: string[] = [];
+    let cur: any = e;
+    for (let i = 0; cur && i < 5; i++) {
+        const msg = cur instanceof Error ? cur.message : String(cur);
+        if (msg && !parts.includes(msg)) parts.push(msg);
+        cur = cur?.cause;
+    }
+    return parts.join(' ← ');
+}
+
 /** 单条 SQL 语句的绑定参数上限 100（D1 limits）—— 按 90 留余量切片。
  *  调用方传入的 cols 是目标表列数；schema 加列后此值偏小只会让分片更细，
  *  不会超限（buffer 反向覆盖），偏大才会撞 100 上限。 */
@@ -276,10 +292,21 @@ async function syncSources(main: DbClient, arch: DbClient): Promise<void> {
  *   每行 ≈7 次 rows_written ≈ 28k，给 RSS 抓取留足 50k/日配额）；
  *   kv_cache `archive:evict:{YYYY-MM-DD}` 记当日已迁量。
  */
-export async function evictBatch(env: Bindings): Promise<EvictResult> {
+export async function evictBatch(
+    env: Bindings,
+    opts: { notBeforeHourUtc?: number } = {},
+): Promise<EvictResult> {
     const main = getDb(env);
     const arch = getArchiveDb(env);
     if (!arch) return { moved: 0, batches: 0, reason: 'no-archive-binding' };
+
+    // 自愈触发（*/5 cron 传 notBeforeHourUtc=9）：只在 UTC 09:00 之后执行，既保证
+    // retention 先清正文再搬行，又避开 08:00 digest 链的并发调用（两份同时读到旧
+    // 计数器会把日额度翻倍绕过）。此处刻意不写快照——每 5 分钟覆盖一次会盖掉当日
+    // 真实运行记录，而"快照存在 ⇒ 真跑过"正是排障所需的信号。
+    if (opts.notBeforeHourUtc !== undefined && new Date().getUTCHours() < opts.notBeforeHourUtc) {
+        return { moved: 0, batches: 0, reason: 'not-due-yet' };
+    }
 
     const enabled = await getConfig(env, 'archive.enabled');
     if (enabled !== '1') return { moved: 0, batches: 0, reason: 'disabled' };
@@ -288,14 +315,15 @@ export async function evictBatch(env: Bindings): Promise<EvictResult> {
     const maxRows = await getConfigInt(env, 'archive.evict_max_rows', DEFAULT_EVICT_MAX_ROWS);
     const utcDay = new Date().toISOString().slice(0, 10);
     const counterKey = `archive:evict:${utcDay}`;
-    // 计数器读写全是 best-effort：读失败按 0 起算（cron 每日仅一次，超预算风险可忽略），
-    // 写失败不影响已迁数据——配额耗尽等平台错误不得让驱逐半途报错
+    // 计数器读写全是 best-effort：读失败按 0 起算，写失败不影响已迁数据
+    //（配额耗尽等平台错误不得让驱逐半途报错）
     let prior = 0;
     try {
         prior = Number(await getCache(main, counterKey)) || 0;
     } catch (e) {
         console.error('evictBatch: counter read skipped:', e);
     }
+    // 超帽早退不写快照：*/5 自愈每 5 分钟打一次，写快照会盖掉当日真实运行记录
     if (prior >= maxRows) return { moved: 0, batches: 0, reason: 'daily-cap' };
     let budget = maxRows - prior;
 
@@ -344,15 +372,51 @@ export async function evictBatch(env: Bindings): Promise<EvictResult> {
             moved += ids.length;
             budget -= ids.length;
             batches++;
+            // 每批落盘：调用若被平台掐断（CPU/时限），已迁行数不至于丢失，
+            // 否则下一轮按旧计数器重算额度，当日可迁量被放大 → 写配额被打爆。
+            await persistEvictCounter(main, counterKey, prior + moved);
         }
     } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
+        const msg = describeError(e);
+        await recordEvictSnapshot(main, moved, batches, msg);
         return { moved, batches, error: msg };
     }
 
-    if (moved > 0) {
-        try {
-            await setCache(main, counterKey, String(prior + moved), 48 * 3600);
+    await recordEvictSnapshot(main, moved, batches, null);
+    return { moved, batches };
+}
+
+/** 当日计数器 best-effort 落盘（失败不中断迁移，额度次日 00:00 UTC 自然重置） */
+async function persistEvictCounter(main: DbClient, counterKey: string, value: number): Promise<void> {
+    try {
+        await setCache(main, counterKey, String(value), 48 * 3600);
+    } catch (e) {
+        console.error('evictBatch: counter write skipped:', e);
+    }
+}
+
+/**
+ * 落盘"最近一次真实运行"快照。
+ *
+ * 2026-10 事故：驱逐连续多日静默返回 0，仅凭 console.log 无法区分
+ * 「没有候选」「被开关/上限挡住」「抛错」与「压根没被执行」（08:00 调用被
+ * 掐断）——而 wrangler tail 在本环境不可用。快照只在真正执行迁移的路径上写，
+ * 因此 `archive:evict:last` 存在即证明当日驱逐跑过，`at` 停更即为告警信号。
+ */
+async function recordEvictSnapshot(
+    main: DbClient,
+    moved: number,
+    batches: number,
+    error: string | null,
+): Promise<void> {
+    try {
+        await setCache(main, 'archive:evict:last', JSON.stringify({
+            at: new Date().toISOString(),
+            moved,
+            batches,
+            error,
+        }), 7 * 24 * 3600);
+        if (moved > 0) {
             // 计数/分类缓存失效 → 下次请求按双库重算（迁移只搬不删总量语义）
             await main.run(sql`
                 UPDATE kv_cache SET expires_at = 0
@@ -361,10 +425,9 @@ export async function evictBatch(env: Bindings): Promise<EvictResult> {
                    OR cache_key = 'news_categories_list'
                    OR cache_key LIKE 'news_count:%'
             `);
-        } catch (e) {
-            // 缓存写/失效失败不影响已迁数据（下次 TTL 自愈）
-            console.error('evictBatch: cache bookkeeping skipped:', e);
         }
+    } catch (e) {
+        // 缓存写/失效失败不影响已迁数据（下次 TTL 自愈）
+        console.error('evictBatch: cache bookkeeping skipped:', e);
     }
-    return { moved, batches };
 }
