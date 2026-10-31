@@ -287,6 +287,39 @@ describe('Admin API - 冷热归档驱逐', () => {
     expect(body.archiveItems).toBe(1);
   });
 
+  it('POST /api/admin/sources/:id/fetch - 回传本次入库拆解', async () => {
+    await db.seed('news_sources', [{ id: 88, name: 'StatsSrc', feed_url: 'https://stats/rss', category: 'news', language: 'en' }]);
+    const { status, body } = await request(app, db, '/api/admin/sources/88/fetch', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    expect(status).toBe(200);
+    expect(body.success).toBe(true);
+    // 桩 feed 的 item 缺 link → 解析出 0 条：能区分"抓到了但没存"与"根本没抓到"
+    expect(body.stats).toMatchObject({
+      items: 0, saved: 0, skippedDedup: 0, skippedArchived: 0, failed: 0,
+    });
+    expect(typeof body.stats.at).toBe('string');
+  });
+
+  it('GET /api/admin/sources - 带出最近一次抓取拆解', async () => {
+    const { status, body } = await request(app, db, '/api/admin/sources', {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    expect(status).toBe(200);
+    const src = body.sources.find((s: any) => s.id === 88);
+    expect(src.last_fetch).toMatchObject({ items: 0, saved: 0 });
+    expect(typeof src.last_fetch.at).toBe('string');
+  });
+
+  it('GET /api/admin/sources - 从未抓取过的源 last_fetch 为 null', async () => {
+    await db.seed('news_sources', [{ id: 89, name: 'NeverRan', feed_url: 'https://never/rss', category: 'news', language: 'en' }]);
+    const { body } = await request(app, db, '/api/admin/sources', {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    expect(body.sources.find((s: any) => s.id === 89).last_fetch).toBeNull();
+  });
+
   it('POST /api/admin/archive/evict - 失败时 success=false 且回传 error', async () => {
     const built = buildTestApp();
     await built.db.prepare("INSERT OR REPLACE INTO app_config (key, value) VALUES ('archive.enabled', '1')").run();

@@ -24,17 +24,21 @@ export async function fetchWithBrowser(env: Bindings, url: string): Promise<stri
 }
 
 /**
- * RSS sources that require JavaScript rendering.
- * Regular fetch() won't get content from these sites.
+ * 需要 JavaScript 渲染/过反爬挑战的站点（按主机名匹配，不按完整 URL）。
+ *
+ * 为什么按主机名：36kr 的 /feed 从 Cloudflare 出口直接 fetch 拿回的是 HTML
+ * 挑战页（本机同样请求则是 application/rss+xml），必须走 Browser Rendering。
+ * 原来按完整 URL 精确匹配，源地址一从 36kr.com 换成 www.36kr.com 就再也不会
+ * 走浏览器渲染，且表现只是"每天 0 条"，没有任何报错。
  */
-export const JS_RENDER_SOURCES: Set<string> = new Set([
-    'https://36kr.com/feed',
-    'https://sspai.com/feed',
-]);
+export const JS_RENDER_HOSTS = ['36kr.com', 'sspai.com'];
 
-/**
- * Check if a source needs browser rendering.
- */
+/** Check if a source needs browser rendering. */
 export function needsBrowser(feedUrl: string): boolean {
-    return JS_RENDER_SOURCES.has(feedUrl);
+    try {
+        const host = new URL(feedUrl).hostname.toLowerCase();
+        return JS_RENDER_HOSTS.some(h => host === h || host.endsWith(`.${h}`));
+    } catch {
+        return false;
+    }
 }

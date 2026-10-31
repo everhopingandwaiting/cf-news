@@ -163,7 +163,7 @@ CREATE INDEX IF NOT EXISTS idx_news_comments_user ON news_comments(user_id);
 
 -- 插入默认新闻源 (按类别排序)
 INSERT OR IGNORE INTO news_sources (name, url, feed_url, category, language) VALUES
-    ('36氪', 'https://36kr.com', 'https://36kr.com/feed', 'tech', 'zh'),
+    ('36氪', 'https://36kr.com', 'https://www.36kr.com/feed', 'tech', 'zh'),  -- disabled (030): CF 出口 200 反爬挑战页
     ('少数派', 'https://sspai.com', 'https://sspai.com/feed', 'tech', 'zh'),
     ('IT之家', 'https://ithome.com', 'https://www.ithome.com/rss/', 'tech', 'zh'),
     ('Hacker News', 'https://news.ycombinator.com', 'https://hnrss.org/frontpage', 'tech', 'en'),
@@ -177,13 +177,13 @@ INSERT OR IGNORE INTO news_sources (name, url, feed_url, category, language) VAL
     ('Reuters', 'https://reuters.com', 'https://www.reuters.com/arc/outboundfeeds/news/', 'news', 'en'),
     ('NPR', 'https://npr.org', 'https://feeds.npr.org/1001/rss.xml', 'news', 'en'),
     ('Kyodo News English', 'https://english.kyodonews.net', 'https://english.kyodonews.net/rss/all.xml', 'news', 'en'),
-    ('The Mainichi English', 'https://mainichi.jp/english', 'https://www.mainichi.jp/rss/etc/english_latest.rss', 'news', 'en'),
+    ('The Mainichi English', 'https://mainichi.jp/english', 'https://www.mainichi.jp/rss/etc/english_latest.rss', 'news', 'en'),  -- disabled (029): 源站超时
     ('Yonhap News English', 'https://en.yna.co.kr', 'https://en.yna.co.kr/RSS/news.xml', 'news', 'en'),
     ('Korea JoongAng Daily', 'https://koreajoongangdaily.joins.com', 'https://koreajoongangdaily.joins.com/feed', 'news', 'en'),  -- disabled: feed dead
     ('The Japan Times', 'https://japantimes.co.jp', 'https://www.japantimes.co.jp/feed/', 'news', 'en'),
-    ('澎湃新闻', 'https://www.thepaper.cn', 'https://www.thepaper.cn/rss_newsDetail_wap.jsp', 'news', 'zh'),
+    ('澎湃新闻', 'https://www.thepaper.cn', 'https://decemberpei.cyou/rssbox/wechat-pengpaixinwen.xml', 'news', 'zh'),
     ('联合早报', 'https://www.zaobao.com', 'https://www.zaobao.com/realtime/china/feed', 'news', 'zh'),
-    ('人民网国际', 'https://www.people.com.cn', 'http://www.people.com.cn/rss/world.xml', 'military', 'zh'),
+    ('人民网国际', 'https://www.people.com.cn', 'http://www.people.com.cn/rss/world.xml', 'military', 'zh'),  -- disabled (029): feed 冻结于 2025-06
     ('量子位', 'https://www.qbitai.com', 'https://www.qbitai.com/feed', 'ai', 'zh'),
     ('AI 前线', 'https://www.infoq.cn', 'https://www.infoq.cn/feed', 'ai', 'zh'),
     ('OpenAI Blog', 'https://openai.com/blog', 'https://openai.com/blog/rss.xml', 'ai', 'en'),
@@ -197,9 +197,9 @@ INSERT OR IGNORE INTO news_sources (name, url, feed_url, category, language) VAL
     ('独立鱼电影', 'https://duliyu.com', 'https://decemberpei.cyou/rssbox/wechat-duliyudianying.xml', 'entertainment', 'zh'),
     ('果壳网 科学人', 'https://www.guokr.com', 'https://plink.anyfeeder.com/guokr/scientific', 'science', 'zh'),
     ('New Scientist', 'https://www.newscientist.com', 'https://www.newscientist.com/feed/home', 'science', 'en'),
-    ('丁香园', 'https://www.dxy.cn', 'https://www.dxy.cn/rss/q/2.0/channel/12', 'health', 'zh'),
+    ('丁香园', 'https://www.dxy.cn', 'https://www.dxy.cn/rss/q/2.0/channel/12', 'health', 'zh'),  -- disabled (029): feed 冻结于 2025-08
     ('虎扑综合体育', 'https://www.hupu.com', 'https://decemberpei.cyou/rssbox/hupu-240.xml', 'sports', 'zh'),
-    ('ESPN', 'https://www.espn.com', 'https://www.espn.com/espn/rss/news', 'sports', 'en'),
+    ('ESPN', 'https://www.espn.com', 'https://www.espn.com/espn/rss/news', 'sports', 'en'),  -- disabled (029): 202 反爬页
     ('CarNewsChina', 'https://carnewschina.com', 'https://carnewschina.com/feed/', 'auto', 'en'),
     ('Defense News', 'https://www.defensenews.com', 'https://www.defensenews.com/arc/outboundfeeds/rss/', 'military', 'en'),
     ('品玩 PingWest', 'https://www.pingwest.com', 'https://decemberpei.cyou/rssbox/pingwest.xml', 'tech', 'zh'),
@@ -207,7 +207,7 @@ INSERT OR IGNORE INTO news_sources (name, url, feed_url, category, language) VAL
     ('纽约时报中文', 'https://cn.nytimes.com', 'https://cn.nytimes.com/rss/', 'news', 'zh'),
     ('Seeking Alpha', 'https://seekingalpha.com', 'https://seekingalpha.com/tag/editors-picks.xml', 'stocks', 'en'),
     ('MarketWatch', 'https://www.marketwatch.com', 'https://www.marketwatch.com/rss/topstories', 'stocks', 'en'),
-    ('Yahoo Finance', 'https://finance.yahoo.com', 'https://finance.yahoo.com/news/rssindex', 'stocks', 'en'),
+    ('Yahoo Finance', 'https://finance.yahoo.com', 'https://finance.yahoo.com/news/rssindex', 'stocks', 'en'),  -- disabled (029): 403
     ('The Guardian', 'https://www.theguardian.com', 'https://www.theguardian.com/world/rss', 'news', 'en'),
     ('东方财富 策略研报', 'https://data.eastmoney.com/report/stock/strategy.html', 'https://rss.eastmoney.com/rss_partener.xml', 'stocks', 'zh'),
     ('中新网财经', 'https://www.chinanews.com.cn', 'https://www.chinanews.com.cn/rss/finance.xml', 'finance', 'zh'),
@@ -260,7 +260,7 @@ VALUES ('澎湃新闻', 'https://www.thepaper.cn', 'https://decemberpei.cyou/rss
 
 -- 知乎热榜（通过第三方 RSS 桥）
 INSERT OR IGNORE INTO news_sources (name, url, feed_url, category, language, source_type, sort_order)
-VALUES ('知乎热榜', 'https://www.zhihu.com', 'https://decemberpei.cyou/rssbox/zhihu.xml', 'news', 'zh', 'rss', 60);
+VALUES ('知乎热榜', 'https://www.zhihu.com', 'https://decemberpei.cyou/rssbox/zhihu.xml', 'news', 'zh', 'rss', 60);  -- disabled (029): 镜像冻结于 2026-07
 
 -- 人民日报（微信公众号版，通过第三方 RSS 桥）
 INSERT OR IGNORE INTO news_sources (name, url, feed_url, category, language, source_type, sort_order)

@@ -31,7 +31,7 @@ AI-generated summary of today's top news, sorted by time with language markers (
 
 ## Features
 
-- **Multi-source feed aggregation** — 30+ built-in RSS/JSON Feed sources (36氪, Hacker News, TechCrunch, The Verge, BBC, Daring Fireball, CNBC, etc.)
+- **Multi-source feed aggregation** — 30+ built-in RSS/JSON Feed sources (IT之家, Hacker News, TechCrunch, The Verge, BBC, Daring Fireball, CNBC, etc.)
 - **Category filtering** — Tech, AI, New Energy, News, Finance, Entertainment
 - **Full-text search** — D1 FTS5 powered search with KV hot cache
 - **AI summaries** — OpenRouter, NVIDIA, Mango APIs with automatic fallback
@@ -444,7 +444,7 @@ cf-news/
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/admin/sources` | List all RSS sources (with stats) |
+| GET | `/api/admin/sources` | List all RSS sources (with stats + `last_fetch` ingestion breakdown) |
 | POST | `/api/admin/sources` | Add a new RSS source |
 | PUT | `/api/admin/sources/:id` | Update an RSS source |
 | DELETE | `/api/admin/sources/:id` | Delete an RSS source |

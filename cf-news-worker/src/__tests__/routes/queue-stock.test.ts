@@ -118,7 +118,7 @@ describe('Queue - illustrate_stock', () => {
 describe('Queue - generate_take / generate_entities', () => {
   it('dispatches generate_take message to generateAITake with item context', async () => {
     const { generateAITake } = await import('../../services/summarizer');
-    vi.mocked(generateAITake).mockResolvedValue(true);
+    vi.mocked(generateAITake).mockResolvedValue(undefined);
     resetDb();
     const db = new MockD1();
     const env: any = { DB: db, KV: { get: async () => null, put: async () => {} } };
@@ -140,7 +140,7 @@ describe('Queue - generate_take / generate_entities', () => {
 
   it('dispatches generate_entities message to extractEntities with item context', async () => {
     const { extractEntities } = await import('../../services/entityExtractor');
-    vi.mocked(extractEntities).mockResolvedValue(true);
+    vi.mocked(extractEntities).mockResolvedValue(undefined);
     resetDb();
     const db = new MockD1();
     const env: any = { DB: db, KV: { get: async () => null, put: async () => {} } };

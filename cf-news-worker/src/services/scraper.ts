@@ -74,14 +74,14 @@ export async function scrapeThePaper(env: Bindings): Promise<ScrapedItem[]> {
     return items.slice(0, 50);
 }
 
-export function getScraper(feedUrl: string, sourceUrl?: string): ((env: Bindings) => Promise<ScrapedItem[]>) | null {
-    // Check both feed_url and source url
-    const urls = [feedUrl, sourceUrl].filter(Boolean);
-    for (const u of urls) {
-        try {
-            const hostname = new URL(u!).hostname;
-            if (hostname.includes('thepaper.cn')) return scrapeThePaper;
-        } catch {}
-    }
+export function getScraper(feedUrl: string): ((env: Bindings) => Promise<ScrapedItem[]>) | null {
+    // 只看 feed_url：site url 只是"站点主页"，配了第三方 RSS 桥时（澎湃走
+    // decemberpei 镜像）不该被站点抓取器抢走。2026-10 的实测教训——thepaper.cn
+    // 对 Cloudflare 出口返回 403，抓取器静默返回 0 条，把镜像里 8 条现成新闻
+    // 全部挡在门外，看起来就是"这个源半年没更新"。
+    try {
+        const hostname = new URL(feedUrl).hostname;
+        if (hostname.includes('thepaper.cn')) return scrapeThePaper;
+    } catch { /* 非法 URL 视为无抓取器 */ }
     return null;
 }

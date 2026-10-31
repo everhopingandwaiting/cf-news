@@ -8,7 +8,7 @@ beforeAll(() => {
   resetDb();
 });
 
-function newEnv() {
+function newEnv(): any {
   return { DB: new MockD1() as unknown as D1Database };
 }
 

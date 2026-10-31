@@ -1,9 +1,9 @@
 import { Bindings, NewsSource } from '../types';
 import { indexNewsItem } from './tokenizer';
 import { checkDuplicate, storeDedupHash } from './dedup';
-import { existsArchivedUrl } from './archive';
+import { existsArchivedUrl, describeError } from './archive';
 import { uploadNewsItem } from './aiSearch';
-import { incrementCache, NEWS_ACTIVE_COUNT_KEY } from './cache';
+import { getCache, incrementCache, setCache, NEWS_ACTIVE_COUNT_KEY } from './cache';
 import { fetchWithBrowser, needsBrowser } from './browserFetcher';
 import { getScraper } from './scraper';
 import { eq, sql } from 'drizzle-orm';
@@ -17,6 +17,56 @@ interface RSSItem {
     content?: string;
     pubDate?: string;
     image?: string;
+}
+
+/**
+ * 单次抓取的入库拆解。
+ *
+ * 为什么需要：源"在跑但永远 0 条"这类静默故障（2026-08 起的 36氪/澎湃等）在
+ * last_fetched_count=0 上和"源确实没更新"完全无法区分，也没有任何日志留存
+ * （Workers Logs 只在实时 tail 可见）。统计落 kv_cache，管理端可直接看到
+ * items（feed 里解析到几条）/ saved / skippedDedup / skippedArchived / failed。
+ */
+export interface FetchStats {
+    /** feed 解析出的条目数——0 表示抓取或解析阶段就失败了 */
+    items: number;
+    /** 新插入条数 */
+    saved: number;
+    /** 被标题/向量去重跳过 */
+    skippedDedup: number;
+    /** 归档库已有同 URL 跳过 */
+    skippedArchived: number;
+    /** 逐条入库异常（含 D1 写入受限） */
+    failed: number;
+    error: string | null;
+}
+
+/** 抓取统计的 kv_cache 前缀；保留 7 天，源长时间不跑也能看到最后一次的结论 */
+export const FETCH_STATS_PREFIX = 'fetch:last:';
+export const FETCH_STATS_TTL_SECONDS = 7 * 24 * 3600;
+
+export function fetchStatsKey(sourceId: number): string {
+    return `${FETCH_STATS_PREFIX}${sourceId}`;
+}
+
+/** 落盘一次抓取统计；本身失败绝不能影响抓取主流程 */
+export async function recordFetchStats(env: Bindings, sourceId: number, stats: FetchStats): Promise<void> {
+    try {
+        const payload = JSON.stringify({ at: new Date().toISOString(), ...stats });
+        await setCache(getDb(env), fetchStatsKey(sourceId), payload, FETCH_STATS_TTL_SECONDS);
+    } catch (e) {
+        console.error(`Failed to record fetch stats for source ${sourceId}:`, e);
+    }
+}
+
+/** 读取最近一次抓取统计（管理端诊断用） */
+export async function readFetchStats(env: Bindings, sourceId: number): Promise<(FetchStats & { at: string }) | null> {
+    try {
+        const raw = await getCache(getDb(env), fetchStatsKey(sourceId));
+        return raw ? JSON.parse(raw) : null;
+    } catch {
+        return null;
+    }
 }
 
 const CLASSIFY_BATCH = 30;
@@ -259,7 +309,7 @@ async function batchClassifyCategories(
 async function fetchFeed(env: Bindings, source: NewsSource): Promise<RSSItem[]> {
     try {
         // Check if a scraper is available for this source (by feed_url or url)
-        const scraper = getScraper(source.feed_url, source.url);
+        const scraper = getScraper(source.feed_url);
         if (scraper) {
             console.log(`Scraping ${source.name} via scraper...`);
             const scraped = await scraper(env);
@@ -315,8 +365,11 @@ async function fetchFeed(env: Bindings, source: NewsSource): Promise<RSSItem[]> 
 
 async function saveNewsItems(
     env: Bindings, source: NewsSource, items: RSSItem[], categories: string[], skipSummary = false,
-): Promise<number> {
+): Promise<FetchStats> {
     let savedCount = 0;
+    const stats: FetchStats = {
+        items: items.length, saved: 0, skippedDedup: 0, skippedArchived: 0, failed: 0, error: null,
+    };
     const newItems: { id: number; title: string; description?: string; content?: string; url?: string }[] = [];
     const imageLessItems: { id: number; title: string; category: string }[] = [];
     const db = getDb(env);
@@ -325,13 +378,22 @@ async function saveNewsItems(
         const item = items[i];
         try {
             const isDup = await checkDuplicate(env, item.title, item.description);
-            if (isDup) continue;
+            if (isDup) {
+                stats.skippedDedup++;
+                continue;
+            }
             // 冷热分库：URL 最终防线——归档侧已有同 URL 时跳过（主库 UNIQUE(url) 只
             // 保护单侧，改写过标题的旧文若重生会造成同 URL 双份）
-            if (await existsArchivedUrl(env, item.link)) continue;
+            if (await existsArchivedUrl(env, item.link)) {
+                stats.skippedArchived++;
+                continue;
+            }
 
             const category = categories[i] || source.category;
-            const publishedAt = normalizePublishedAt(item.pubDate, source);
+            // 无 pubDate 的源（澎湃/知乎这类第三方 RSS 桥）以前会得到 NULL，导致文章
+            // 不进日报、时间线、趋势——统一用抓取时刻兜底。重抓已有行时不覆盖原值
+            // （见下方 ON CONFLICT），避免老文章被"顶"到今天。
+            const publishedAt = normalizePublishedAt(item.pubDate, source) ?? new Date().toISOString();
 
             const result = await db.run(sql`
                 INSERT INTO news_items 
@@ -340,7 +402,8 @@ async function saveNewsItems(
                 ON CONFLICT(url) DO UPDATE SET
                     title = excluded.title, description = excluded.description,
                     content = excluded.content, category = excluded.category,
-                    published_at = COALESCE(excluded.published_at, news_items.published_at),
+                    -- 保留已有发布时间（老文章不会被抓取时刻顶到最新），仅当原行为空时补上
+                    published_at = COALESCE(news_items.published_at, excluded.published_at),
                     image_url = COALESCE(excluded.image_url, news_items.image_url)
             `);
 
@@ -359,6 +422,8 @@ async function saveNewsItems(
                 uploadNewsItem(env, { id: row.id, title: item.title, description: item.description, content: item.content, category, published_at: publishedAt || undefined }).catch(e => console.error(`AI Search upload failed:`, e));
             }
         } catch (error) {
+            stats.failed++;
+            stats.error = describeError(error);
             if (!String(error).includes('UNIQUE')) console.error(`Error saving item:`, error);
         }
     }
@@ -393,7 +458,8 @@ async function saveNewsItems(
             });
         }
     }
-    return savedCount;
+    stats.saved = savedCount;
+    return stats;
 }
 
 async function processSource(env: Bindings, source: NewsSource, skipSummary: boolean): Promise<number> {
@@ -406,15 +472,22 @@ async function processSource(env: Bindings, source: NewsSource, skipSummary: boo
         console.log(`[${fetchMs}ms] Got ${items.length} items from ${source.name}`);
 
         const categories = await batchClassifyCategories(env, source, items);
-        const saved = await saveNewsItems(env, source, items, categories, skipSummary);
-        console.log(`[${Date.now() - t0}ms] Saved ${saved} new items from ${source.name}`);
+        const stats = await saveNewsItems(env, source, items, categories, skipSummary);
+        console.log(
+            `[${Date.now() - t0}ms] Saved ${stats.saved}/${stats.items} from ${source.name}`
+            + ` (dedup=${stats.skippedDedup}, archived=${stats.skippedArchived}, failed=${stats.failed})`,
+        );
+        await recordFetchStats(env, source.id, stats);
 
         await db.update(newsSources)
-            .set({ last_fetched_at: sql`strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`, last_fetched_count: saved })
+            .set({ last_fetched_at: sql`strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`, last_fetched_count: stats.saved })
             .where(eq(newsSources.id, source.id));
-        return saved;
+        return stats.saved;
     } catch (e) {
         console.error(`Error processing ${source.name}:`, e);
+        await recordFetchStats(env, source.id, {
+            items: 0, saved: 0, skippedDedup: 0, skippedArchived: 0, failed: 1, error: describeError(e),
+        });
         return 0;
     }
 }

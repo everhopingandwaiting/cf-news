@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { Bindings } from '../types';
-import { fetchSourceNews } from '../services/newsFetcher';
+import { fetchSourceNews, readFetchStats, FETCH_STATS_PREFIX } from '../services/newsFetcher';
 import { storeDedupHash } from '../services/dedup';
 import { extractEntities } from '../services/entityExtractor';
 import { refreshModelCatalog } from '../services/modelRefresher';
@@ -47,8 +47,26 @@ admin.get('/sources', async (c) => {
     }).from(newsSources)
         .get();
 
+    // 最近一次抓取的入库拆解（items/saved/skipped*/failed）：一次查询拿全部源，
+    // 让"源在跑但 0 条"能直接看出是 feed 空、去重、归档 URL，还是入库报错
+    const statsBySource = new Map<number, unknown>();
+    try {
+        const rows = await db.all<{ cache_key: string; value: string }>(
+            sql`SELECT cache_key, value FROM kv_cache WHERE cache_key LIKE ${`${FETCH_STATS_PREFIX}%`}`
+        );
+        for (const row of rows) {
+            const id = Number(row.cache_key.slice(FETCH_STATS_PREFIX.length));
+            if (!Number.isFinite(id)) continue;
+            try {
+                statsBySource.set(id, JSON.parse(row.value));
+            } catch { /* 坏值忽略，前端按未知处理 */ }
+        }
+    } catch (e) {
+        console.error('Failed to load fetch stats:', e);
+    }
+
     return c.json({
-        sources,
+        sources: sources.map(s => ({ ...s, last_fetch: statsBySource.get(s.id) ?? null })),
         overall_today_count: countResult?.today_count ?? 0,
         overall_today_last_count: lastCountResult?.last_count ?? 0,
     });
@@ -154,7 +172,9 @@ admin.post('/sources/:id/fetch', async (c) => {
     const id = parseInt(c.req.param('id'));
     try {
         const saved = await fetchSourceNews(c.env, id);
-        return c.json({ success: true, saved });
+        // 回传本次的入库拆解，便于判断 "saved:0" 是没抓到、被判重，还是写库失败
+        const stats = await readFetchStats(c.env, id);
+        return c.json({ success: true, saved, stats });
     } catch (e: any) {
         return c.json({ success: false, error: String(e) }, 500);
     }
