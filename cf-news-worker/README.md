@@ -156,7 +156,7 @@ Cron Triggers 配置为每天 5 个任务：
 - `*/5 * * * *` — 每 5 分钟处理积压 AI 摘要（newest-first，只处理近 7 天文章）
 - `*/15 * * * *` — 每 15 分钟刷新趋势主题与雷达推送
 - `0 8 * * *` — 每天 8 点生成并发送日报摘要
-- `0 */6 * * *` — 每 6 小时自动刷新模型目录（modelRefresher：/models 校准 + 质量探针 + 证据裁剪，独立调度避免抢 subrequest 预算）
+- `0 */6 * * *` — 每 6 小时自动刷新模型目录（modelRefresher：/models 校准 + 质量探针 + 证据裁剪，独立调度避免抢 subrequest 预算）。**游标轮转**：每次只校准 2 家 provider（`model_sync_providers_per_run`），起点存 `model_sync_cursor_provider`，40s 时间预算（`model_sync_budget_ms`）兜底——一次跑完十家会在前两家就耗尽调用时间，导致后面的 provider 目录无限期不更新
 
 可在 `wrangler.toml` 中修改：
 
@@ -210,7 +210,7 @@ docker run --rm -v $(pwd):/app -v /app/node_modules --network=host cf-news-worke
 | `services/dedup.test.ts` | 哈希+向量去重（含跨库 URL 兜底） | 7 |
 | `services/entityExtractor.test.ts` | 实体抽取解析与写入 | 5 |
 | `services/newsFetcher.test.ts` | RSS 抓取管线 | 5 |
-| `services/modelRefresher.test.ts` | 模型目录刷新/探针 | 14 |
+| `services/modelRefresher.test.ts` | 模型目录刷新/探针/游标轮转 | 18 |
 | `services/trending.test.ts` | 趋势聚合辅助函数 | 7 |
 | **合计** | | **327** |
 

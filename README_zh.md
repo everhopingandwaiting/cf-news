@@ -26,7 +26,7 @@
 - **多源 Feed 聚合** — 30+ 内置 RSS/JSON Feed 源（IT之家、Hacker News、TechCrunch、BBC、Daring Fireball 等）
 - **分类筛选** — 科技、AI、新能源、新闻、财经、娱乐
 - **全文搜索** — D1 FTS5 驱动，KV 热缓存加速
-- **AI 摘要** — OpenRouter、NVIDIA、Mango 多 provider 自动降级
+- **AI 摘要** — 智谱 GLM / Agnes / SenseNova / OpenRouter 多 provider 自动降级，Cloudflare Workers AI 兜底（免费 10k neurons/天 与去重 embedding 共享，只够 ~100 个批量摘要/天）
 - **AI 问答** — 自然语言提问，AI 基于当日新闻回答
 - **今日要闻** — AI 每日自动汇总，按时间排序，携带语言标记和发布时间，支持历史浏览
 - **相关推荐** — 标题关键词匹配，点击一键跳转
@@ -56,7 +56,7 @@
 - **Pixabay 图库配图** — 无图新闻卡片自动填充相关 Pixabay 插画（下载到 R2 自托管，符合热链规范）；卡片显示「配图」标记，明确区分自动生成图与源站原图
 - **全球服务排行** — Cloudflare Radar 互联网服务排名补充趋势面板
 - **使用分析** — Workers Analytics Engine 记录搜索热词与各 provider AI 调用统计
-- **自动模型目录同步** — 独立定时任务（`0 */6 * * *`）自动将 `provider_models` 目录与各 provider 的 live `/models` 端点校准，对新候选做真实质量探针，并根据 `ai_call_log` 证据裁剪死模型。自动识别免费模型（OpenRouter `:free`、Zen/OrcaRouter `-free`、零价），并优先探测、给予加分使其优先于同类付费模型。新模型默认禁用，只有探针成功才启用，无需手动迁移。也可通过 `POST /api/admin/refresh-models` 手动触发
+- **自动模型目录同步** — 独立定时任务（`0 */6 * * *`）自动将 `provider_models` 目录与各 provider 的 live `/models` 端点校准，对新候选做真实质量探针，并根据 `ai_call_log` 证据裁剪死模型。自动识别免费模型（OpenRouter `:free`、Zen/OrcaRouter `-free`、零价），并优先探测、给予加分使其优先于同类付费模型。新模型默认禁用，只有探针成功才启用，无需手动迁移。每次只同步一部分 provider（游标轮转 + 40s 时间预算），避免慢 provider 把后面的全饿死。也可通过 `POST /api/admin/refresh-models` 手动触发
 - **可靠回填** — 后台回填任务改为 Cloudflare Workflows（自动重试、跨请求存活）
 - **Smart Placement** — Worker 自动靠近上游 AI/RSS 端点，降低延迟
 - **邮件退订** — 回复 "退订" 到 digest@ 即可关闭每日摘要（Email Routing 入站）
@@ -78,7 +78,7 @@
 | AI 缓存 | AI Gateway（分类和问答结果缓存） |
 | 机器人防护 | Turnstile（免费无感验证码） |
 | 边缘缓存 | Cache API（列表/搜索 60s、趋势 180–300s、可信度 600s） |
-| AI 摘要 | OpenRouter, NVIDIA, Mango, Zen（1M 上下文大批量）, OrcaRouter, 智谱 GLM（免费）, SenseNova（商汤）APIs |
+| AI 摘要 | 智谱 GLM（免费）, Agnes, SenseNova（商汤）, OpenRouter, NVIDIA, FreeModel, Zen（1M 上下文大批量）, OrcaRouter；Cloudflare Workers AI 兜底 |
 | 向量 | Vectorize 语义去重 |
 | 对象存储 | R2（图片代理缓存 + AI 插画） |
 | 持久任务 | Workflows（回填任务） |

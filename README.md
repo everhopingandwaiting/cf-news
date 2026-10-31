@@ -34,7 +34,7 @@ AI-generated summary of today's top news, sorted by time with language markers (
 - **Multi-source feed aggregation** — 30+ built-in RSS/JSON Feed sources (IT之家, Hacker News, TechCrunch, The Verge, BBC, Daring Fireball, CNBC, etc.)
 - **Category filtering** — Tech, AI, New Energy, News, Finance, Entertainment
 - **Full-text search** — D1 FTS5 powered search with KV hot cache
-- **AI summaries** — OpenRouter, NVIDIA, Mango APIs with automatic fallback
+- **AI summaries** — Zhipu GLM / Agnes / SenseNova / OpenRouter chain with automatic fallback, Cloudflare Workers AI as the last resort (its free 10k-neuron/day quota is shared with dedup embeddings, so it can only absorb ~100 batches/day)
 - **AI Q&A** — Ask natural language questions about news
 - **Daily digest** — Auto-generated daily news summary with history browser
 - **Related articles** — Keyword-matched related articles with one-click navigation
@@ -64,7 +64,7 @@ AI-generated summary of today's top news, sorted by time with language markers (
 - **Pixabay stock illustration** — Image-less news cards auto-filled with relevant Pixabay illustrations (downloaded to R2, hotlink-compliant). Cards show a 「配图」badge so auto-generated images are clearly distinguished from original source images
 - **Global service rankings** — Cloudflare Radar internet-service rankings supplement the trending panel
 - **Usage analytics** — Workers Analytics Engine records search hot-words and per-provider AI call stats
-- **Auto model-catalog sync** — An independent cron (`0 */6 * * *`) auto-reconciles the `provider_models` catalog against each provider's live `/models` endpoint, quality-probes new candidates (real chat completion), and prunes dead models from `ai_call_log` evidence. Free models (OpenRouter `:free`, Zen/OrcaRouter `-free`, zero-pricing) are auto-detected and probed first, getting a score bonus so they outrank similar paid peers. New models start disabled and only enable after a successful probe; never requires manual migrations. Manually trigger via `POST /api/admin/refresh-models`
+- **Auto model-catalog sync** — An independent cron (`0 */6 * * *`) auto-reconciles the `provider_models` catalog against each provider's live `/models` endpoint, quality-probes new candidates (real chat completion), and prunes dead models from `ai_call_log` evidence. Free models (OpenRouter `:free`, Zen/OrcaRouter `-free`, zero-pricing) are auto-detected and probed first, getting a score bonus so they outrank similar paid peers. New models start disabled and only enable after a successful probe; never requires manual migrations. Each run syncs only a slice of providers (cursor rotation + 40s time budget) so slow providers can't starve the rest. Manually trigger via `POST /api/admin/refresh-models`
 - **Durable backfill** — Admin backfill jobs run as Cloudflare Workflows (auto-retry, survives request lifetime)
 - **Smart Placement** — Worker auto-places near upstream AI/RSS endpoints for lower latency
 - **Email unsubscribe** — Reply "退订" to digest@ and the subscription turns off (Email Routing inbound)
@@ -86,7 +86,7 @@ AI-generated summary of today's top news, sorted by time with language markers (
 | AI Cache | AI Gateway (caches classification, Q&A) |
 | Bot Protection | Turnstile (free, no CAPTCHA) |
 | Edge Cache | Cache API (list/search 60s, trending 180–300s, credibility 600s) |
-| Summaries | OpenRouter, NVIDIA, Mango, Zen (1M-context large-batch), OrcaRouter, Zhipu GLM (free), SenseNova APIs |
+| Summaries | Zhipu GLM (free), Agnes, SenseNova, OpenRouter, NVIDIA, FreeModel, Zen (1M-context large-batch), OrcaRouter APIs; Cloudflare Workers AI as fallback |
 | Vector | Vectorize for semantic dedup |
 | Object Storage | R2 (image proxy cache + AI illustrations) |
 | Durable Tasks | Workflows (backfill jobs) |

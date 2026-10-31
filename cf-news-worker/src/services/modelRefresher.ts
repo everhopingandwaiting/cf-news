@@ -26,12 +26,20 @@ import type { Bindings } from '../types';
  *     避免抢 subrequest 预算。
  *   - **节流**：目录校准每 provider 1 次 /models fetch；质量探针每 run 最多
  *     `model_sync_max_probes`（默认 3）个模型，避免爆 50-subrequest 上限。
+ *   - **游标轮转**：一次 run 只处理 `model_sync_providers_per_run`（默认 2）家 provider，
+ *     起点由 `app_config.model_sync_cursor_provider` 记录、下次从上家之后继续，外加
+ *     `model_sync_budget_ms`（默认 20s）时间预算兜底。为什么：2026-10-31 实测发现
+ *     一次跑完 10 家会在前 1~2 家就耗尽 invocation 时间，agnes/zen/orcarouter/zhipu
+ *     的目录从 2026-10-16 起再没更新过（Agnes 线上 9 个模型，目录里 12 个过期的）。
  *   - 新增模型一律先从 enabled=0 开始，只有通过真实探针才启用。
  *   - 通过 app_config 可一键关闭：`model_sync_enabled=0`。
  *   - cloudflare（Workers AI /models 用 CF 网关，非 OpenAI 兼容）跳过。
  */
 
 const DEFAULT_MAX_PROBES = 3;             // 每次 run 最多质量探针模型数
+const DEFAULT_PROVIDERS_PER_RUN = 2;      // 每次 run 最多校准的 provider 数（游标轮转）
+const DEFAULT_SYNC_BUDGET_MS = 40_000;    // 单次 run 外部请求总预算（/models + 探针）
+const CURSOR_KEY = 'model_sync_cursor_provider';
 const DEFAULT_SUMMARY_WINDOW_DAYS = 2;    // 证据裁剪回看窗口（天）
 const DEFAULT_EVIDENCE_MIN_ATTEMPTS = 20; // 证据裁剪最少尝试次数
 const DEFAULT_BASELINE_SCORE = 60;        // 新启用模型的基线分（低于已验证主力 80+）
@@ -224,7 +232,32 @@ async function writeProbeTs(env: Bindings, provider: string, model: string): Pro
 }
 
 /**
+ * 读取轮转游标：返回本轮应从 providers 数组的第几个开始。
+ * 记录的是"上次处理完的 provider 名"，顺序调整或 provider 下线都能自愈（找不到就从头来）。
+ */
+async function readCursorIndex(env: Bindings, providers: string[]): Promise<number> {
+    if (providers.length === 0) return 0;
+    const last = await getConfig(env, CURSOR_KEY);
+    if (!last) return 0;
+    const idx = providers.indexOf(last);
+    return idx >= 0 ? (idx + 1) % providers.length : 0;
+}
+
+async function writeCursor(env: Bindings, provider: string): Promise<void> {
+    try {
+        await getDb(env).run(
+            sql`INSERT OR REPLACE INTO app_config (key, value) VALUES (${CURSOR_KEY}, ${provider})`,
+        );
+    } catch (e) {
+        console.error('[modelRefresher] failed to persist cursor:', e);
+    }
+}
+
+/**
  * 主入口：执行一轮模型目录自动刷新。
+ *
+ * 只处理游标之后的 N 家 provider（默认 2），处理完写回游标；时间预算用完就提前收尾，
+ * 但至少保证推进 1 家，避免"前一家超时导致后面永远轮不到"。
  */
 export async function refreshModelCatalog(env: Bindings): Promise<{ reconciled: string[]; probed: string[]; pruned: string[] }> {
     const enabled = await getConfigInt(env, 'model_sync_enabled', 1);
@@ -246,7 +279,30 @@ export async function refreshModelCatalog(env: Bindings): Promise<{ reconciled: 
     const maxProbes = await getConfigInt(env, 'model_sync_max_probes', DEFAULT_MAX_PROBES);
     let probesUsed = 0;
 
-    for (const provider of providersToSync) {
+    if (providersToSync.length === 0) {
+        return { reconciled: [], probed: [], pruned: [] };
+    }
+
+    // 游标轮转 + 时间预算：一次 run 只推进 N 家，剩下的下次继续
+    const providersPerRun = Math.max(1, await getConfigInt(env, 'model_sync_providers_per_run', DEFAULT_PROVIDERS_PER_RUN));
+    const visits = Math.min(providersPerRun, providersToSync.length);
+    // 探针预算按本轮要跑的 provider 数摊开，避免第一家把预算吃光、后面永远轮不到
+    const probeQuotaPerProvider = Math.max(1, Math.floor(maxProbes / visits));
+    const budgetMs = await getConfigInt(env, 'model_sync_budget_ms', DEFAULT_SYNC_BUDGET_MS);
+    const startIdx = await readCursorIndex(env, providersToSync);
+    const startedAt = Date.now();
+
+    for (let k = 0; k < visits; k++) {
+        if (k > 0 && Date.now() - startedAt > budgetMs) {
+            console.log(`[modelRefresher] budget ${budgetMs}ms exhausted after ${k} provider(s)`);
+            break;
+        }
+        const provider = providersToSync[(startIdx + k) % providersToSync.length];
+        let probesThisProvider = 0;
+        // 先认领再处理：万一这一家把 invocation 拖死（平台掐断），游标也已经推进，
+        // 下一轮从下一家开始，不会永久卡在同一家（2026-10-31 实测 agnes 就卡住过）。
+        await writeCursor(env, provider);
+
         const live = await probeModels(env, provider);
         if (!live) continue; // 无 key / disabled / 端点失败 → 跳过
 
@@ -309,9 +365,17 @@ export async function refreshModelCatalog(env: Bindings): Promise<{ reconciled: 
             }
 
             for (const cand of candidates) {
-                if (probesUsed >= maxProbes) break;
+                if (probesUsed >= maxProbes || probesThisProvider >= probeQuotaPerProvider) break;
+                // 时间预算也要卡在探针循环内部：单家 provider 的 /models + 3 个探针
+                // 最长可达 75s，只在 provider 之间检查会照样把 invocation 拖死。
+                if (Date.now() - startedAt > budgetMs) {
+                    console.log(`[modelRefresher] ${provider}: budget ${budgetMs}ms exhausted before probing ${cand.model_id}`);
+                    break;
+                }
                 const last = await readProbeTs(env, provider, cand.model_id);
                 if (now - last < cooldown) continue;
+
+                probesThisProvider++;
 
                 probesUsed++;
                 const ok = await qualityProbe(env, provider, info.base_url, info.api_key, cand.model_id);

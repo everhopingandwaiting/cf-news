@@ -351,6 +351,9 @@ describe('aiProvider callAI chain', () => {
   });
 
   it('returns null when every provider fails', async () => {
+    // 固定链路为 groq：目录里可能有迁移预置的 cloudflare 模型（Workers AI 走 env.AI.run，
+    // 不经过 fetch 桩），不固定 provider_order 这条"全失败"用例会假通过成 cloudflare 成功
+    await db.exec("INSERT OR REPLACE INTO app_config (key, value) VALUES ('provider_order', 'groq')");
     await db.seed('providers', [
       { name: 'groq', base_url: 'https://api.groq.com/openai/v1', api_key_env: 'GROQ_API_KEY', enabled: 1, expires_at: null },
     ]);

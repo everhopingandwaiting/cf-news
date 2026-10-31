@@ -305,6 +305,105 @@ describe('modelRefresher evidence pruning (证据裁剪)', () => {
   });
 });
 
+describe('modelRefresher provider rotation (游标轮转)', () => {
+  beforeEach(() => {
+    resetDb();
+    db = new MockD1();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function seedMulti(providers: string[], perRun: number, budgetMs?: number) {
+    await db.exec(`INSERT OR REPLACE INTO app_config (key, value) VALUES ('provider_order', '${providers.join(',')}')`);
+    await db.exec(`INSERT OR REPLACE INTO app_config (key, value) VALUES ('model_sync_providers_per_run', '${perRun}')`);
+    if (budgetMs !== undefined) {
+      await db.exec(`INSERT OR REPLACE INTO app_config (key, value) VALUES ('model_sync_budget_ms', '${budgetMs}')`);
+    }
+    for (const p of providers) {
+      await db.seed('providers', [
+        { name: p, base_url: `https://${p}.example.com/v1`, api_key_env: 'TEST_KEY', enabled: 1, expires_at: null },
+      ]);
+    }
+  }
+
+  const modelsCalled = (mock: any) => mock.mock.calls
+    .filter((c: any[]) => String(c[0]).endsWith('/models'))
+    .map((c: any[]) => String(c[0]));
+
+  it('advances the cursor each run so every provider is eventually synced', async () => {
+    await seedMulti(['p1', 'p2', 'p3'], 1);
+    const fetchMock = stubFetch(makeEnv(), [{ id: 'a-model', type: 'text' }]);
+    const env = makeEnv({ TEST_KEY: 'key' });
+
+    await refreshModelCatalog(env);
+    expect(modelsCalled(fetchMock)).toEqual(['https://p1.example.com/v1/models']);
+
+    await refreshModelCatalog(env);
+    expect(modelsCalled(fetchMock)).toEqual([
+      'https://p1.example.com/v1/models',
+      'https://p2.example.com/v1/models',
+    ]);
+
+    await refreshModelCatalog(env);
+    expect(modelsCalled(fetchMock).at(-1)).toBe('https://p3.example.com/v1/models');
+
+    // 第四轮回到第一家
+    await refreshModelCatalog(env);
+    expect(modelsCalled(fetchMock).at(-1)).toBe('https://p1.example.com/v1/models');
+
+    const row = await db.prepare("SELECT value FROM app_config WHERE key = 'model_sync_cursor_provider'").first<any>();
+    expect(row.value).toBe('p1');
+  });
+
+  it('still advances one provider when the time budget is already exhausted', async () => {
+    await seedMulti(['p1', 'p2', 'p3'], 2, 0);
+    const fetchMock = stubFetch(makeEnv(), [{ id: 'a-model', type: 'text' }]);
+
+    await refreshModelCatalog(makeEnv({ TEST_KEY: 'key' }));
+    // 预算 0 只允许第一家（否则会一家都跑不到，游标永远不动）
+    expect(modelsCalled(fetchMock)).toEqual(['https://p1.example.com/v1/models']);
+  });
+
+  it('stops probing once the time budget is gone (per-provider probes cannot eat the budget)', async () => {
+    await seedMulti(['p1', 'p2'], 2, 0);
+    await db.seed('provider_models', [
+      { provider: 'p1', model_id: 'cand', score: 60, enabled: 0, type: 'text', context_size: 131072, max_output: 4096 },
+    ]);
+    stubFetch(makeEnv(), [{ id: 'cand', type: 'text' }], true);
+
+    const result = await refreshModelCatalog(makeEnv({ TEST_KEY: 'key' }));
+    // 预算 0：目录照常校准，但探针一个都不打（否则单家 3×20s 会把 invocation 拖死）
+    expect(result.probed).toEqual([]);
+    const row = await db.prepare("SELECT enabled FROM provider_models WHERE model_id = 'cand'").first<any>();
+    expect(row.enabled).toBe(0);
+  });
+
+  it('splits the probe budget across providers instead of letting the first one consume it', async () => {
+    await db.exec("INSERT OR REPLACE INTO app_config (key, value) VALUES ('provider_order', 'p1,p2')");
+    await db.exec("INSERT OR REPLACE INTO app_config (key, value) VALUES ('model_sync_providers_per_run', '2')");
+    await db.exec("INSERT OR REPLACE INTO app_config (key, value) VALUES ('model_sync_max_probes', '2')");
+    for (const p of ['p1', 'p2']) {
+      await db.seed('providers', [
+        { name: p, base_url: `https://${p}.example.com/v1`, api_key_env: 'TEST_KEY', enabled: 1, expires_at: null },
+      ]);
+      await db.seed('provider_models', [
+        { provider: p, model_id: 'cand', score: 60, enabled: 0, type: 'text', context_size: 131072, max_output: 4096 },
+      ]);
+    }
+    const fetchMock = stubFetch(makeEnv(), [{ id: 'cand', type: 'text' }], true);
+
+    const result = await refreshModelCatalog(makeEnv({ TEST_KEY: 'key' }));
+    expect(result.probed).toEqual(['enable:p1/cand', 'enable:p2/cand']);
+
+    const enabled = await db.prepare(
+      "SELECT COUNT(*) AS n FROM provider_models WHERE model_id = 'cand' AND enabled = 1",
+    ).first<any>();
+    expect(enabled.n).toBe(2);
+  });
+});
+
 describe('modelRefresher global switch', () => {
   beforeEach(() => {
     resetDb();
