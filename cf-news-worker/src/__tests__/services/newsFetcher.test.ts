@@ -85,6 +85,22 @@ describe('newsFetcher ingestion telemetry', () => {
         env = { ...MOCK_ENV, DB: db, DB_ARCHIVE: archive };
     });
 
+    it('handles redirect + non-feed content-type by parsing feed markers (OpenAI Blog case)', async () => {
+        await db.seed('news_sources', [
+            { id: 999, name: 'OpenAI Blog', feed_url: 'https://openai.com/blog/rss.xml', category: 'tech', language: 'en' },
+        ]);
+        vi.stubGlobal('fetch', async (url: string) => {
+            // 模拟 307 重定向 → 最终页面内容为 text/plain 但包含 RSS 标记（CF 改写 content-type 场景）
+            if (String(url).includes('openai.com/blog/rss.xml')) {
+                const xml = '<?xml version="1.0"?><rss><channel><item><title>AI Update</title><link>https://openai.com/news/1</link></item></channel></rss>';
+                return new Response(xml, { status: 200, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
+            }
+            return new Response('<rss/>', { status: 200, headers: { 'Content-Type': 'application/rss+xml' } });
+        });
+        const saved = await fetchSourceNews(env, 999);
+        expect(saved).toBeGreaterThan(0);
+    });
+
     it('saves items, falls back to fetch time when the feed has no pubDate, and records stats', async () => {
         await db.seed('news_sources', [
             { id: 101, name: 'DateSrc', feed_url: 'https://date.test/rss', category: 'news', language: 'en' },

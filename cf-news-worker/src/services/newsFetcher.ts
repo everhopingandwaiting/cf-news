@@ -346,10 +346,15 @@ async function fetchFeed(env: Bindings, source: NewsSource): Promise<RSSItem[]> 
             } else {
                 const contentType = response.headers.get('content-type') || '';
                 raw = await response.text();
-                if (isJSONContentType(contentType) || isXMLContentType(contentType)) {
-                    // Content-Type confirms it's a feed — use as-is
-                } else if (raw.length > 0 && !/<\?xml|<rss|<feed/i.test(raw) && !raw.trim().startsWith('{')) {
-                    console.log(`Direct fetch returned HTML for ${source.name}, retrying via browser...`);
+                // 方案 A：重定向或内容类型不匹配时，先检查内容是否包含 feed 标记
+                const hasFeedMarkers = /<\?xml[^>]*>|<rss[\s\S]*?<\/rss>|<feed[\s\S]*?<\/feed>/i.test(raw);
+                if (isJSONContentType(contentType) || isXMLContentType(contentType) || hasFeedMarkers) {
+                    // Content-Type 确认为 feed，或内容中直接包含 feed 标记（重定向后内容类型可能被 CF 改写为 text/plain）
+                    if (hasFeedMarkers && !isXMLContentType(contentType) && !isJSONContentType(contentType)) {
+                        console.log(`[${source.name}] redirect/final response has feed markers but non-feed content-type (${contentType}) — parsing anyway`);
+                    }
+                } else if (raw.length > 0) {
+                    console.log(`Direct fetch returned HTML/non-feed (${contentType}) for ${source.name}, retrying via browser...`);
                     const browserRaw = await fetchWithBrowser(env, source.feed_url);
                     if (browserRaw && (/<\?xml|<rss|<feed/i.test(browserRaw) || browserRaw.trim().startsWith('{'))) raw = browserRaw;
                 }
