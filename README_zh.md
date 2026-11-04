@@ -458,11 +458,15 @@ VALUES ('源名称', 'https://example.com', 'https://example.com/rss', 'tech', '
 
 ## 默认新闻源
 
+> 启用集合随源质量巡检动态调整（历史变更见 `migrations/029`、`034`；低产出/纯标题流源会被停用）。下表为 2026-11 现状（32 个启用源）：
+
 | 分类 | 中文源 | 英文源 |
 |------|--------|--------|
-| 科技 | 36氪、少数派、IT之家、爱范儿 | Hacker News、TechCrunch、The Verge、Ars Technica、Wired |
-| AI | 机器之心、量子位、AI 前线 | OpenAI Blog、Hugging Face、Google AI、DeepMind、Anthropic |
-| 新闻 | 澎湃新闻 | Reuters、BBC News、NPR |
+| 科技 | IT之家、少数派、极客公园、爱范儿、V2EX、品玩 PingWest、阮一峰的网络日志 | Hacker News、TechCrunch、The Verge、Ars Technica、Daring Fireball |
+| AI | 量子位、AI 前线 | OpenAI Blog、MIT Technology Review AI、Simon Willison |
+| 新闻 | 纽约时报中文 | BBC News、The Guardian、NPR |
+| 财经/股票 | 中新网财经、东方财富 策略研报、雪球 今日话题 | Seeking Alpha、CnEVPost |
+| 其他 | 果壳网 科学人、游戏研究社、虎扑综合体育 | New Scientist、Defense News、CarNewsChina |
 
 ## 许可证
 

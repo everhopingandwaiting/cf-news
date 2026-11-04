@@ -465,6 +465,18 @@ INSERT INTO news_sources (name, url, feed_url, category, language)
 VALUES ('Source Name', 'https://example.com', 'https://example.com/rss', 'tech', 'en');
 ```
 
+## Default News Sources
+
+> The enabled set is adjusted dynamically by source-quality reviews (see `migrations/029`, `034`; low-yield / title-only feeds get disabled). As of Nov 2026 (32 enabled sources):
+
+| Category | Chinese sources | English sources |
+|----------|-----------------|-----------------|
+| Tech | IT之家, 少数派, 极客公园, 爱范儿, V2EX, 品玩 PingWest, 阮一峰的网络日志 | Hacker News, TechCrunch, The Verge, Ars Technica, Daring Fireball |
+| AI | 量子位, AI 前线 | OpenAI Blog, MIT Technology Review AI, Simon Willison |
+| News | 纽约时报中文 | BBC News, The Guardian, NPR |
+| Finance/Stocks | 中新网财经, 东方财富 策略研报, 雪球 今日话题 | Seeking Alpha, CnEVPost |
+| Other | 果壳网 科学人, 游戏研究社, 虎扑综合体育 | New Scientist, Defense News, CarNewsChina |
+
 ## License
 
 MIT
