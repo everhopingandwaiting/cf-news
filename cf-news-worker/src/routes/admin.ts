@@ -5,6 +5,7 @@ import { storeDedupHash } from '../services/dedup';
 import { extractEntities } from '../services/entityExtractor';
 import { refreshModelCatalog } from '../services/modelRefresher';
 import { evictBatch, describeError } from '../services/archive';
+import { runDailyMaintenance } from '../services/maintenance';
 import { eq, desc, sql, and, ne } from 'drizzle-orm';
 import { getDb, getArchiveDb } from '../db';
 import { newsSources, newsItems, newsFts } from '../db/schema';
@@ -201,6 +202,20 @@ admin.post('/archive/evict', async (c) => {
             archiveItems = counts[0]?.items ?? null;
         } catch { /* 归档侧不可读时留空 */ }
         return c.json({ success: !result.error, ...result, archiveItems });
+    } catch (e: any) {
+        return c.json({ success: false, error: describeError(e) }, 500);
+    }
+});
+
+/**
+ * 手动执行每日维护链（retention → evict），供 08:00 链被掐断后补跑。
+ * 与每 5 分钟 summary cron 的自愈链共用 runDailyMaintenance（含 09:00 窗口
+ * 与当日完成标记），因此重复调用不会放大当日驱逐额度。
+ */
+admin.post('/maintenance/run', async (c) => {
+    try {
+        const result = await runDailyMaintenance(c.env, { force: true });
+        return c.json({ success: true, ...result });
     } catch (e: any) {
         return c.json({ success: false, error: describeError(e) }, 500);
     }

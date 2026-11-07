@@ -25,6 +25,7 @@ import { generatePendingSummaries } from './services/summarizer';
 import { refreshModelCatalog } from './services/modelRefresher';
 import { runRetention } from './services/retention';
 import { evictBatch, describeError } from './services/archive';
+import { runDailyMaintenance } from './services/maintenance';
 import { setCache } from './services/cache';
 import {
     FETCH_CRON,
@@ -337,16 +338,21 @@ export default {
             // 不再入队 generate_summary）。独立调度保证每次调用有自己的 subrequest 预算。
             console.log('Summary cron fired, generating pending summaries...');
             ctx.waitUntil(generatePendingSummaries(env));
-            // 归档驱逐自愈：08:00 那份（与 digest/email 同 invocation）可能被平台
-            // 掐断，此处每 5 分钟重试直到当日额度用满。窗口取 09:00 而非 08:00，
-            // 避免与 08:00 digest 链并发调用同一份驱逐（两份各自读旧计数器 → 日
-            // 额度被翻倍绕过）。超帽/未到点立即返回（≈2 次读），常态开销可忽略。
+            // 每日维护自愈：08:00 那份（与 digest/email 同 invocation）可能被平台
+            // 掐断或子请求预算被 digest 吃光（2026-11-04 起 retention 快照连续停更
+            // 即此原因）。此处 09:00 后每 5 分钟重试 retention→evict 直到当日完成。
+            // 超帽/未到点立即返回（≈2 次读），常态开销可忽略。
             ctx.waitUntil(
-                evictBatch(env, { notBeforeHourUtc: 9 })
+                runDailyMaintenance(env)
                     .then(r => {
-                        if (r.moved > 0) console.log(`Archive evict (self-heal): moved=${r.moved}, batches=${r.batches}`);
+                        if (r.ran) {
+                            console.log(
+                                `Daily maintenance: contentCleared=${r.retention?.contentCleared}, `
+                                + `logsDeleted=${r.retention?.logsDeleted}, evict moved=${r.evict?.moved}`,
+                            );
+                        }
                     })
-                    .catch(e => console.error('Archive evict (self-heal) failed:', e))
+                    .catch(e => console.error('Daily maintenance failed:', e))
             );
         } else if (event.cron === '0 */6 * * *') {
             // Model-sync cron: 自动刷新 provider_models 目录（/models reconcile +
