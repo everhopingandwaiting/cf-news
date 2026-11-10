@@ -348,7 +348,8 @@ export default {
                         if (r.ran) {
                             console.log(
                                 `Daily maintenance: contentCleared=${r.retention?.contentCleared}, `
-                                + `logsDeleted=${r.retention?.logsDeleted}, evict moved=${r.evict?.moved}`,
+                                + `logsDeleted=${r.retention?.logsDeleted}, evict moved=${r.evict?.moved}, `
+                                + `prune pruned=${r.prune?.pruned}`,
                             );
                         }
                     })

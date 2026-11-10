@@ -30,8 +30,9 @@ beforeAll(async () => {
   // 双侧基础数据：主库热文 id1，归档冷文 id900
   await db.seed('news_sources', [{ id: 1, name: 'MainSrc', feed_url: 'https://rss-main', category: 'tech', language: 'en' }]);
   await archive.seed('news_sources', [{ id: 1, name: 'MainSrc', feed_url: 'https://rss-main', category: 'tech', language: 'en' }]);
+  const daysAgoIso = (d: number) => new Date(Date.now() - d * 86400e3).toISOString().slice(0, 19).replace('T', ' ');
   await db.seed('news_items', [
-    { id: 1, source_id: 1, title: 'Hot Article', url: 'https://hot/1', category: 'tech', created_at: '2026-09-25 10:00:00', is_deleted: 0 },
+    { id: 1, source_id: 1, title: 'Hot Article', url: 'https://hot/1', category: 'tech', created_at: daysAgoIso(5), is_deleted: 0 },
   ]);
   await archive.seed('news_items', [
     {
@@ -182,9 +183,13 @@ describe('archive service — evictBatch 驱逐', () => {
   });
 
   it('开启后把超过热窗口的行（含摘要/实体/FTS）成组迁入归档，主库侧清除', async () => {
+    // MockD1 会应用 migrations/（035 起注入 archive.hot_days=45），显式钉住 90 天
+    // 保证本测试语义独立于生产配置；种子日期相对 now，避免日历漂移的时间炸弹。
+    await db.prepare("INSERT OR REPLACE INTO app_config (key, value) VALUES ('archive.hot_days', '90')").run();
+    const daysAgo = (d: number) => new Date(Date.now() - d * 86400e3).toISOString().slice(0, 19).replace('T', ' ');
     await db.seed('news_items', [
-      { id: 600, source_id: 1, title: 'Old battery breakthrough', url: 'https://old/600', category: 'tech', created_at: '2026-01-01 00:00:00', is_deleted: 0 },
-      { id: 601, source_id: 1, title: 'Fresh headline', url: 'https://new/601', category: 'tech', created_at: '2026-09-26 00:00:00', is_deleted: 0 },
+      { id: 600, source_id: 1, title: 'Old battery breakthrough', url: 'https://old/600', category: 'tech', created_at: daysAgo(200), is_deleted: 0 },
+      { id: 601, source_id: 1, title: 'Fresh headline', url: 'https://new/601', category: 'tech', created_at: daysAgo(30), is_deleted: 0 },
     ]);
     await db.seed('news_summaries', [{ id: 600, news_id: 600, summary: 'old summary' }]);
     await db.seed('news_entities', [{ id: 600, news_id: 600, entity_type: 'event', entity_value: 'Old Event' }]);
@@ -206,7 +211,8 @@ describe('archive service — evictBatch 驱逐', () => {
     const archEnt = await archive.prepare('SELECT id FROM news_entities WHERE news_id = 600').first();
     expect(archEnt).toBeTruthy();
 
-    // 主库侧清除（父行 + 子表 + FTS rowid）
+    // 主库侧清除（父行 + 子表 + FTS rowid）；601 在窗口内必须留守
+    expect(await db.prepare('SELECT id FROM news_items WHERE id = 601').first()).toBeTruthy();
     expect(await db.prepare('SELECT id FROM news_items WHERE id = 600').first()).toBeNull();
     expect(await db.prepare('SELECT id FROM news_summaries WHERE news_id = 600').first()).toBeNull();
     expect(await db.prepare('SELECT id FROM news_entities WHERE news_id = 600').first()).toBeNull();

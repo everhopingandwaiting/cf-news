@@ -2,7 +2,7 @@ import { Bindings } from '../types';
 import { getDb } from '../db';
 import { getCache, setCache } from './cache';
 import { runRetention, type RetentionResult } from './retention';
-import { evictBatch, describeError, type EvictResult } from './archive';
+import { evictBatch, pruneArchive, describeError, type EvictResult, type PruneResult } from './archive';
 
 /**
  * 每日维护自愈链：retention（清正文/日志）→ evict（冷热迁移）。
@@ -26,6 +26,7 @@ export interface MaintenanceResult {
     reason?: string;
     retention?: RetentionResult;
     evict?: EvictResult;
+    prune?: PruneResult;
 }
 
 export async function runDailyMaintenance(
@@ -66,12 +67,22 @@ export async function runDailyMaintenance(
         evict = { moved: 0, batches: 0, error: describeError(e) };
     }
 
+    // 进一出一：驱逐迁入多少行，就顺路删归档里超窗的等量最老行（含子表/FTS），
+    // 归档库净增长归零。驱逐没动（超帽/无候选/失败）时本轮不清理，配额好预算。
+    let prune: PruneResult;
+    try {
+        prune = await pruneArchive(env, { maxRows: evict.moved });
+    } catch (e) {
+        prune = { pruned: 0, batches: 0, error: describeError(e) };
+    }
+    await writeSnapshot(db, 'archive:prune:last', { ...prune });
+
     // 全部走完才落"当日完成"标记：半途被平台掐断时下一轮 5 分钟后重试
     try {
         await setCache(db, dayKey, '1', 3 * 24 * 3600);
     } catch { /* 标记写失败只影响去重，不影响维护结果 */ }
 
-    return { ran: true, retention, evict };
+    return { ran: true, retention, evict, prune };
 }
 
 /** 快照写入 best-effort：写失败不得影响维护主流程，但 at 停更即告警信号 */

@@ -41,6 +41,8 @@ const DEFAULT_HOT_DAYS = 90;
 // 合计 ~36k，留 ~14k 余量。2026-09-26 实测：探针实验烧掉当日配额后，缓存写都被拒
 // ——宁可回填慢（45k 行 ≈ 15 天），不可把日常写挤爆。
 const DEFAULT_EVICT_MAX_ROWS = 3000;
+// 归档库滚动保留窗口（天）：主库热窗口之外的总历史长度
+const DEFAULT_ARCHIVE_RETENTION_DAYS = 120;
 
 /** 该新闻所在库；两侧都不存在 → null。主库优先（热数据命中率高）。 */
 export async function resolveNewsSide(env: Bindings, newsId: number): Promise<NewsSide | null> {
@@ -430,4 +432,73 @@ async function recordEvictSnapshot(
         // 缓存写/失效失败不影响已迁数据（下次 TTL 自愈）
         console.error('evictBatch: cache bookkeeping skipped:', e);
     }
+}
+
+export interface PruneResult {
+    pruned: number;
+    batches: number;
+    reason?: string;
+    error?: string;
+}
+
+/**
+ * 归档库滚动保留窗口：删掉超 archive.retention_days 的最老行（含子表/FTS）。
+ *
+ * 为什么做成"跟随驱逐的等量清理"而不是独立大扫除：账户级 100k rows_written/日
+ * 跨两库共享（2026-11-04 整日写冻结的教训），一次性删 4.7 万行 ≈ 15-20 万写，
+ * 单独跑必然打穿配额；挂在每日维护链里"驱逐迁入多少、就清出多少"，归档库
+ * 净增长归零，写入量固定可预算。
+ *
+ * 删除只作用于归档库；被清文章超出总历史窗口（主库 45 天热窗口 +
+ * archive.retention_days），收藏/历史中按设计不可再解析。
+ */
+export async function pruneArchive(
+    env: Bindings,
+    opts: { maxRows?: number } = {},
+): Promise<PruneResult> {
+    const arch = getArchiveDb(env);
+    if (!arch) return { pruned: 0, batches: 0, reason: 'no-archive-binding' };
+
+    const enabled = await getConfig(env, 'archive.enabled');
+    if (enabled !== '1') return { pruned: 0, batches: 0, reason: 'disabled' };
+
+    const days = await getConfigInt(env, 'archive.retention_days', DEFAULT_ARCHIVE_RETENTION_DAYS);
+    if (!Number.isFinite(days) || days <= 0) return { pruned: 0, batches: 0, reason: 'retention-disabled' };
+
+    const budget = Math.floor(opts.maxRows ?? 0);
+    if (budget <= 0) return { pruned: 0, batches: 0, reason: 'no-budget' };
+
+    let pruned = 0;
+    let batches = 0;
+    try {
+        while (pruned < budget) {
+            const take = Math.min(EVICT_BATCH_SIZE, budget - pruned);
+            const picked = await arch.all<{ id: number }>(sql`
+                SELECT id FROM news_items
+                WHERE created_at < datetime('now', '-' || ${days} || ' days')
+                ORDER BY created_at
+                LIMIT ${take}
+            `);
+            const ids = picked.map(r => Number(r.id)).filter(id => Number.isFinite(id));
+            if (ids.length === 0) break;
+            const idList = sql.raw(ids.join(','));
+
+            // 先子表后 FTS 再主行，与 evictBatch 的主库删除同序
+            await arch.run(sql`DELETE FROM news_summaries WHERE news_id IN (${idList})`);
+            await arch.run(sql`DELETE FROM news_ai_take WHERE news_id IN (${idList})`);
+            await arch.run(sql`DELETE FROM news_entities WHERE news_id IN (${idList})`);
+            await arch.run(sql`DELETE FROM news_perspectives WHERE news_id IN (${idList})`);
+            await arch.run(sql`DELETE FROM news_fts WHERE rowid IN (${idList})`);
+            await arch.run(sql`DELETE FROM news_items WHERE id IN (${idList})`);
+
+            pruned += ids.length;
+            batches++;
+            if (ids.length < take) break;
+        }
+    } catch (e) {
+        // 配额耗尽等平台错误：保留已删进度，下一轮 5 分钟后由维护链续跑
+        return { pruned, batches, error: describeError(e) };
+    }
+    if (pruned === 0) return { pruned: 0, batches: 0, reason: 'no-candidates' };
+    return { pruned, batches };
 }
