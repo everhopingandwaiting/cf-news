@@ -17,7 +17,7 @@ Sync text and images across your devices in real-time. Works on desktop and mobi
 - **Sender identification** — See which device sent each message
 - **Clipboard history** — Last 20 pushed texts, click to restore
 - **Auto-open panel** — Panel opens automatically when data arrives from another device
-- **File transfer** — Choose HTTP streaming for files up to 100MB, or WSS chunking for large files. Supports drag & drop, progress, cancel/retry, trusted-device auto-accept, and an optional auto-accept switch. Data is relayed in-memory only — never persisted on the server
+- **File transfer** — Choose HTTP streaming for files up to 100MB, or WSS chunking for large files. Supports drag & drop, live speed, cancel, trusted-device auto-accept, and an optional auto-accept switch. WSS transfers resume from the last delivered chunk after a reconnect (up to 3 automatic retries, then a manual retry). Unanswered offers expire in 30s; a receiver waits 15s for the sender to start. Data is relayed in-memory only — never persisted on the server
 - **Device controls** — Online devices, trusted devices, private mode, and temporary text handoff links
 - **Secure** — WSS encrypted, data only flows between your devices, not stored on server
 

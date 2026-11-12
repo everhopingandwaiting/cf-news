@@ -84,7 +84,7 @@ describe('PipingRoom', () => {
     // After the failed PUT, the DO's readable should be nulled; a GET without a
     // partner must time out to 504 instead of receiving an errored stream.
     const getPromise = room.fetch(new Request('http://localhost/api/piping/x', { method: 'GET' }));
-    await vi.advanceTimersByTimeAsync(60_001);
+    await vi.advanceTimersByTimeAsync(15_001);
     const getRes = await getPromise;
     expect(getRes.status).toBe(504);
     vi.useRealTimers();
@@ -93,7 +93,7 @@ describe('PipingRoom', () => {
   it('times out a GET with no pairing partner after the 60s window', async () => {
     vi.useFakeTimers();
     const getPromise = room.fetch(new Request('http://localhost/api/piping/x', { method: 'GET' }));
-    await vi.advanceTimersByTimeAsync(60_001);
+    await vi.advanceTimersByTimeAsync(15_001);
     const res = await getPromise;
     expect(res.status).toBe(504);
     vi.useRealTimers();

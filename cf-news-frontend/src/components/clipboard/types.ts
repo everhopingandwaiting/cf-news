@@ -21,6 +21,8 @@ export interface FileTransfer {
     direction: 'send' | 'receive';
     status: 'offering' | 'accepted' | 'transferring' | 'complete' | 'cancelled' | 'rejected';
     progress: number;
+    /** bytes/sec, set while transferring */
+    speed?: number;
     startedAt: number;
     completedAt?: number;
     transport: ClipboardTransport;
@@ -55,4 +57,5 @@ export interface ClipboardShareProps {
     onAcceptFile: (transferId: string) => void;
     onRejectFile: (transferId: string) => void;
     onCancelFile: (transferId: string) => void;
+    onRetryFile: (transferId: string) => void;
 }

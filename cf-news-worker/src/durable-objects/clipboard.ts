@@ -31,6 +31,9 @@ const MAX_FILE_NAME_LENGTH = 180;
 const MAX_HTTP_FILE_SIZE = 100 * 1024 * 1024;
 const MAX_WSS_FILE_SIZE = 4 * 1024 * 1024 * 1024;
 const MAX_TRANSFER_CHUNKS = 4096;
+// A transfer nobody finishes (sender/receiver vanished) is forgotten after this idle window.
+const MAX_TRANSFER_IDLE_MS = 5 * 60_000;
+const MAX_CHUNK_HEADER_BYTES = 4096;
 const ALLOWED_TYPES = new Set([
     'text', 'image', 'sync_clipboard', 'heartbeat',
     'file_offer', 'file_accept', 'file_reject', 'file_complete', 'file_cancel',
@@ -40,8 +43,8 @@ const ALLOWED_TYPES = new Set([
 // Durable Object for real-time clipboard sharing between same-user sessions
 export class ClipboardRoom {
     private connections: Map<WebSocket, ConnInfo> = new Map();
-    private acceptedTransfers: Map<string, string> = new Map();
-    private transferSenders: Map<string, string> = new Map();
+    private acceptedTransfers: Map<string, { deviceId: string; touchedAt: number }> = new Map();
+    private transferSenders: Map<string, { deviceId: string; touchedAt: number }> = new Map();
     private storage: DurableObjectStorage;
 
     constructor(state: DurableObjectState, env: any) {
@@ -54,6 +57,8 @@ export class ClipboardRoom {
         const deviceId = url.searchParams.get('device_id') || '';
         const deviceName = (url.searchParams.get('device_name') || 'Unknown device').slice(0, 80);
         if (!userId) return new Response('Unauthorized', { status: 401 });
+
+        this.sweepTransfers();
 
         const pair = new WebSocketPair();
         const [client, server] = Object.values(pair);
@@ -75,7 +80,17 @@ export class ClipboardRoom {
                     try { server.send(JSON.stringify({ type: 'file_cancel' })); } catch {}
                     return;
                 }
-                this.broadcastBinary(server, info, frame);
+                // Only the device that offered a transfer may stream its chunks, and only
+                // the device that accepted it receives them — no fan-out to idle devices.
+                const transferId = this.chunkTransferId(frame);
+                const sender = transferId ? this.transferSenders.get(transferId) : null;
+                const receiver = transferId ? this.acceptedTransfers.get(transferId) : null;
+                if (!transferId || !sender || !receiver || sender.deviceId !== info.deviceId) {
+                    return;
+                }
+                sender.touchedAt = Date.now();
+                receiver.touchedAt = Date.now();
+                this.sendBinaryToDevice(info.userId, receiver.deviceId, frame);
                 return;
             }
             try {
@@ -99,16 +114,16 @@ export class ClipboardRoom {
                     this.storage.setAlarm(Date.now() + 60 * 60 * 1000).catch(() => {});
                 }
                 if (msg.type === 'file_offer' && msg.transferId) {
-                    this.transferSenders.set(msg.transferId, info.deviceId);
+                    this.transferSenders.set(msg.transferId, { deviceId: info.deviceId, touchedAt: Date.now() });
                 }
                 if (msg.type === 'file_accept' && msg.transferId) {
-                    const acceptedBy = this.acceptedTransfers.get(msg.transferId);
-                    if (acceptedBy && acceptedBy !== info.deviceId) {
+                    const accepted = this.acceptedTransfers.get(msg.transferId);
+                    if (accepted && accepted.deviceId !== info.deviceId) {
                         try { server.send(JSON.stringify({ type: 'file_reject', transferId: msg.transferId })); } catch {}
                         return;
                     }
-                    this.acceptedTransfers.set(msg.transferId, info.deviceId);
-                    const senderDeviceId = this.transferSenders.get(msg.transferId);
+                    this.acceptedTransfers.set(msg.transferId, { deviceId: info.deviceId, touchedAt: Date.now() });
+                    const senderDeviceId = this.transferSenders.get(msg.transferId)?.deviceId;
                     if (senderDeviceId) {
                         this.sendToDevice(info.userId, senderDeviceId, { ...msg, acceptedBy: info.deviceId });
                         this.broadcastCancelForOtherDevices(info, senderDeviceId, msg.transferId);
@@ -122,7 +137,7 @@ export class ClipboardRoom {
                     this.transferSenders.delete(msg.transferId);
                 }
                 if (msg.type === 'file_reject' && msg.transferId) {
-                    const senderDeviceId = this.transferSenders.get(msg.transferId);
+                    const senderDeviceId = this.transferSenders.get(msg.transferId)?.deviceId;
                     if (senderDeviceId) {
                         if (this.receiverCount(info.userId, senderDeviceId) <= 1) {
                             this.sendToDevice(info.userId, senderDeviceId, msg);
@@ -141,6 +156,7 @@ export class ClipboardRoom {
 
         server.addEventListener('close', () => {
             this.connections.delete(server);
+            this.sweepTransfers();
             const remaining = this.connectionCount(userId);
             console.log(`Clipboard: user ${userId} device ${deviceId} disconnected (${remaining} remaining)`);
             this.broadcastPresence(userId);
@@ -226,12 +242,32 @@ export class ClipboardRoom {
         }
     }
 
-    private broadcastBinary(senderWs: WebSocket, senderInfo: ConnInfo, buf: ArrayBuffer) {
+    private sendBinaryToDevice(userId: number, deviceId: string, buf: ArrayBuffer) {
         for (const [ws, info] of this.connections) {
-            if (info.userId === senderInfo.userId && ws !== senderWs && info.deviceId !== senderInfo.deviceId && ws.readyState === WebSocket.OPEN) {
+            if (info.userId === userId && info.deviceId === deviceId && ws.readyState === WebSocket.OPEN) {
                 try { ws.send(buf); } catch {}
             }
         }
+    }
+
+    /** transferId from a binary chunk frame: u32 BE header length + JSON header {t:'fc',i}. */
+    private chunkTransferId(frame: ArrayBuffer): string | null {
+        try {
+            if (frame.byteLength < 8) return null;
+            const headerLen = new DataView(frame).getUint32(0, false);
+            if (headerLen === 0 || headerLen > MAX_CHUNK_HEADER_BYTES || 4 + headerLen > frame.byteLength) return null;
+            const header = JSON.parse(new TextDecoder().decode(new Uint8Array(frame, 4, headerLen)));
+            return header?.t === 'fc' && typeof header.i === 'string' ? header.i : null;
+        } catch {
+            return null;
+        }
+    }
+
+    /** Drop transfers whose parties went away mid-transfer (lazy: on connect and disconnect). */
+    private sweepTransfers() {
+        const cutoff = Date.now() - MAX_TRANSFER_IDLE_MS;
+        for (const [id, t] of this.transferSenders) if (t.touchedAt < cutoff) this.transferSenders.delete(id);
+        for (const [id, t] of this.acceptedTransfers) if (t.touchedAt < cutoff) this.acceptedTransfers.delete(id);
     }
 
     private connectionCount(userId: number): number {

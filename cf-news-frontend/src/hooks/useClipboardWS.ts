@@ -43,8 +43,10 @@ const DEBOUNCE_MS = 500;
 const HEARTBEAT_MS = 30000;
 const HEARTBEAT_TIMEOUT_MS = 90000;
 const HEARTBEAT_CHECK_MS = 10000;
-const OFFER_TIMEOUT_MS = 60000;
-const ACCEPT_TIMEOUT_MS = 60000;
+const OFFER_TIMEOUT_MS = 30000;
+const ACCEPT_TIMEOUT_MS = 30000;
+// Auto-resume attempts for an in-flight WSS upload after connection drops.
+const MAX_RESUME_ATTEMPTS = 3;
 
 interface ClipboardMsg {
     type: 'text' | 'image' | 'sync_clipboard' | 'heartbeat' | 'heartbeat_ack'
@@ -86,6 +88,7 @@ interface FileTransfer {
     direction: 'send' | 'receive';
     status: 'offering' | 'accepted' | 'transferring' | 'complete' | 'cancelled' | 'rejected';
     progress: number;
+    speed?: number;
     startedAt: number;
     completedAt?: number;
     transport: ClipboardTransport;
@@ -171,6 +174,8 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
     const [pendingCount, setPendingCount] = useState(0);
     const [incomingOffers, setIncomingOffers] = useState<IncomingFileOffer[]>([]);
     const [fileTransfers, setFileTransfers] = useState<FileTransfer[]>([]);
+    const fileTransfersRef = useRef<FileTransfer[]>([]);
+    fileTransfersRef.current = fileTransfers;
     const [devices, setDevices] = useState<ClipboardDevice[]>([]);
     const [, setHistoryVersion] = useState(0);
     const pendingResolve = useRef<Map<string, (success: boolean) => void>>(new Map());
@@ -185,6 +190,10 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
     panelOpenRef.current = panelOpen;
     const backoffRef = useRef(0);
     const queueRef = useRef<ClipboardMsg[]>([]);
+    // 传输中的 WSS 文件分片，断线后重传用
+    const activeSendTransfersRef = useRef<Map<string, { file: File; totalChunks: number; sentChunks: number; retryCount: number }>>(new Map());
+    // Set after the send helpers exist; connect() calls it on open to resume uploads.
+    const resumeUploadsRef = useRef<(() => void) | null>(null);
     // Monotonic socket generation counter: each connect() bumps it. Async callbacks
     // (onclose/onmessage) capture their generation and bail if a newer socket exists,
     // killing the zombie-socket race when the token changes mid-reconnect.
@@ -265,6 +274,7 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
             lastPongRef.current = Date.now();
             flushQueue();
             ws.send('{"type":"presence"}');
+            resumeUploadsRef.current?.();
             heartbeatRef.current = setInterval(() => {
                 if (ws.readyState === WebSocket.OPEN) ws.send('{"type":"heartbeat"}');
             }, HEARTBEAT_MS);
@@ -290,9 +300,9 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
                     setFileTransfers(prev => {
                         const ft = prev.find(t => t.transferId === header.i);
                         if (!ft || ft.direction !== 'receive' || ft.status !== 'transferring') return prev;
-                        const next = { ...ft, chunks: [...ft.chunks, chunkData], receivedChunks: ft.receivedChunks + 1 };
+                        const next = { ...ft, chunks: [...ft.chunks, chunkData], receivedChunks: Math.max(ft.receivedChunks, header.c + 1) };
                         next.progress = ft.totalChunks > 0 ? Math.round((next.receivedChunks / ft.totalChunks) * 100) : 0;
-                        if (next.receivedChunks >= ft.totalChunks) {
+                        if (header.c + 1 >= ft.totalChunks) {
                             // Trigger download outside render cycle via ref
                             setTimeout(() => triggerDownloadRef.current?.(header.i, ft.fileName, next.chunks, ft.mime), 0);
                             return prev.map(t => t.transferId === header.i ? { ...next, status: 'complete', progress: 100, completedAt: Date.now() } : t);
@@ -329,6 +339,18 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
                     }
                     if (!panelOpenRef.current) setHasNewData(true);
                 } else if (msg.type === 'file_offer' && msg.transferId) {
+                    // Resume after a reconnect: the receiver already holds this transfer, so
+                    // skip the offer modal and continue appending chunks from where it stopped.
+                    const existing = fileTransfersRef.current.find(t => t.transferId === msg.transferId);
+                    if (existing && existing.direction === 'receive') {
+                        setFileTransfers(prev => prev.map(t =>
+                            t.transferId === msg.transferId
+                                ? { ...t, status: 'transferring' as const, error: undefined }
+                                : t
+                        ));
+                        safeSend({ type: 'file_accept', transferId: msg.transferId });
+                        return;
+                    }
                     setIncomingOffers(prev => [...prev, {
                         transferId: msg.transferId!, fileName: msg.fileName || 'unknown',
                         fileSize: msg.fileSize || 0, mime: msg.mime || 'application/octet-stream',
@@ -369,18 +391,27 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
             } catch {}
         };
 
-        ws.onclose = () => {
+        ws.onclose = (event) => {
             clearHeartbeat(); clearHeartbeatCheck();
-            if (gen !== socketGenRef.current) return; // stale socket from a previous token — ignore
+            if (gen !== socketGenRef.current) return; // stale socket — ignore
             wsRef.current = null;
-            if (disposedRef.current) {
-                setConnectionState('disconnected');
-                return;
+            if (disposedRef.current) return;
+            setConnectionState('disconnected');
+            // In-flight uploads stay tracked; onopen resumes them from the last acked chunk.
+            for (const [transferId] of activeSendTransfersRef.current) {
+                setFileTransfers(prev => prev.map(t =>
+                    t.transferId === transferId && t.status === 'transferring'
+                        ? { ...t, error: '连接中断，重连后自动续传' }
+                        : t
+                ));
             }
-            setConnectionState('connecting');
-            const delay = Math.min(BACKOFF_BASE * Math.pow(2, backoffRef.current), BACKOFF_MAX);
-            backoffRef.current++;
-            reconnectRef.current = setTimeout(() => connect(), delay);
+            // 1008/4401/4403 = auth rejected; retrying only burns rate limit.
+            if (event.code === 1008 || event.code === 4401 || event.code === 4403) return;
+            const delay = Math.min(BACKOFF_MAX, BACKOFF_BASE * 2 ** backoffRef.current);
+            backoffRef.current += 1;
+            reconnectRef.current = setTimeout(() => {
+                if (!disposedRef.current) connect();
+            }, delay);
         };
         ws.onerror = () => ws.close();
         wsRef.current = ws;
@@ -404,6 +435,9 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
     // offers/transfers/devices, and no previous text/image cross-writing its key.
     useEffect(() => {
         queueRef.current = [];
+        activeSendTransfersRef.current.clear();
+        cancelledTransfersRef.current.clear();
+        abortControllersRef.current.clear();
         setPendingCount(0);
         setText('');
         setImages([]);
@@ -482,28 +516,31 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
         dbSet(ukeys.images, []);
     }, [ukeys.images]);
 
-    // WS chunked file send
-    const sendFileWss = useCallback(async (file: File, transferId: string) => {
-        const ws = wsRef.current;
-        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    // WS chunked file send; fromChunk lets a resumed transfer skip already-delivered chunks
+    const sendFileWss = useCallback(async (file: File, transferId: string, fromChunk = 0) => {
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
         const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
         cancelledTransfersRef.current.delete(transferId);
+        const tracked = activeSendTransfersRef.current.get(transferId)
+            ?? { file, totalChunks, sentChunks: fromChunk, retryCount: 0 };
+        tracked.sentChunks = fromChunk;
+        activeSendTransfersRef.current.set(transferId, tracked);
+        const startedAt = Date.now();
 
         setFileTransfers(prev => prev.map(t =>
-            t.transferId === transferId ? { ...t, status: 'transferring' as const } : t
+            t.transferId === transferId ? { ...t, status: 'transferring' as const, error: undefined } : t
         ));
 
         try {
-            for (let i = 0; i < totalChunks; i++) {
+            for (let i = fromChunk; i < totalChunks; i++) {
                 if (cancelledTransfersRef.current.has(transferId)) throw new Error('cancelled');
                 // Backpressure: wait until buffer drains below 4MB
                 while (wsRef.current && wsRef.current.bufferedAmount > CHUNK_SIZE * 4) {
                     if (cancelledTransfersRef.current.has(transferId)) throw new Error('cancelled');
                     await new Promise(r => setTimeout(r, 50));
                 }
-                const start = i * CHUNK_SIZE;
-                const blob = file.slice(start, start + CHUNK_SIZE);
-                const chunk = await blob.arrayBuffer();
+                if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) throw new Error('disconnected');
+                const chunk = await file.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE).arrayBuffer();
                 const header = JSON.stringify({ t: 'fc', i: transferId, c: i, tc: totalChunks });
                 const headerBytes = new TextEncoder().encode(header);
                 const frame = new ArrayBuffer(4 + headerBytes.byteLength + chunk.byteLength);
@@ -511,9 +548,14 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
                 view.setUint32(0, headerBytes.byteLength, false);
                 new Uint8Array(frame, 4, headerBytes.byteLength).set(headerBytes);
                 new Uint8Array(frame, 4 + headerBytes.byteLength).set(new Uint8Array(chunk));
-                wsRef.current?.send(frame);
+                wsRef.current.send(frame);
+                tracked.sentChunks = i + 1;
+                const elapsed = (Date.now() - startedAt) / 1000;
+                const speed = elapsed > 0 ? ((i + 1 - fromChunk) * CHUNK_SIZE) / elapsed : 0;
                 setFileTransfers(prev => prev.map(t =>
-                    t.transferId === transferId ? { ...t, progress: Math.round(((i + 1) / totalChunks) * 100) } : t
+                    t.transferId === transferId
+                        ? { ...t, progress: Math.round(((i + 1) / totalChunks) * 100), speed }
+                        : t
                 ));
             }
             // Wait for buffer to fully drain before marking complete
@@ -521,12 +563,22 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
                 if (cancelledTransfersRef.current.has(transferId)) throw new Error('cancelled');
                 await new Promise(r => setTimeout(r, 100));
             }
+            if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) throw new Error('disconnected');
             cancelledTransfersRef.current.delete(transferId);
+            activeSendTransfersRef.current.delete(transferId);
             safeSend({ type: 'file_complete', transferId });
             setFileTransfers(prev => prev.map(t =>
                 t.transferId === transferId ? { ...t, status: 'complete' as const, progress: 100, completedAt: Date.now() } : t
             ));
         } catch (e) {
+            if (e instanceof Error && e.message === 'disconnected') {
+                // Tracker kept: the reconnect handler resumes from sentChunks.
+                setFileTransfers(prev => prev.map(t =>
+                    t.transferId === transferId ? { ...t, error: '连接中断，重连后自动续传' } : t
+                ));
+                return;
+            }
+            activeSendTransfersRef.current.delete(transferId);
             safeSend({ type: 'file_cancel', transferId });
             setFileTransfers(prev => prev.map(t =>
                 t.transferId === transferId ? { ...t, status: 'cancelled' as const, error: e instanceof Error && e.message === 'cancelled' ? '已取消' : 'WSS 传输失败' } : t
@@ -566,6 +618,67 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
         }
     }, [safeSend]);
 
+    // Offers a transfer and resolves true once the peer accepts (false on reject/timeout).
+    const requestAccept = useCallback((offer: ClipboardMsg) => new Promise<boolean>(resolve => {
+        const transferId = offer.transferId!;
+        const timer = setTimeout(() => {
+            pendingResolve.current.delete(transferId);
+            resolve(false);
+        }, ACCEPT_TIMEOUT_MS);
+        pendingResolve.current.set(transferId, success => {
+            clearTimeout(timer);
+            resolve(success);
+        });
+        safeSend(offer);
+    }), [safeSend]);
+
+    // Re-offer an interrupted WSS upload; the receiver continues from the chunk it holds.
+    const resumeSendFile = useCallback(async (file: File, transferId: string, fromChunk: number) => {
+        const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+        const accepted = await requestAccept({
+            type: 'file_offer', transferId, fileName: file.name, fileSize: file.size,
+            mime: file.type, totalChunks, transport: 'wss', sender: deviceNameRef.current,
+            deviceId: deviceIdRef.current,
+        });
+        if (!accepted) {
+            setFileTransfers(prev => prev.map(t =>
+                t.transferId === transferId ? { ...t, status: 'rejected' as const, error: '续传未获接受' } : t
+            ));
+            return;
+        }
+        await sendFileWss(file, transferId, fromChunk);
+    }, [requestAccept, sendFileWss]);
+
+    resumeUploadsRef.current = () => {
+        for (const [transferId, t] of activeSendTransfersRef.current) {
+            if (t.sentChunks >= t.totalChunks) {
+                activeSendTransfersRef.current.delete(transferId);
+                continue;
+            }
+            if (t.retryCount >= MAX_RESUME_ATTEMPTS) {
+                setFileTransfers(prev => prev.map(x =>
+                    x.transferId === transferId
+                        ? { ...x, status: 'cancelled' as const, error: '多次中断，请重新发送' }
+                        : x
+                ));
+                continue;
+            }
+            t.retryCount += 1;
+            void resumeSendFile(t.file, transferId, t.sentChunks);
+        }
+    };
+
+    // User-initiated retry of an interrupted WSS upload: resends from the last delivered chunk.
+    const retryFileTransfer = useCallback((transferId: string) => {
+        const t = activeSendTransfersRef.current.get(transferId);
+        if (!t) return;
+        t.retryCount = 0;
+        setFileTransfers(prev => prev.map(x =>
+            x.transferId === transferId ? { ...x, status: 'offering' as const, error: undefined } : x
+        ));
+        if (wsRef.current?.readyState === WebSocket.OPEN) void resumeSendFile(t.file, transferId, t.sentChunks);
+    }, [resumeSendFile]);
+
     const sendFile = useCallback(async (file: File, transport: ClipboardTransport = 'http') => {
         const ws = wsRef.current;
         if (!ws || ws.readyState !== WebSocket.OPEN) return;
@@ -597,21 +710,13 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
             direction: 'send', status: 'offering', progress: 0, startedAt: Date.now(),
             transport,
         }]);
-        safeSend({
+        if (transport === 'wss') {
+            activeSendTransfersRef.current.set(transferId, { file, totalChunks, sentChunks: 0, retryCount: 0 });
+        }
+        const accepted = await requestAccept({
             type: 'file_offer', transferId, fileName: file.name, fileSize: file.size,
             mime: file.type, totalChunks, transport, sender: deviceNameRef.current,
             deviceId: deviceIdRef.current,
-        });
-
-        const accepted = await new Promise<boolean>(resolve => {
-            const timer = setTimeout(() => {
-                pendingResolve.current.delete(transferId);
-                resolve(false);
-            }, ACCEPT_TIMEOUT_MS);
-            pendingResolve.current.set(transferId, success => {
-                clearTimeout(timer);
-                resolve(success);
-            });
         });
         if (!accepted) {
             setFileTransfers(prev => prev.map(t =>
@@ -621,7 +726,7 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
         }
         if (transport === 'http') await sendFileHttp(file, transferId);
         else await sendFileWss(file, transferId);
-    }, [safeSend, sendFileHttp, sendFileWss]);
+    }, [requestAccept, sendFileHttp, sendFileWss]);
 
     const acceptFileOffer = useCallback((transferId: string) => {
         const offer = incomingOffers.find(o => o.transferId === transferId);
@@ -689,6 +794,7 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
         setFileTransfers(prev => prev.map(t =>
             t.transferId === transferId ? { ...t, status: 'cancelled' as const } : t
         ));
+        activeSendTransfersRef.current.delete(transferId);
         const r = pendingResolve.current.get(transferId);
         if (r) { pendingResolve.current.delete(transferId); r(false); }
         safeSend({ type: 'file_cancel', transferId });
@@ -701,6 +807,6 @@ export function useClipboardWS(token: string, panelOpen: boolean) {
         text, images, connected, connecting, hasNewData, pendingCount, deviceName,
         incomingOffers, fileTransfers, devices, currentDeviceId: deviceIdRef.current, clearNewDataFlag,
         sendText, sendImage, syncClipboard, clearImages,
-        sendFile, acceptFileOffer, rejectFileOffer, cancelFileTransfer,
+        sendFile, acceptFileOffer, rejectFileOffer, cancelFileTransfer, retryFileTransfer,
     };
 }

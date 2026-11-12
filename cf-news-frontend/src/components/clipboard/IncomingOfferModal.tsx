@@ -26,6 +26,8 @@ export default function IncomingOfferModal({ offers, autoAccept, trustedDevices,
                         </div>
                         <div className="text-[11px] text-gray-400 mt-1">{formatFileSize(offer.fileSize)}</div>
                         <div className="text-[11px] text-gray-400 mt-1">来自 {offer.sender || '其他设备'} · {offer.transport.toUpperCase()}</div>
+                        {!(autoAccept || (offer.deviceId && trustedDevices.includes(offer.deviceId)))
+                            && <div className="text-[11px] text-amber-600 mt-1">30 秒内未处理将自动拒绝</div>}
                         <div className="flex gap-2 mt-2.5">
                             <button 
                                 className="px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-[12px] font-medium hover:bg-emerald-600 transition active:scale-[0.98] flex items-center gap-1"

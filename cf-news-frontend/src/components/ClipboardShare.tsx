@@ -21,7 +21,7 @@ export default function ClipboardShare({
     visible, onClose, userId, text, images, connected, connecting, pendingCount, deviceName,
     onSendText, onSendImage, onSyncClipboard, onClearImages,
     incomingOffers, fileTransfers, devices, currentDeviceId,
-    onSendFile, onAcceptFile, onRejectFile, onCancelFile,
+    onSendFile, onAcceptFile, onRejectFile, onCancelFile, onRetryFile,
 }: ClipboardShareProps) {
     const [status, setStatus] = useState('');
     const [previewImg, setPreviewImg] = useState<string | null>(null);
@@ -317,6 +317,7 @@ export default function ClipboardShare({
                         onTransportChange={setTransport}
                         onSendFile={handleFileTransferSend}
                         onCancelFile={onCancelFile}
+                        onRetryFile={onRetryFile}
                     />
 
                     <DeviceSecuritySection

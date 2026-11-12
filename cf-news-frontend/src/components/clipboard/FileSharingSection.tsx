@@ -15,9 +15,10 @@ interface Props {
     onTransportChange: (t: ClipboardTransport) => void;
     onSendFile: (file: File) => void;
     onCancelFile: (transferId: string) => void;
+    onRetryFile: (transferId: string) => void;
 }
 
-export default function FileSharingSection({ fileTransfers, transport, onTransportChange, onSendFile, onCancelFile }: Props) {
+export default function FileSharingSection({ fileTransfers, transport, onTransportChange, onSendFile, onCancelFile, onRetryFile }: Props) {
     const fileTransferInputRef = useRef<HTMLInputElement>(null);
     const [expandedTimeId, setExpandedTimeId] = useState<string | null>(null);
 
@@ -29,8 +30,9 @@ export default function FileSharingSection({ fileTransfers, transport, onTranspo
         if (fileTransferInputRef.current) fileTransferInputRef.current.value = '';
     }
 
-    function handleRetry() {
-        fileTransferInputRef.current?.click();
+    // Retries the same transfer from the chunk the receiver already has.
+    function handleRetry(transferId: string) {
+        onRetryFile(transferId);
     }
 
     return (
@@ -84,10 +86,11 @@ export default function FileSharingSection({ fileTransfers, transport, onTranspo
                                             ✕
                                         </button>
                                     )}
-                                    {(transfer.status === 'cancelled' || transfer.status === 'rejected') && (
+                                    {transfer.direction === 'send' && transfer.transport === 'wss'
+                                        && (transfer.status === 'rejected' || (transfer.status === 'cancelled' && !!transfer.error)) && (
                                         <button
                                             className="text-[10px] text-indigo-500 hover:text-indigo-600 transition"
-                                            onClick={handleRetry}
+                                            onClick={() => handleRetry(transfer.transferId)}
                                         >
                                             重试
                                         </button>
@@ -104,7 +107,9 @@ export default function FileSharingSection({ fileTransfers, transport, onTranspo
                                 <span>
                                     {transfer.status === 'offering' && '等待对方接受...'}
                                     {transfer.status === 'accepted' && '已接受，准备传输...'}
-                                    {transfer.status === 'transferring' && `${transfer.progress}%`}
+                                    {transfer.status === 'transferring' && (transfer.error
+                                        ? transfer.error
+                                        : `${transfer.progress}%${transfer.speed ? ` · ${formatFileSize(transfer.speed)}/s` : ''}`)}
                                     {transfer.status === 'complete' && '✓ 完成'}
                                     {transfer.status === 'cancelled' && (transfer.error || '已取消')}
                                     {transfer.status === 'rejected' && '已拒绝'}

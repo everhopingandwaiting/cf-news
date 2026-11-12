@@ -5,7 +5,8 @@
 export class PipingRoom {
     private readable: ReadableStream | null = null;
     private readableResolve: ((s: ReadableStream) => void) | null = null;
-    private readonly pairingTimeoutMs = 60_000;
+    // A receiver waits at most this long for the sender's PUT to start.
+    private readonly pairingTimeoutMs = 15_000;
     // Server-side hard cap matching the client's HTTP_FILE_LIMIT_BYTES (100MB).
     // The client-declared fileSize is untrusted — always count actual bytes.
     private readonly maxUploadBytes = 100 * 1024 * 1024;

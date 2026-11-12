@@ -176,22 +176,60 @@ describe('ClipboardRoom', () => {
     expect(rejectOnR2).toBeTruthy();
   });
 
-  it('relays binary frames to the other device', async () => {
-    const room = makeRoom();
-    const a = await connect(room, 'A');
-    const b = await connect(room, 'B');
-    // Reconstruct a small binary frame the way sendFileWss does
-    const header = JSON.stringify({ t: 'fc', i: 't3', c: 0, tc: 1 });
+  function chunkFrame(transferId: string, chunk = 0, total = 1): ArrayBuffer {
+    const header = JSON.stringify({ t: 'fc', i: transferId, c: chunk, tc: total });
     const headerBytes = new TextEncoder().encode(header);
     const frame = new ArrayBuffer(4 + headerBytes.byteLength + 4);
     const view = new DataView(frame);
     view.setUint32(0, headerBytes.byteLength, false);
     new Uint8Array(frame, 4, headerBytes.byteLength).set(headerBytes);
     new Uint8Array(frame, 4 + headerBytes.byteLength).set(new Uint8Array([1, 2, 3, 4]));
+    return frame;
+  }
 
-    emit(a, 'message', frame);
-    expect(b.sent.length).toBeGreaterThan(0);
-    const binary = b.sent[b.sent.length - 1];
-    expect(typeof binary).toBe('object'); // ArrayBuffer-like passthrough
+  it('relays binary chunks only to the accepting device', async () => {
+    const room = makeRoom();
+    const sender = await connect(room, 'S');
+    const r1 = await connect(room, 'R1');
+    const r2 = await connect(room, 'R2');
+    emit(sender, 'message', JSON.stringify({
+      type: 'file_offer', transferId: 't3', fileName: 'f.bin', fileSize: 4,
+      totalChunks: 1, transport: 'wss',
+    }));
+    await new Promise(r => setTimeout(r, 20));
+    emit(r1, 'message', JSON.stringify({ type: 'file_accept', transferId: 't3' }));
+    await new Promise(r => setTimeout(r, 20));
+
+    const before = r2.sent.length;
+    emit(sender, 'message', chunkFrame('t3'));
+    expect(typeof r1.sent[r1.sent.length - 1]).toBe('object'); // ArrayBuffer passthrough
+    expect(r2.sent.length).toBe(before); // non-accepting device gets nothing
+  });
+
+  it('drops binary chunks for an unknown transfer', async () => {
+    const room = makeRoom();
+    const sender = await connect(room, 'S');
+    const receiver = await connect(room, 'R');
+    const before = receiver.sent.length;
+    emit(sender, 'message', chunkFrame('nope'));
+    expect(receiver.sent.length).toBe(before);
+  });
+
+  it('drops binary chunks sent by a device that did not offer the transfer', async () => {
+    const room = makeRoom();
+    const sender = await connect(room, 'S');
+    const r1 = await connect(room, 'R1');
+    const intruder = await connect(room, 'X');
+    emit(sender, 'message', JSON.stringify({
+      type: 'file_offer', transferId: 't4', fileName: 'f.bin', fileSize: 4,
+      totalChunks: 1, transport: 'wss',
+    }));
+    await new Promise(r => setTimeout(r, 20));
+    emit(r1, 'message', JSON.stringify({ type: 'file_accept', transferId: 't4' }));
+    await new Promise(r => setTimeout(r, 20));
+
+    const before = r1.sent.length;
+    emit(intruder, 'message', chunkFrame('t4'));
+    expect(r1.sent.length).toBe(before);
   });
 });
