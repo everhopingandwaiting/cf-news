@@ -311,6 +311,22 @@ describe('aiProvider direct calls', () => {
     expect(log.provider).toBe('cloudflare');
     expect(log.success).toBe(1);
   });
+  it('keyless provider (empty api_key_env) is usable and sends no Authorization header', async () => {
+    // migration 040：zen 免费档免鉴权，api_key_env='' 不得被 getProviderInfo 拦掉
+    const info = await getProviderInfo(makeEnv(), 'zen');
+    expect(info).toEqual({ base_url: 'https://opencode.ai/zen/v1', api_key: '' });
+
+    const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(
+      JSON.stringify({ choices: [{ message: { content: 'hi' } }] }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const out = await doOpenAICompat(makeEnv(), 'zen', info!.base_url, info!.api_key, 'big-pickle', [{ role: 'user', content: 'hi' }]);
+    expect(out).toBe('hi');
+    const headers = (fetchMock.mock.calls[0]![1] as RequestInit).headers as Record<string, string>;
+    expect(headers.Authorization).toBeUndefined();
+  });
 });
 
 describe('aiProvider callAI chain', () => {
@@ -389,16 +405,17 @@ describe('aiProvider callAI chain', () => {
   });
 
   it('skips models whose max_output is below min_max_output (large-batch routing)', async () => {
-    await db.exec("INSERT OR REPLACE INTO app_config (key, value) VALUES ('provider_order', 'groq,zen')");
+    // migration 040 已预置 zen 行，seed 用自定义名避免主键冲突
+    await db.exec("INSERT OR REPLACE INTO app_config (key, value) VALUES ('provider_order', 'groq,zenbig')");
     await db.seed('providers', [
       { name: 'groq', base_url: 'https://api.groq.com/openai/v1', api_key_env: 'GROQ_API_KEY', enabled: 1, expires_at: null },
-      { name: 'zen', base_url: 'https://opencode.ai/zen/v1', api_key_env: 'ZEN_API_KEY', enabled: 1, expires_at: null },
+      { name: 'zenbig', base_url: 'https://opencode.ai/zen/v1', api_key_env: 'ZEN_API_KEY', enabled: 1, expires_at: null },
     ]);
     await db.seed('provider_models', [
       // 4K output — too small for a 40-article batch (needs 4800); must be skipped
       { provider: 'groq', model_id: 'groq-small', score: 90, enabled: 1, type: 'text', context_size: 131072, max_output: 4096 },
       // 384K output — the only model that can serve the large batch
-      { provider: 'zen', model_id: 'zen-big', score: 95, enabled: 1, type: 'text', context_size: 1000000, max_output: 384000 },
+      { provider: 'zenbig', model_id: 'zen-big', score: 95, enabled: 1, type: 'text', context_size: 1000000, max_output: 384000 },
     ]);
 
     const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(

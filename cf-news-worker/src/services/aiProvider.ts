@@ -98,7 +98,9 @@ export async function getProviderInfo(env: Bindings, name: string): Promise<{ ba
         if (row.api_key_env) {
             apiKey = (env as any)[row.api_key_env] || '';
         }
-        if (!apiKey) return null;
+        // 空 api_key_env = 免鉴权网关（opencode zen 免费档：不带 Authorization 也接受，
+        // 额度按出口 IP 计），只在配了 env 名却拿不到值时跳过
+        if (row.api_key_env && !apiKey) return null;
         return { base_url: row.base_url, api_key: apiKey };
     } catch (e) {
         console.error(`getProviderInfo error for ${name}:`, e);
@@ -320,9 +322,11 @@ export async function doOpenAICompat(
     const temp = options?.temperature ?? parseFloat(await getConfig(env, 'summary_temperature') || '0.3');
     try {
         const url = baseUrl.endsWith('/') ? `${baseUrl}chat/completions` : `${baseUrl}/chat/completions`;
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
         const res = await fetch(url, {
             method: 'POST',
-            headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+            headers,
             body: JSON.stringify({ model, messages, max_tokens: maxTokens, temperature: temp }),
             signal: AbortSignal.timeout(options?.timeout_ms ?? 30000),
         });
@@ -333,7 +337,8 @@ export async function doOpenAICompat(
             await logAICall(env, { provider, model, news_id: options?.news_id, news_title: options?.news_title,
                 prompt_length: JSON.stringify(messages).length, response_length: 0, response_preview: errText,
                 duration_ms: Date.now() - start, success: false, error });
-            if (isKeyError(res.status, errText)) await markProviderKeyFailed(env, provider);
+            // 免鉴权供应商没有 key 可失效：403 只可能来自网关风控，不应长期禁用整 provider
+            if (apiKey && isKeyError(res.status, errText)) await markProviderKeyFailed(env, provider);
             else if (isModelError(res.status, errText)) await markFailed(env, model, provider);
             // 限流只冷却当前模型，不整 provider 冻结：免费模型 429/配额耗尽是个别模型的锅，
             // 若按老逻辑 markProviderFailed 会把同 provider 的付费可用模型一起冻 120s，
