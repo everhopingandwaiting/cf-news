@@ -189,10 +189,10 @@ NVIDIA_API_KEY=your-nvidia-key
 MANGO_API_KEY=your-mango-key
 GROQ_API_KEY=your-groq-key
 FREEMODEL_API_KEY=your-freemodel-key
-ZEN_API_KEY=your-zen-api-key            # from opencode.ai/zen (aggregated API: Claude/GPT/Gemini/DeepSeek/Kimi + 8 free models)
 ORCAROUTER_API_KEY=your-orcarouter-key   # from orcarouter.ai (aggregated API: Claude/GPT/Gemini/DeepSeek/Qwen; free models included)
 ZHIPU_API_KEY=your-zhipu-key             # from open.bigmodel.cn (Zhipu GLM free models: glm-4.7-flash / glm-4-flash-250414)
 SENSENOVA_API_KEY=your-sensenova-key       # from platform.sensenova.cn (token.sensenova.cn/v1: DeepSeek/SenseChat models)
+KILO_API_KEY=your-kilo-key                # from kilo.ai — Kilo AI Gateway (OpenAI-compatible; kilo-auto/free = free auto-routed models)
 TURNSTILE_SECRET=your-turnstile-secret    # from dashboard
 TURNSTILE_SITE_KEY=0x4AAAA...            # from dashboard
 PIXABAY_API_KEY=your-pixabay-key          # from pixabay.com/api/docs (free)
@@ -289,10 +289,10 @@ The project includes a GitHub Actions workflow for automatic deployment. To use 
 | `MANGO_API_KEY` | Mango API key |
 | `GROQ_API_KEY` | Groq API key |
 | `FREEMODEL_API_KEY` | Freemodel API key |
-| `ZEN_API_KEY` | Zen API key (opencode.ai/zen — aggregated AI provider) |
 | `ORCAROUTER_API_KEY` | OrcaRouter API key (orcarouter.ai — aggregated AI provider, free models) |
 | `ZHIPU_API_KEY` | Zhipu AI API key (open.bigmodel.cn — GLM free models) |
 | `SENSENOVA_API_KEY` | SenseNova API key (token.sensenova.cn — DeepSeek/SenseChat models) |
+| `KILO_API_KEY` | Kilo AI Gateway key (ai-gateway.kilo.ai — `kilo-auto/free` auto-routed free models) |
 | `TURNSTILE_SECRET` | Turnstile secret key (bot protection) |
 | `TURNSTILE_SITE_KEY` | Turnstile site key |
 | `PIXABAY_API_KEY` | Pixabay free image API key (image-less news auto-illustration) |

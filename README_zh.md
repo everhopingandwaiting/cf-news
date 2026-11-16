@@ -180,10 +180,10 @@ NVIDIA_API_KEY=你的NVIDIA密钥
 MANGO_API_KEY=你的Mango密钥
 GROQ_API_KEY=你的Groq密钥
 FREEMODEL_API_KEY=你的Freemodel密钥
-ZEN_API_KEY=你的Zen密钥            # 从 opencode.ai/zen 获取（聚合 API：Claude/GPT/Gemini/DeepSeek/Kimi + 8 个免费模型）
 ORCAROUTER_API_KEY=你的OrcaRouter密钥  # 从 orcarouter.ai 获取（聚合 API：Claude/GPT/Gemini/DeepSeek/Qwen；含免费模型）
 ZHIPU_API_KEY=你的智谱密钥           # 从 open.bigmodel.cn 获取（GLM 免费模型：glm-4.7-flash / glm-4-flash-250414）
 SENSENOVA_API_KEY=你的商汤密钥           # 从 platform.sensenova.cn 获取（token.sensenova.cn/v1：DeepSeek/SenseChat 模型）
+KILO_API_KEY=你的Kilo密钥              # 从 kilo.ai 获取（Kilo AI 网关，OpenAI 兼容；kilo-auto/free = 免费自动路由模型池）
 TURNSTILE_SECRET=你的Turnstile密钥       # 从 CF 面板获取
 TURNSTILE_SITE_KEY=0x4AAAA...             # 从 CF 面板获取
 PIXABAY_API_KEY=你的Pixabay密钥            # 从 pixabay.com/api/docs 免费获取
@@ -280,10 +280,10 @@ curl -X POST -H "Authorization: Bearer <管理员token>" \
 | `MANGO_API_KEY` | Mango API Key |
 | `GROQ_API_KEY` | Groq API Key |
 | `FREEMODEL_API_KEY` | Freemodel API Key |
-| `ZEN_API_KEY` | Zen API Key（opencode.ai/zen — 聚合 AI 供应商） |
 | `ORCAROUTER_API_KEY` | OrcaRouter API Key（orcarouter.ai — 聚合 AI 供应商，含免费模型） |
 | `ZHIPU_API_KEY` | 智谱 AI API Key（open.bigmodel.cn — GLM 免费模型） |
 | `SENSENOVA_API_KEY` | 商汤 SenseNova API Key（token.sensenova.cn — DeepSeek/SenseChat 模型） |
+| `KILO_API_KEY` | Kilo AI 网关 Key（ai-gateway.kilo.ai — `kilo-auto/free` 免费自动路由模型池） |
 | `TURNSTILE_SECRET` | Turnstile 验证码密钥 |
 | `TURNSTILE_SITE_KEY` | Turnstile 站点 Key |
 | `PIXABAY_API_KEY` | Pixabay 免费图库 Key（无图新闻自动配图） |
