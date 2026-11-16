@@ -12,6 +12,8 @@
 #   2) kv_cache['archive:evict:last'] / ['retention:last'] 的新鲜度
 #      —— 2026-10 曾连续多日静默跳过驱逐（08:00 那次与 digest 同 invocation 被
 #      平台掐断且无痕迹），"快照 at 停更" 是唯一可靠的信号
+#   3) kv_cache['zen:probe:last'] —— zen 免费额度探测结果（每日一次，仅播报不判失败；
+#      恢复后 AI 链路自动启用 zen）
 #
 # 退出码：0 = 正常/仅警告；1 = 触发 FAIL 阈值（CI 变红，GitHub 会给仓库所有者发失败邮件）
 #
@@ -115,6 +117,23 @@ check_size "$D1_DATABASE_ID" "news-db"
 [ -n "$ARCHIVE_DATABASE_ID" ] && check_size "$ARCHIVE_DATABASE_ID" "cf-news-archive"
 check_freshness "archive:evict:last" "冷热归档驱逐"
 check_freshness "retention:last" "存储保留 retention"
+
+# zen 免费额度探测：Worker 每日探一次（额度按出口 IP 计，Cloudflare 出口长期 429）。
+# 这里只播报不判失败——恢复后链路自动接管，无需人工动作。
+zen_line=$(api "/accounts/$CF_ACCOUNT_ID/d1/database/$D1_DATABASE_ID/query" POST \
+    "{\"sql\":\"SELECT value FROM kv_cache WHERE cache_key='zen:probe:last'\"}" | python3 -c "
+import json,sys
+try:
+    rows=json.load(sys.stdin)['result'][0]['results']
+except Exception:
+    print('zen 免费额度探测：读取失败'); raise SystemExit
+if not rows:
+    print('zen 免费额度探测：尚无记录（当日 */5 cron 跑过后写入）')
+else:
+    v=json.loads(rows[0]['value'])
+    print(('✅ zen 免费额度可用' if v.get('ok') else '❌ zen 免费额度不可用')
+          + f\" · at={v.get('at')} status={v.get('status')} {v.get('error') or ''}\".rstrip())" 2>/dev/null || echo "zen 免费额度探测：读取失败")
+note "$zen_line"
 
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     {

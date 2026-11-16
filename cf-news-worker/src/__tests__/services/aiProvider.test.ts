@@ -4,7 +4,7 @@ import { resetDb } from '../../db';
 import {
   getConfig, getConfigInt, getProviderOrder, getModels, getModelSpecs, getAvailableModelSpecs,
   getProviderInfo, getFailed, markFailed, getAvailableModels, doOpenAICompat, doCF, callAI,
-  markProviderFailed, isProviderBlocked,
+  markProviderFailed, isProviderBlocked, probeZenFree,
 } from '../../services/aiProvider';
 import type { Bindings } from '../../types';
 
@@ -326,6 +326,33 @@ describe('aiProvider direct calls', () => {
     expect(out).toBe('hi');
     const headers = (fetchMock.mock.calls[0]![1] as RequestInit).headers as Record<string, string>;
     expect(headers.Authorization).toBeUndefined();
+  });
+});
+
+describe('probeZenFree daily guard', () => {
+  beforeEach(() => {
+    resetDb();
+    db = new MockD1();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('probes once per UTC day and records the result in kv_cache', async () => {
+    const fetchMock = vi.fn(async () => new Response('{"type":"error"}', {
+      status: 429, headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await probeZenFree(makeEnv());
+    await probeZenFree(makeEnv()); // 同日第二次：dateKey 守卫，不再发请求
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const snap = JSON.parse(String((await db.prepare(
+      "SELECT value FROM kv_cache WHERE cache_key = 'zen:probe:last'",
+    ).first<any>()).value));
+    expect(snap).toMatchObject({ status: 429, ok: false });
   });
 });
 

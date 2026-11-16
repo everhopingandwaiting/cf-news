@@ -2,6 +2,7 @@ import { Bindings } from '../types';
 import { eq, sql } from 'drizzle-orm';
 import { getDb } from '../db';
 import { appConfig, providerModels, providers, aiCallLog } from '../db/schema';
+import { getCache, setCache } from './cache';
 
 const DEFAULT_FAILED_MODEL_TTL_SECONDS = 120;
 // Key 失效（401/403）是 Provider 级问题：Key 属于整个 Provider，不是某个模型。
@@ -399,6 +400,44 @@ export interface AIOptions {
     /** 只尝试 max_output ≥ 该值的模型（大 batch 场景，防输出截断） */
     min_max_output?: number;
     timeout_ms?: number;
+}
+
+/**
+ * Zen 免费档每日探测。免费模型免鉴权、额度按出口 IP 计，Cloudflare 出口 IP 与海量
+ * Worker 共享 → 长期 429 FreeUsageLimitError。每天探一次并把结果写进
+ * kv_cache['zen:probe:last']，用于回答"额度恢复了吗"；恢复后链路会自动启用 zen，
+ * 无需改配置。dateKey 守卫保证一天只探一次（每 5 分钟 cron 调一次本函数）。
+ */
+export async function probeZenFree(env: Bindings): Promise<void> {
+    const db = getDb(env);
+    const day = new Date().toISOString().slice(0, 10);
+    try {
+        if (await getCache(db, 'zen:probe:day') === day) return;
+    } catch {
+        return; // 读失败不探，避免每小时重复烧请求
+    }
+    let status = 0;
+    let error = '';
+    try {
+        const res = await fetch('https://opencode.ai/zen/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: 'big-pickle', messages: [{ role: 'user', content: 'ping' }], max_tokens: 8 }),
+            signal: AbortSignal.timeout(10000),
+        });
+        status = res.status;
+        if (!res.ok) error = (await res.text().catch(() => '')).slice(0, 200);
+    } catch (e: any) {
+        error = String(e).slice(0, 200);
+    }
+    const snapshot = JSON.stringify({ at: new Date().toISOString(), status, ok: status === 200, error });
+    console.log(`Zen free probe: ${snapshot}`);
+    try {
+        await setCache(db, 'zen:probe:day', day, 2 * 24 * 3600);
+        await setCache(db, 'zen:probe:last', snapshot, 40 * 24 * 3600);
+    } catch (e) {
+        console.error('Zen probe snapshot failed:', e);
+    }
 }
 
 export async function callAI(env: Bindings, prompt: string, options?: AIOptions): Promise<string | null> {

@@ -27,6 +27,7 @@ import { runRetention } from './services/retention';
 import { evictBatch, describeError } from './services/archive';
 import { runDailyMaintenance } from './services/maintenance';
 import { setCache } from './services/cache';
+import { probeZenFree } from './services/aiProvider';
 import {
     FETCH_CRON,
     FETCH_HEARTBEAT_STALE_MINUTES,
@@ -342,6 +343,8 @@ export default {
             // 掐断或子请求预算被 digest 吃光（2026-11-04 起 retention 快照连续停更
             // 即此原因）。此处 09:00 后每 5 分钟重试 retention→evict 直到当日完成。
             // 超帽/未到点立即返回（≈2 次读），常态开销可忽略。
+            // zen 免费额度的每日探测（一天一次，跨 cron 由 kv dateKey 守卫）
+            ctx.waitUntil(probeZenFree(env).catch(e => console.error('Zen probe failed:', e)));
             ctx.waitUntil(
                 runDailyMaintenance(env)
                     .then(r => {
